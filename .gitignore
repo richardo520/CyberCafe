@@ -1,0 +1,9 @@
+# UE 生成的临时文件，不上传
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+.vs/
+*.sln
+*.suo
+*.VC.db
