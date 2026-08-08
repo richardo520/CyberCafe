@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CyberCafe project-scope MSBuild override (loaded AFTER project files)
+  =====================================================================
+  Why targets and not props?
+    UE's UECommon.props defines <BuildBatchScript>...\Build.bat</BuildBatchScript>
+    AND all the <NMakeBuildCommandLine>$(BuildBatchScript) ...</NMakeBuildCommandLine>
+    inside the SAME property scope. MSBuild eagerly expands the inner
+    $(BuildBatchScript) reference AT DEFINITION TIME (right there in
+    UECommon.props), so by the time our overrides run, the NMake*CommandLine
+    properties already contain the literal string "...\Build.bat".
+
+    Therefore, simply overriding $(BuildBatchScript) later is not enough —
+    we must patch the already-frozen NMake command line strings via
+    string replacement.
+
+  Strategy:
+    Use MSBuild property functions (String.Replace) inside a <Target> that
+    runs BEFORE the NMake build target executes. Rewriting these three
+    properties keeps everything else (targets, args, VS integration) intact.
+-->
+<Project>
+
+  <!-- Local wrapper batch files (created alongside this project) -->
+  <PropertyGroup>
+    <CyberCafe_BuildBatch>$(MSBuildThisFileDirectory)Build\CleanEnvBuild.bat</CyberCafe_BuildBatch>
+    <CyberCafe_RebuildBatch>$(MSBuildThisFileDirectory)Build\CleanEnvRebuild.bat</CyberCafe_RebuildBatch>
+    <CyberCafe_CleanBatch>$(MSBuildThisFileDirectory)Build\CleanEnvClean.bat</CyberCafe_CleanBatch>
+
+    <!-- UE's original scripts we need to swap out -->
+    <UE_BuildBatch>E:\UnrealEngine\Engine\Build\BatchFiles\Build.bat</UE_BuildBatch>
+    <UE_RebuildBatch>E:\UnrealEngine\Engine\Build\BatchFiles\Rebuild.bat</UE_RebuildBatch>
+    <UE_CleanBatch>E:\UnrealEngine\Engine\Build\BatchFiles\Clean.bat</UE_CleanBatch>
+  </PropertyGroup>
+
+  <!--
+    Rewrite NMake*CommandLine properties so any Build.bat / Rebuild.bat / Clean.bat
+    reference is redirected to our wrapper. Uses MSBuild string function Replace.
+    Applied unconditionally (per-config PropertyGroups in vcxproj all follow the
+    same pattern), so all configurations are covered in a single pass.
+  -->
+  <PropertyGroup>
+    <NMakeBuildCommandLine>$([System.String]::Copy('$(NMakeBuildCommandLine)').Replace('$(UE_BuildBatch)','$(CyberCafe_BuildBatch)'))</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>$([System.String]::Copy('$(NMakeReBuildCommandLine)').Replace('$(UE_RebuildBatch)','$(CyberCafe_RebuildBatch)'))</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>$([System.String]::Copy('$(NMakeCleanCommandLine)').Replace('$(UE_CleanBatch)','$(CyberCafe_CleanBatch)'))</NMakeCleanCommandLine>
+    <NMakeCompileFileCommandLine>$([System.String]::Copy('$(NMakeCompileFileCommandLine)').Replace('$(UE_BuildBatch)','$(CyberCafe_BuildBatch)'))</NMakeCompileFileCommandLine>
+
+    <!-- Keep property in sync too, in case anything else references it -->
+    <BuildBatchScript>$(CyberCafe_BuildBatch)</BuildBatchScript>
+    <RebuildBatchScript>$(CyberCafe_RebuildBatch)</RebuildBatchScript>
+    <CleanBatchScript>$(CyberCafe_CleanBatch)</CleanBatchScript>
+  </PropertyGroup>
+
+</Project>

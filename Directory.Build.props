@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CyberCafe project-scope override for MSBuild
+  ============================================
+  Purpose:
+    Redirect UE's $(BuildBatchScript) / $(RebuildBatchScript) / $(CleanBatchScript)
+    to our local wrapper batch files under $(MSBuildThisFileDirectory)Build\.
+    The wrappers clear the MSBuildSDKsPath=INVALID_SDK_DIR environment variable
+    that VS2022 injects into child processes (which otherwise poisons UE's
+    bundled dotnet and breaks UnrealBuildTool build).
+
+  Discovery:
+    MSBuild auto-imports the nearest Directory.Build.props while walking up
+    from the vcxproj directory (Intermediate\ProjectFiles\CyberCafe.vcxproj)
+    so placing this file at the project root ensures it's always picked up
+    even if UBT regenerates the Intermediate\ProjectFiles folder.
+
+  Scope:
+    Only affects builds triggered from within this project directory tree.
+    UE4.26 legacy projects and the UE5 engine itself are NOT affected.
+-->
+<Project>
+  <PropertyGroup>
+    <!--
+      Override UE-provided script paths (defined later in UECommon.props).
+      Because Directory.Build.props is imported BEFORE the project's own
+      imports, we cannot yet see UECommon.props here. Instead, we set these
+      properties WITHOUT a Condition so any later definition in UECommon.props
+      will overwrite them - which defeats the purpose. To win the race we
+      re-set them in Directory.Build.targets (imported AFTER project files).
+      So this props file is mostly informational; the actual override lives
+      in Directory.Build.targets.
+    -->
+  </PropertyGroup>
+</Project>
