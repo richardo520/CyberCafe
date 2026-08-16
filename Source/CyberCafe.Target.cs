@@ -8,7 +8,7 @@ public class CyberCafeTarget : TargetRules
 	public CyberCafeTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
-		DefaultBuildSettings = BuildSettingsVersion.V7;
+		DefaultBuildSettings = BuildSettingsVersion.V5;
 
 		ExtraModuleNames.AddRange( new string[] { "CyberCafe" } );
 	}
