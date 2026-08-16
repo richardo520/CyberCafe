@@ -101,7 +101,7 @@ public:
      * @return 左手/右手
      */
     UFUNCTION(BlueprintPure, Category = "Grab")
-    EControllerHand GetHeldByHand(bool& bSuccess) const;
+    EControllerHand GetHeldByHand() const;
 
     //~ End Grab API
 
@@ -148,10 +148,6 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Grab|Attach")
     void AttachParentToMotionController(UMotionControllerComponent* MotionController);
 
-    /** 设置掉落时是否恢复模拟物理 */
-    UFUNCTION(BlueprintCallable, Category = "Grab|Physics")
-    void SetShouldSimulateOnDrop(bool bShouldSimulate) { bSimulateOnDrop = bShouldSimulate; }
-
     /** 对所属Actor的Primitive组件统一设置物理模拟状态 */
     UFUNCTION(BlueprintCallable, Category = "Grab|Physics")
     void SetPrimitiveCompPhysics(bool bSimulate);
@@ -169,6 +165,10 @@ public:
     /** 抓取类型 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab")
     EGrabType GrabType;
+    
+    /** 抓取组件优先级*/
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
+    int32 GrabPriority;
 
     /** 抓握时手部使用的Socket（HandSocket）名称 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")

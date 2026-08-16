@@ -31,10 +31,9 @@ public:
      * @param OutGrabComponent      输出：选中的GrabComponent；无有效候选时为nullptr
      * @param bCanBePotentialTarget 输出：是否存在可作为抓取目标的候选
      */
-    UFUNCTION(BlueprintCallable, Category = "VR|Grab",
-        meta = (DisplayName = "Find Top Prio Grab Component"))
-    static void FindTopPrioGrabComponent(
-        const TArray<UGrabComponent*>& TargetArray,
-        UGrabComponent*& OutGrabComponent,
-        bool& bCanBePotentialTarget);
+    UFUNCTION(BlueprintCallable, Category = "VR|Grab",meta = (DisplayName = "Find Top Prio Grab Component"))
+    static UGrabComponent* FindTopPrioGrabComponent(AActor* GrabActor);
+    
+    UFUNCTION(BlueprintCallable, Category = "VR|Grab",Meta = (DisplayName = "Can Be Potential Target "))
+    static bool CanBePotentialTarget(AActor* PotentialGrabActor);
 };

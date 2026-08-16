@@ -40,13 +40,9 @@ AVRPawn::AVRPawn()
 {
     PrimaryActorTick.bCanEverTick = true;
 
-    // Root
-    USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("DefaultSceneRoot"));
-    SetRootComponent(Root);
-
     // VROrigin：Pawn根下的偏移点，供相机和手柄挂载
     VROrigin = CreateDefaultSubobject<USceneComponent>(TEXT("VROrigin"));
-    VROrigin->SetupAttachment(Root);
+    SetRootComponent(VROrigin);
 
     // 相机
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
@@ -115,11 +111,6 @@ AVRPawn::AVRPawn()
     ProjectedTeleportLocation = FVector::ZeroVector;
     bActiveMenuHandRight = false;
     bTurnConsumed = false;
-
-    PoseAlphaGrasp = 0.f;
-    PoseAlphaIndexCurl = 0.f;
-    PoseAlphaPoint = 0.f;
-    PoseAlphaThumbUp = 0.f;
 }
 
 //=====================================================================
@@ -169,23 +160,21 @@ void AVRPawn::Tick(float DeltaTime)
     Super::Tick(DeltaTime);
 
     // 更新左右手可抓取目标
-    UpdateTargetGrabComponent(MotionControllerLeftGrip, false);
-    UpdateTargetGrabComponent(MotionControllerRightGrip, true);
+    UpdatePotentialTarget(MotionControllerLeftAim,TargetGrabComponentLeft);
+    UpdatePotentialTarget(MotionControllerRightAim,TargetGrabComponentRight);
 
     // 更新拉拽状态
-    if (PulledGrabComponentLeft)
+    if (UpdatePulledObject(PulledGrabComponentLeft, MotionControllerLeftGrip, DeltaTime))
     {
-        UpdatePulledObject(PulledGrabComponentLeft, MotionControllerLeftGrip, DeltaTime);
+        TryGrabLeft(PulledGrabComponentLeft);
+        PulledGrabComponentLeft = nullptr;
+        UpdateTargetGrabComponent(nullptr,TargetGrabComponentLeft);
     }
-    if (PulledGrabComponentRight)
+    if (UpdatePulledObject(PulledGrabComponentRight, MotionControllerRightGrip, DeltaTime))
     {
-        UpdatePulledObject(PulledGrabComponentRight, MotionControllerRightGrip, DeltaTime);
-    }
-
-    // 传送轨迹
-    if (bTeleportTraceActive)
-    {
-        TeleportTrace();
+        TryGrabRight(PulledGrabComponentRight);
+        PulledGrabComponentRight = nullptr;
+        UpdateTargetGrabComponent(nullptr,TargetGrabComponentRight);
     }
 }
 
@@ -204,7 +193,12 @@ void AVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
     }
 
     // 移动 / 转向
-    if (IA_Move)    EIC->BindAction(IA_Move, ETriggerEvent::Triggered, this, &AVRPawn::OnMove);
+    if (IA_Move)
+    {
+        EIC->BindAction(IA_Move, ETriggerEvent::Started, this, &AVRPawn::OnMoveStarted);  
+        EIC->BindAction(IA_Move, ETriggerEvent::Triggered, this, &AVRPawn::OnMoveTriggered);  
+        EIC->BindAction(IA_Move, ETriggerEvent::Completed, this, &AVRPawn::OnMoveCompleted);  
+    }
     if (IA_Turn)
     {
         EIC->BindAction(IA_Turn, ETriggerEvent::Started,   this, &AVRPawn::OnTurnStarted);
@@ -221,35 +215,35 @@ void AVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
     // 菜单
     if (IA_Menu_Toggle_Left)  EIC->BindAction(IA_Menu_Toggle_Left,  ETriggerEvent::Triggered, this, &AVRPawn::OnMenuToggleLeft);
     if (IA_Menu_Toggle_Right) EIC->BindAction(IA_Menu_Toggle_Right, ETriggerEvent::Triggered, this, &AVRPawn::OnMenuToggleRight);
-
-    // 手部动画
-    if (IA_Hand_Grasp_Left)      EIC->BindAction(IA_Hand_Grasp_Left,      ETriggerEvent::Triggered, this, &AVRPawn::OnHandGraspLeft);
-    if (IA_Hand_Grasp_Right)     EIC->BindAction(IA_Hand_Grasp_Right,     ETriggerEvent::Triggered, this, &AVRPawn::OnHandGraspRight);
-    if (IA_Hand_IndexCurl_Left)  EIC->BindAction(IA_Hand_IndexCurl_Left,  ETriggerEvent::Triggered, this, &AVRPawn::OnHandIndexCurlLeft);
-    if (IA_Hand_IndexCurl_Right) EIC->BindAction(IA_Hand_IndexCurl_Right, ETriggerEvent::Triggered, this, &AVRPawn::OnHandIndexCurlRight);
-    if (IA_Hand_Point_Left)      EIC->BindAction(IA_Hand_Point_Left,      ETriggerEvent::Triggered, this, &AVRPawn::OnHandPointLeft);
-    if (IA_Hand_Point_Right)     EIC->BindAction(IA_Hand_Point_Right,     ETriggerEvent::Triggered, this, &AVRPawn::OnHandPointRight);
-    if (IA_Hand_ThumbUp_Left)    EIC->BindAction(IA_Hand_ThumbUp_Left,    ETriggerEvent::Triggered, this, &AVRPawn::OnHandThumbUpLeft);
-    if (IA_Hand_ThumbUp_Right)   EIC->BindAction(IA_Hand_ThumbUp_Right,   ETriggerEvent::Triggered, this, &AVRPawn::OnHandThumbUpRight);
 }
 
 //=====================================================================
 // Enhanced Input 回调实现
 //=====================================================================
 
-void AVRPawn::OnMove(const FInputActionValue& Value)
+void AVRPawn::OnMoveStarted(const FInputActionValue& Value)
 {
     // 传送模式：按下摇杆前推激活轨迹，松开尝试传送
-    const float AxisY = Value.Get<FVector2D>().Y;
+    const float AxisX = Value.Get<FVector2D>().X;
 
-    if (AxisY > 0.7f && !bTeleportTraceActive)
+    if (AxisX > 0.0f && !bTeleportTraceActive)
     {
         StartTeleportTrace();
     }
-    else if (AxisY < 0.5f && bTeleportTraceActive)
+}
+
+void AVRPawn::OnMoveTriggered(const FInputActionValue& Value)
+{
+    // 传送轨迹
+    if (bTeleportTraceActive)
     {
-        EndTeleportTrace();
+        TeleportTrace();
     }
+}
+
+void AVRPawn::OnMoveCompleted(const FInputActionValue& Value)
+{
+    EndTeleportTrace();
 }
 
 void AVRPawn::OnTurnStarted(const FInputActionValue& Value)
@@ -265,11 +259,14 @@ void AVRPawn::OnTurnTriggered(const FInputActionValue& Value)
     }
 
     const float AxisX = Value.Get<FVector2D>().X;
-    if (FMath::Abs(AxisX) > 0.7f)
-    {
-        SnapTurn(AxisX > 0.f);
-        bTurnConsumed = true;
-    }
+    // if (FMath::Abs(AxisX) > 0.7f)
+    // {
+    //     SnapTurn(AxisX > 0.f);
+    //     bTurnConsumed = true;
+    // }
+    
+    SnapTurn(AxisX > 0.f);
+    bTurnConsumed = true;
 }
 
 void AVRPawn::OnTurnCompleted(const FInputActionValue& Value)
@@ -277,135 +274,212 @@ void AVRPawn::OnTurnCompleted(const FInputActionValue& Value)
     bTurnConsumed = false;
 }
 
-void AVRPawn::OnGrabLeftPressed(const FInputActionValue& Value)   { TryGrabLeft(); }
+void AVRPawn::OnGrabLeftPressed(const FInputActionValue& Value)
+{
+    if (UGrabComponent* LeftGrabComponent = GetGrabComponentNearMotionController(MotionControllerLeftGrip,TargetGrabComponentLeft))
+    {
+        TryGrabLeft(LeftGrabComponent);
+        UpdateTargetGrabComponent(nullptr,TargetGrabComponentLeft);
+    }
+    else
+    {
+        if (UGrabComponent* GrabComponent = GetGrabComponentUnderAim(MotionControllerLeftAim,TargetGrabComponentLeft))
+        {
+            if (GrabComponent->TryPull())
+            {
+                PulledGrabComponentLeft = GrabComponent;
+            }
+        }
+    }
+
+}
 void AVRPawn::OnGrabLeftReleased(const FInputActionValue& Value)
 {
     if (HeldComponentLeft)
     {
-        HeldComponentLeft->TryRelease();
-        HeldComponentLeft = nullptr;
+        if (HeldComponentLeft->TryRelease())
+        {
+            HeldComponentLeft = nullptr;
+        }
+    }
+
+    if (PulledGrabComponentLeft)
+    {
+        PulledGrabComponentLeft->StopPull();
+        PulledGrabComponentLeft = nullptr;
     }
 }
-void AVRPawn::OnGrabRightPressed(const FInputActionValue& Value)  { TryGrabRight(); }
+void AVRPawn::OnGrabRightPressed(const FInputActionValue& Value)
+{
+    if (UGrabComponent* RightGrabComponent = GetGrabComponentNearMotionController(MotionControllerRightGrip,TargetGrabComponentRight))
+    {
+        TryGrabRight(RightGrabComponent);
+        UpdateTargetGrabComponent(nullptr,TargetGrabComponentLeft);
+    }
+    else
+    {
+        if (UGrabComponent* GrabComponent = GetGrabComponentUnderAim(MotionControllerRightAim,TargetGrabComponentRight))
+        {
+            if (GrabComponent->TryPull())
+            {
+                PulledGrabComponentRight = GrabComponent;
+            }
+        }
+    }
+}
 void AVRPawn::OnGrabRightReleased(const FInputActionValue& Value)
 {
     if (HeldComponentRight)
     {
-        HeldComponentRight->TryRelease();
-        HeldComponentRight = nullptr;
+        if (HeldComponentRight->TryRelease())
+        {
+            HeldComponentRight = nullptr;
+        }
+    }
+    
+    if (PulledGrabComponentRight)
+    {
+        PulledGrabComponentRight->StopPull();
+        PulledGrabComponentRight = nullptr;
     }
 }
 
 void AVRPawn::OnMenuToggleLeft(const FInputActionValue& Value)   { ToggleMenu(false); }
 void AVRPawn::OnMenuToggleRight(const FInputActionValue& Value)  { ToggleMenu(true);  }
-
-void AVRPawn::OnHandGraspLeft(const FInputActionValue& Value)      { PoseAlphaGrasp     = Value.Get<float>(); }
-void AVRPawn::OnHandGraspRight(const FInputActionValue& Value)     { PoseAlphaGrasp     = Value.Get<float>(); }
-void AVRPawn::OnHandIndexCurlLeft(const FInputActionValue& Value)  { PoseAlphaIndexCurl = Value.Get<float>(); }
-void AVRPawn::OnHandIndexCurlRight(const FInputActionValue& Value) { PoseAlphaIndexCurl = Value.Get<float>(); }
-void AVRPawn::OnHandPointLeft(const FInputActionValue& Value)      { PoseAlphaPoint     = Value.Get<float>(); }
-void AVRPawn::OnHandPointRight(const FInputActionValue& Value)     { PoseAlphaPoint     = Value.Get<float>(); }
-void AVRPawn::OnHandThumbUpLeft(const FInputActionValue& Value)    { PoseAlphaThumbUp   = Value.Get<float>(); }
-void AVRPawn::OnHandThumbUpRight(const FInputActionValue& Value)   { PoseAlphaThumbUp   = Value.Get<float>(); }
-
 //=====================================================================
 // 抓取
 //=====================================================================
 
-bool AVRPawn::TryGrabLeft()
+bool AVRPawn::TryGrabLeft(UGrabComponent* GrabComponent)
 {
-    UGrabComponent* Target = TargetGrabComponentLeft;
-    if (Target == nullptr)
+    if (GrabComponent == nullptr)
     {
         return false;
     }
 
-    if (Target->TryGrab(MotionControllerLeftGrip))
+    if (GrabComponent->TryGrab(MotionControllerLeftGrip))
     {
-        HeldComponentLeft = Target;
-        HideUnhideHand(false, true);
+        HeldComponentLeft = GrabComponent;
+        //HideUnhideHand(false, true);
+        
+        if (HeldComponentLeft == HeldComponentRight)
+        {
+            HeldComponentRight = nullptr;
+        }
         return true;
     }
     return false;
 }
 
-bool AVRPawn::TryGrabRight()
+bool AVRPawn::TryGrabRight(UGrabComponent* GrabComponent)
 {
-    UGrabComponent* Target = TargetGrabComponentRight;
-    if (Target == nullptr)
+    if (GrabComponent == nullptr)
     {
         return false;
     }
 
-    if (Target->TryGrab(MotionControllerRightGrip))
+    if (GrabComponent->TryGrab(MotionControllerRightGrip))
     {
-        HeldComponentRight = Target;
-        HideUnhideHand(true, true);
+        HeldComponentRight = GrabComponent;
+        //HideUnhideHand(true, true);
+        if (HeldComponentLeft == HeldComponentRight)
+        {
+            HeldComponentLeft = nullptr;
+        }
         return true;
     }
     return false;
 }
 
-UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerComponent* MotionController) const
+UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerComponent* MotionController, UGrabComponent* TargetGrabComponent) const
 {
     if (MotionController == nullptr)
     {
         return nullptr;
     }
+    
+    if (TargetGrabComponent)
+    {
+        FVector TargetGrabLocation = TargetGrabComponent->GetComponentLocation();
+        FVector MotionControllerLocation = MotionController->GetComponentLocation();
+        float Distance = FVector::Distance(MotionControllerLocation,TargetGrabLocation);
+        if (Distance < GrabRadiusFromGripPosition)
+        {
+            return TargetGrabComponent;
+        }
+    }
 
-    // 以Grip位置为球心进行球体扫描
-    const FVector Start = MotionController->GetComponentLocation();
-    const FVector End = Start;
+    // 以Grip位置为球心进行球体扫描，收集范围内的所有Actor
+    const FVector HandLocation = MotionController->GetComponentLocation();
 
     TArray<AActor*> IgnoreActors;
     IgnoreActors.Add(const_cast<AVRPawn*>(this));
 
     TArray<FHitResult> Hits;
     UKismetSystemLibrary::SphereTraceMultiForObjects(
-        this, Start, End, GrabRadiusFromGripPosition,
+        this, HandLocation, HandLocation, GrabRadiusFromGripPosition,
         { UEngineTypes::ConvertToObjectType(ECC_WorldDynamic), UEngineTypes::ConvertToObjectType(ECC_PhysicsBody) },
         false, IgnoreActors, EDrawDebugTrace::None, Hits, true);
 
-    // 收集命中的所有Actor上的GrabComponent，从中选优先级最高者
-    TArray<UGrabComponent*> Candidates;
+    // 遍历所有命中的Actor上的GrabComponent，选取距离手柄最近的一个。
+    // 说明：
+    //   1) 用GrabComponent自身的世界位置作为距离基准（GrabComponent通常放在Actor的抓取锚点上）
+    //   2) 跳过 None 类型 与 已被抓取 的组件
+    //   3) 使用 SetVisited 避免同一Actor被多次Hit时重复处理
+    UGrabComponent* Nearest = nullptr;
+    float NearestDistSq = TNumericLimits<float>::Max();
+
+    TSet<const AActor*> VisitedActors;
     for (const FHitResult& H : Hits)
     {
-        if (AActor* HitActor = H.GetActor())
+        AActor* HitActor = H.GetActor();
+        if (HitActor == nullptr)
         {
-            TArray<UGrabComponent*> Grabs;
-            HitActor->GetComponents<UGrabComponent>(Grabs);
-            for (UGrabComponent* G : Grabs)
+            continue;
+        }
+        bool bAlreadyVisited = false;
+        VisitedActors.Add(HitActor, &bAlreadyVisited);
+        if (bAlreadyVisited)
+        {
+            continue;
+        }
+
+        TArray<UGrabComponent*> Grabs;
+        HitActor->GetComponents<UGrabComponent>(Grabs);
+        for (UGrabComponent* G : Grabs)
+        {
+            if (G == nullptr || G->GrabType == EGrabType::None)
             {
-                if (G && !G->IsHeld())
-                {
-                    Candidates.AddUnique(G);
-                }
+                continue;
+            }
+
+            const float DistSq = FVector::DistSquared(HandLocation, G->GetComponentLocation());
+            if (DistSq < NearestDistSq)
+            {
+                NearestDistSq = DistSq;
+                Nearest = G;
             }
         }
     }
 
-    UGrabComponent* Best = nullptr;
-    bool bCanTarget = false;
-    UVRFunctionLibrary::FindTopPrioGrabComponent(Candidates, Best, bCanTarget);
-    return Best;
+    return Nearest;
 }
 
-UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* MotionControllerAim) const
+UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* MotionControllerAim, UGrabComponent* TargetGrabComponent) const
 {
+    if (TargetGrabComponent)
+    {
+        return TargetGrabComponent;
+    }
+    
     FHitResult Hit;
     if (!TraceAim(MotionControllerAim, Hit))
     {
         return nullptr;
     }
-
     if (AActor* HitActor = Hit.GetActor())
     {
-        TArray<UGrabComponent*> Grabs;
-        HitActor->GetComponents<UGrabComponent>(Grabs);
-        UGrabComponent* Best = nullptr;
-        bool bCanTarget = false;
-        UVRFunctionLibrary::FindTopPrioGrabComponent(Grabs, Best, bCanTarget);
-        return Best;
+        return  UVRFunctionLibrary::FindTopPrioGrabComponent(HitActor);
     }
     return nullptr;
 }
@@ -419,54 +493,56 @@ bool AVRPawn::UpdatePulledObject(UGrabComponent* InGrabComponent, UMotionControl
 
     // 简化：当拉拽距离足够接近手时，转为正式抓取
     const FVector HandLoc = InMotionController->GetComponentLocation();
-    const FVector ObjLoc = InGrabComponent->GetComponentLocation();
-    const float Dist = FVector::Dist(HandLoc, ObjLoc);
-    if (Dist <= GrabRadiusFromGripPosition * 2.f)
+    const FVector ObjLoc = InGrabComponent->GetOwner()->GetActorLocation();
+    FVector NewPos = FMath::VInterpConstantTo(ObjLoc, HandLoc, DeltaTime, 1000);
+    InGrabComponent->GetOwner()->SetActorLocation(NewPos,false,nullptr, ETeleportType::TeleportPhysics);
+
+    if (UGrabComponent* GrabComp = GetGrabComponentNearMotionController(InMotionController,nullptr))
     {
-        InGrabComponent->StopPull();
-        return true;
+        if (GrabComp->GetOwner() == InGrabComponent->GetOwner())
+        {
+            return true;
+        }
     }
     return false;
 }
 
-void AVRPawn::UpdateTargetGrabComponent(UMotionControllerComponent* InMotionController, bool bRightHand)
+void AVRPawn::UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGrabComponent>& TargetGrabComponent)
 {
-    if (InMotionController == nullptr)
+    if (NewTarget == TargetGrabComponent)
     {
         return;
     }
-
-    // 优先在Grip半径内查找，其次再从Aim射线中查找
-    UGrabComponent* Candidate = GetGrabComponentNearMotionController(InMotionController);
-    if (Candidate == nullptr)
+    
+    // 取消旧目标高亮
+    if (TargetGrabComponent)
     {
-        UMotionControllerComponent* AimMC = bRightHand ? MotionControllerRightAim : MotionControllerLeftAim;
-        Candidate = GetGrabComponentUnderAim(AimMC);
+        MarkForGrab(TargetGrabComponent, false);
+        TargetGrabComponent = nullptr;
     }
-
-    // 注意：TargetGrabComponentLeft/Right 是 TObjectPtr<UGrabComponent>，
-    // 不能绑定到 UGrabComponent*& 上，需要用 TObjectPtr<UGrabComponent>& 引用
-    TObjectPtr<UGrabComponent>& CurrentTarget = bRightHand ? TargetGrabComponentRight : TargetGrabComponentLeft;
-    if (Candidate != CurrentTarget)
+    // 高亮新目标
+    if (NewTarget)
     {
-        // 取消旧目标高亮
-        if (CurrentTarget)
+        if (UVRFunctionLibrary::CanBePotentialTarget(NewTarget->GetOwner()))
         {
-            MarkForGrab(CurrentTarget, false);
+            TargetGrabComponent = NewTarget;
+            MarkForGrab(NewTarget, true);
         }
-        // 高亮新目标
-        if (Candidate)
-        {
-            MarkForGrab(Candidate, true);
-        }
-        CurrentTarget = Candidate;
-        UpdatePotentialTarget(Candidate, bRightHand);
     }
 }
 
-void AVRPawn::UpdatePotentialTarget(UGrabComponent* PotentialGrabComponent, bool bRightHand)
+void AVRPawn::UpdatePotentialTarget(UMotionControllerComponent* MotionControllerAim,TObjectPtr<UGrabComponent>& TargetGrabComponent)
 {
-    // 默认实现空：可在蓝图子类覆写以刷新UI或做触觉提示
+    FHitResult Hit;
+    if (TraceAim(MotionControllerAim, Hit))
+    {
+        UGrabComponent* GrabComponent = UVRFunctionLibrary::FindTopPrioGrabComponent(Hit.GetActor());
+        UpdateTargetGrabComponent(GrabComponent,TargetGrabComponent);
+    }
+    else
+    {
+        UpdateTargetGrabComponent(  nullptr,TargetGrabComponent);
+    }
 }
 
 void AVRPawn::MarkForGrab(UGrabComponent* InGrabComponent, bool bCanBeGrab)
@@ -534,14 +610,14 @@ void AVRPawn::EndTeleportTrace()
 
 void AVRPawn::TeleportTrace()
 {
-    if (MotionControllerLeftAim == nullptr)
+    if (MotionControllerRightAim == nullptr)
     {
         return;
     }
 
     // 用左手Aim作为传送弹道发射端（可按需换成右手）
-    const FVector StartPos = MotionControllerLeftAim->GetComponentLocation();
-    const FVector LaunchVelocity = MotionControllerLeftAim->GetForwardVector() * LocalTeleportLaunchSpeed;
+    const FVector StartPos = MotionControllerRightAim->GetComponentLocation();
+    const FVector LaunchVelocity = MotionControllerRightAim->GetForwardVector() * LocalTeleportLaunchSpeed;
 
     TArray<AActor*> IgnoreActors;
     IgnoreActors.Add(this);
@@ -562,6 +638,8 @@ void AVRPawn::TeleportTrace()
     {
         TeleportTracePathPositions.Add(P.Location);
     }
+    
+    TeleportTracePathPositions.Insert(StartPos,0);
 
     // 判断传送位置有效性
     FVector Projected;
@@ -579,7 +657,7 @@ void AVRPawn::TeleportTrace()
     if (TeleportTraceNiagaraSystem)
     {
         UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(
-            TeleportTraceNiagaraSystem, TEXT("PathPositions"), TeleportTracePathPositions);
+            TeleportTraceNiagaraSystem, TEXT("User.PointArray"), TeleportTracePathPositions);
     }
 }
 
@@ -702,13 +780,13 @@ bool AVRPawn::TraceAim(UMotionControllerComponent* MotionControllerAim, FHitResu
     }
 
     const FVector Start = MotionControllerAim->GetComponentLocation();
-    const FVector End = Start + MotionControllerAim->GetForwardVector() * 500.f;
+    const FVector End = Start + MotionControllerAim->GetForwardVector() * 10000.f;
 
     TArray<AActor*> IgnoreActors;
     IgnoreActors.Add(const_cast<AVRPawn*>(this));
 
     return UKismetSystemLibrary::SphereTraceSingleForObjects(
-        this, Start, End, 3.f,
+        this, Start, End, 10.f,
         { UEngineTypes::ConvertToObjectType(ECC_WorldDynamic),
           UEngineTypes::ConvertToObjectType(ECC_PhysicsBody) },
         false, IgnoreActors, EDrawDebugTrace::None, OutHit, true);

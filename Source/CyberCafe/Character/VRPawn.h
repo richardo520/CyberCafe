@@ -126,19 +126,7 @@ public:
     // 菜单 / 射击
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Menu_Toggle_Left;
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Menu_Toggle_Right;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Shoot_Left;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Shoot_Right;
-
-    // 手部姿态（Grasp / IndexCurl / Point / ThumbUp × Left/Right）
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_Grasp_Left;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_Grasp_Right;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_IndexCurl_Left;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_IndexCurl_Right;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_Point_Left;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_Point_Right;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_ThumbUp_Left;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Hands") TObjectPtr<UInputAction> IA_Hand_ThumbUp_Right;
-
+    
     //=====================================================================
     // 蓝图暴露的配置属性
     //=====================================================================
@@ -231,59 +219,41 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "VR|Runtime")
     bool bActiveMenuHandRight;
 
-    /** 手部动画曲线：Grasp（0-1） */
-    UPROPERTY(BlueprintReadWrite, Transient, Category = "VR|HandAnim")
-    float PoseAlphaGrasp;
-
-    /** 手部动画曲线：IndexCurl */
-    UPROPERTY(BlueprintReadWrite, Transient, Category = "VR|HandAnim")
-    float PoseAlphaIndexCurl;
-
-    /** 手部动画曲线：Point */
-    UPROPERTY(BlueprintReadWrite, Transient, Category = "VR|HandAnim")
-    float PoseAlphaPoint;
-
-    /** 手部动画曲线：ThumbUp */
-    UPROPERTY(BlueprintReadWrite, Transient, Category = "VR|HandAnim")
-    float PoseAlphaThumbUp;
-
     //=====================================================================
     // 蓝图函数 - 抓取
     //=====================================================================
 
     /** 左手抓取（对应蓝图 TryGrabLeft） */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    bool TryGrabLeft();
+    bool TryGrabLeft(UGrabComponent* GrabComponent);
 
     /** 右手抓取（对应蓝图 TryGrabRight） */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    bool TryGrabRight();
+    bool TryGrabRight(UGrabComponent* GrabComponent);
 
     /**
      * 找到MotionController附近的GrabComponent中最近的一个。
      * 对应蓝图 GetGrabComponentNearMotionController。
      */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    UGrabComponent* GetGrabComponentNearMotionController(UMotionControllerComponent* MotionController) const;
+    UGrabComponent* GetGrabComponentNearMotionController(UMotionControllerComponent* MotionController, UGrabComponent* TargetGrabComponent) const;
 
     /**
      * 通过Aim射线找到当前瞄准的GrabComponent。
      * 对应蓝图 GetGrabComponentUnderAim。
      */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    UGrabComponent* GetGrabComponentUnderAim(UMotionControllerComponent* MotionControllerAim) const;
+    UGrabComponent* GetGrabComponentUnderAim(UMotionControllerComponent* MotionControllerAim, UGrabComponent* TargetGrabComponent) const;
 
     /** 更新拉拽状态（每Tick调用），对应蓝图 UpdatePulledObject。返回是否仍可继续抓取 */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
     bool UpdatePulledObject(UGrabComponent* InGrabComponent, UMotionControllerComponent* InMotionController, float DeltaTime);
 
     /** 更新指定手的"目标"抓取组件（每Tick调用），对应蓝图 UpdateTargetGrabComponent */
-    UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    void UpdateTargetGrabComponent(UMotionControllerComponent* InMotionController, bool bRightHand);
+    void UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGrabComponent>& TargetGrabComponent);
 
     /** 标记潜在目标（高亮），对应蓝图 UpdatePotentialTarget */
-    UFUNCTION(BlueprintCallable, Category = "VR|Grab")
-    void UpdatePotentialTarget(UGrabComponent* PotentialGrabComponent, bool bRightHand);
+    void UpdatePotentialTarget(UMotionControllerComponent* MotionControllerAim,TObjectPtr<UGrabComponent>& TargetGrabComponent);
 
     /** 标记/取消标记GrabComponent的可抓取高亮，对应蓝图 MarkForGrab */
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
@@ -345,7 +315,10 @@ protected:
     // Enhanced Input 回调
     //=====================================================================
 
-    void OnMove(const FInputActionValue& Value);
+    void OnMoveStarted(const FInputActionValue& Value);
+    void OnMoveTriggered(const FInputActionValue& Value);
+    void OnMoveCompleted(const FInputActionValue& Value);
+    
     void OnTurnStarted(const FInputActionValue& Value);
     void OnTurnTriggered(const FInputActionValue& Value);
     void OnTurnCompleted(const FInputActionValue& Value);
@@ -357,15 +330,6 @@ protected:
 
     void OnMenuToggleLeft(const FInputActionValue& Value);
     void OnMenuToggleRight(const FInputActionValue& Value);
-
-    void OnHandGraspLeft(const FInputActionValue& Value);
-    void OnHandGraspRight(const FInputActionValue& Value);
-    void OnHandIndexCurlLeft(const FInputActionValue& Value);
-    void OnHandIndexCurlRight(const FInputActionValue& Value);
-    void OnHandPointLeft(const FInputActionValue& Value);
-    void OnHandPointRight(const FInputActionValue& Value);
-    void OnHandThumbUpLeft(const FInputActionValue& Value);
-    void OnHandThumbUpRight(const FInputActionValue& Value);
 
 private:
     /** 快速转向的Y轴累计，用于避免摇杆持续推动重复触发 */

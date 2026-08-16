@@ -23,18 +23,22 @@ namespace
     }
 }
 
-void UVRFunctionLibrary::FindTopPrioGrabComponent(
-    const TArray<UGrabComponent*>& TargetArray,
-    UGrabComponent*& OutGrabComponent,
-    bool& bCanBePotentialTarget)
+UGrabComponent* UVRFunctionLibrary::FindTopPrioGrabComponent(AActor* GrabActor)
 {
-    OutGrabComponent = nullptr;
-    bCanBePotentialTarget = false;
+    if (GrabActor == nullptr) return nullptr;
+    
+    TArray<UGrabComponent*> Grabs;
+    GrabActor->GetComponents<UGrabComponent>(Grabs);
+    
+    if (Grabs.IsEmpty())
+    {
+        return nullptr;
+    }
+    
+    UGrabComponent* TopPrioGrabComponent = Grabs[0];
+    int32 TopPrio = TopPrioGrabComponent->GrabPriority;
 
-    // 使用局部变量记录当前最高优先级，对应蓝图里的 TopPrio(Integer)
-    int32 TopPrio = 0;
-
-    for (UGrabComponent* Grab : TargetArray)
+    for (UGrabComponent* Grab : Grabs)
     {
         if (Grab == nullptr)
         {
@@ -42,18 +46,30 @@ void UVRFunctionLibrary::FindTopPrioGrabComponent(
         }
 
         // 跳过 None 类型，视为不可抓取
-        const int32 CurPrio = GetGrabTypePriority(Grab->GrabType);
-        if (CurPrio <= 0)
-        {
-            continue;
-        }
+        int32 CurPrio = Grab->GrabPriority;
 
         // 若发现更高优先级，更新最优候选
         if (CurPrio > TopPrio)
         {
             TopPrio = CurPrio;
-            OutGrabComponent = Grab;
-            bCanBePotentialTarget = true;
+            TopPrioGrabComponent = Grab;
         }
     }
+    
+    return TopPrioGrabComponent;
+}
+
+bool UVRFunctionLibrary::CanBePotentialTarget(AActor* PotentialGrabActor)
+{
+    TArray<UGrabComponent*> GrabComponents;
+    PotentialGrabActor->GetComponents(GrabComponents);
+    
+    for (UGrabComponent* GrabComponent : GrabComponents)
+    {
+        if (!GrabComponent->IsHeld() && !GrabComponent->IsPulled())
+        {
+            return true;
+        }
+    }
+    return false;
 }

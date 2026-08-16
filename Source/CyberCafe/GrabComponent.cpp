@@ -35,6 +35,15 @@ UGrabComponent::UGrabComponent()
 void UGrabComponent::BeginPlay()
 {
     Super::BeginPlay();
+    if (GetAttachParent()->IsAnySimulatingPhysics())
+    {
+        bSimulateOnDrop = true;
+    }
+
+    if (UPrimitiveComponent* PrimitiveComponent = Cast<UPrimitiveComponent>(GetAttachParent()))
+    {
+        PrimitiveComponent->SetCollisionProfileName("PhysicsActor",true);
+    }
 }
 
 void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -62,14 +71,14 @@ UPrimitiveComponent* UGrabComponent::GetOwnerPrimitive() const
 bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
 {
     // 参数与状态校验
-    if (bIsHeld || MotionController == nullptr || GrabType == EGrabType::None)
+    if (MotionController == nullptr || GrabType == EGrabType::None)
     {
         return false;
     }
 
     // 先尝试释放当前抓取的物体
     
-    if (TryRelease())
+    if (!bIsHeld || TryRelease())
     {
         // 内部执行抓取动作
         PerformGrab(MotionController);
@@ -85,12 +94,8 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
             {
                 if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
                 {
-                    bool bHandSuccess = false;
-                    const EControllerHand Hand = GetHeldByHand(bHandSuccess);
-                    if (bHandSuccess)
-                    {
-                        PC->PlayHapticEffect(OnGrabHapticEffect, Hand);
-                    }
+                    const EControllerHand Hand = GetHeldByHand();
+                    PC->PlayHapticEffect(OnGrabHapticEffect, Hand);
                 }
             }
             OnGrabbed.Broadcast();
@@ -119,13 +124,13 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
         SetPrimitiveCompPhysics(false);
         AttachParentToMotionController(MotionController);
         bIsHeld = true;
-        GetAttachParent()->SetRelativeRotation(GetRelativeRotation(), false, nullptr,ETeleportType::TeleportPhysics);
+        GetAttachParent()->SetRelativeRotation(GetRelativeRotation().GetInverse(), false, nullptr,ETeleportType::TeleportPhysics);
             
         FVector3d ComponentLocation = GetComponentLocation();
         FVector3d OwnerLocation = GetAttachParent()->GetComponentLocation();
         FVector3d MotionControllerLocation = MotionController->GetComponentLocation();
         FVector3d Offset = MotionControllerLocation - (ComponentLocation - OwnerLocation);
-        GetAttachParent()->SetRelativeLocation(Offset, false, nullptr,ETeleportType::TeleportPhysics);
+        GetAttachParent()->SetWorldLocation(Offset, false, nullptr,ETeleportType::TeleportPhysics);
         break;
     }
     case EGrabType::SnapInPlace:
@@ -204,7 +209,7 @@ void UGrabComponent::StopPull()
         bIsPulled = false;   
     }
 
-    if (bIsHeld)
+    if (!bIsHeld)
     {
         TrySimulateOnDrop();
     }
@@ -253,9 +258,8 @@ bool UGrabComponent::TryCaptureHandMesh()
     if (bCaptureHand)
     {
         CachedHandLocationTransform = HandMesh->GetRelativeTransform();
-        bool bSuccess = false;
         FString AttachHandSocket = HandSocket.ToString();
-        if (GetHeldByHand(bSuccess) == EControllerHand::Left)
+        if (GetHeldByHand() == EControllerHand::Left)
         {
             AttachHandSocket = HandSocket.ToString() + "_Inverse";
         }
@@ -295,10 +299,16 @@ void UGrabComponent::AttachParentToMotionController(UMotionControllerComponent* 
     }
 
     // 将所属Actor的Root（GetAttachParent即Root）附加到MotionController
-    //if (USceneComponent* AttachParent = GetAttachParent())
-    //{
-        //AttachParent->AttachToComponent(MotionController, FAttachmentTransformRules::KeepWorldTransform);
-    //}
+    if (GetAttachParent())
+    {
+        FAttachmentTransformRules AttachmentRule = FAttachmentTransformRules::KeepWorldTransform;
+        AttachmentRule.bWeldSimulatedBodies = true;
+        bool bSuccess = GetAttachParent()->AttachToComponent(MotionController, AttachmentRule);
+        UE_LOG(LogTemp, Warning, TEXT("Attached? Parent=%s, NewAttachParent=%s, SimPhysics=%d"),
+        *GetAttachParent()->GetName(),
+        GetAttachParent()->GetAttachParent() ? *GetAttachParent()->GetAttachParent()->GetName() : TEXT("NULL"),
+        Cast<UPrimitiveComponent>(GetAttachParent()) ? Cast<UPrimitiveComponent>(GetAttachParent())->IsSimulatingPhysics() : -1);
+    }
 }
 
 void UGrabComponent::SetPrimitiveCompPhysics(bool bSimulate)
@@ -342,25 +352,21 @@ void UGrabComponent::TrySimulateOnDrop()
 // 查询
 //===========================================================================
 
-EControllerHand UGrabComponent::GetHeldByHand(bool& bSuccess) const
+EControllerHand UGrabComponent::GetHeldByHand() const
 {
-    bSuccess = false;
     if (MotionControllerRef == nullptr)
     {
         return EControllerHand::AnyHand;
     }
-
     // UMotionControllerComponent::MotionSource 是FName，对应"Left"/"Right"/"LeftGrip"/"RightGrip"等
     const FName Source = MotionControllerRef->MotionSource;
     const FString SourceStr = Source.ToString();
     if (SourceStr.Contains(TEXT("Left")))
     {
-        bSuccess = true;
         return EControllerHand::Left;
     }
     if (SourceStr.Contains(TEXT("Right")))
     {
-        bSuccess = true;
         return EControllerHand::Right;
     }
     return EControllerHand::AnyHand;
