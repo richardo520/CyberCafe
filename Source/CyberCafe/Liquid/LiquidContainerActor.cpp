@@ -4,6 +4,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstance.h"
+#include "Materials/MaterialParameters.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "NiagaraFunctionLibrary.h"
@@ -42,19 +44,44 @@ ALiquidContainerActor::ALiquidContainerActor()
     WavesScale    = 1.0f;
     Viscosity     = 1.0f;
 
+    // 动态波动默认值（静止时完全平静，抓握晚动时漸起波动）
+    bDynamicWaves          = true;
+    IdleAddWaves           = 0.0f;
+    MaxAddWaves            = 1.0f;
+    LinearVelocityRefCms   = 200.f;  // 2 m/s 时达到最大波动
+    AngularVelocityRefDegs = 360.f;  // 每秒一圈时达到最大波动
+    WavesRiseSpeed         = 6.0f;   // 上升很快（晃一下立即反应）
+    WavesDecaySpeed        = 2.5f;   // 下降略慢（停下后逐渐平静）
+    CurrentDynamicWaves    = 0.0f;
+    PrevLocation           = FVector::ZeroVector;
+    PrevRotation           = FQuat::Identity;
+
     // 默认包围盒（美术会在蓝图里重新填）
     BottleSize    = FVector(10.f, 10.f, 20.f);
 
     LiquidFXTemplate    = nullptr;
     LiquidMeshAsset     = nullptr;
     LiquidMaterialAsset = nullptr;
+    LiquidColorParamName = FName(TEXT("Liquid_Color01"));
 }
 
 void ALiquidContainerActor::BeginPlay()
 {
     Super::BeginPlay();
+
+    // 启动时先尝试从材质里读出液体颜色（覆盖蓝图里默认的 LiquidColor），
+    // 这样 PourFX/Splash 拿到的颜色和瓶内液体自然一致。
+    TryReadColorFromMaterial();
+
     InitLiquidFX();
     RefreshLiquidFX();
+
+    // 初始化上一帧参考位置/旋转
+    if (ContainerMesh)
+    {
+        PrevLocation = ContainerMesh->GetComponentLocation();
+        PrevRotation = ContainerMesh->GetComponentQuat();
+    }
 }
 
 //=====================================================================
@@ -140,6 +167,73 @@ bool ALiquidContainerActor::IsHeld() const
 }
 
 //=====================================================================
+// 动态波动：根据容器运动强度实时调节 P_Liquid.User.AddWaves
+//=====================================================================
+
+void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
+{
+    if (!LiquidFX)
+    {
+        return;
+    }
+
+    // 关闭动态波动时，直接使用静态 AddWaves
+    if (!bDynamicWaves)
+    {
+        LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"), AddWaves);
+        return;
+    }
+
+    // 1) 采集容器当前的线速度与角速度
+    float LinearSpeed  = 0.f;
+    float AngularSpeed = 0.f;
+    if (ContainerMesh)
+    {
+        // 优先用物理速度（仅模拟物理时有效）
+        LinearSpeed = ContainerMesh->GetPhysicsLinearVelocity().Size();
+        AngularSpeed = FMath::RadiansToDegrees(ContainerMesh->GetPhysicsAngularVelocityInRadians().Size());
+
+        // 若没上物理（比如被 Snap 到手上），退化用位移差分估算
+        if (LinearSpeed < KINDA_SMALL_NUMBER && AngularSpeed < KINDA_SMALL_NUMBER && DeltaTime > KINDA_SMALL_NUMBER)
+        {
+            const FVector CurLoc = ContainerMesh->GetComponentLocation();
+            LinearSpeed = ((CurLoc - PrevLocation) / DeltaTime).Size();
+            PrevLocation = CurLoc;
+
+            const FQuat CurRot = ContainerMesh->GetComponentQuat();
+            const FQuat DeltaQuat = CurRot * PrevRotation.Inverse();
+            FVector Axis; float AngleRad = 0.f;
+            DeltaQuat.ToAxisAndAngle(Axis, AngleRad);
+            AngleRad = FMath::UnwindRadians(AngleRad);
+            AngularSpeed = FMath::RadiansToDegrees(FMath::Abs(AngleRad) / DeltaTime);
+            PrevRotation = CurRot;
+        }
+        else
+        {
+            PrevLocation = ContainerMesh->GetComponentLocation();
+            PrevRotation = ContainerMesh->GetComponentQuat();
+        }
+    }
+
+    // 2) 将速度归一化到 0~1，取两者最大作为“运动强度”
+    const float LinearNorm  = FMath::Clamp(LinearSpeed  / FMath::Max(LinearVelocityRefCms,  1.f), 0.f, 1.f);
+    const float AngularNorm = FMath::Clamp(AngularSpeed / FMath::Max(AngularVelocityRefDegs, 1.f), 0.f, 1.f);
+    const float MotionNorm  = FMath::Max(LinearNorm, AngularNorm);
+
+    // 3) 目标波动强度：在 [IdleAddWaves, MaxAddWaves] 之间插值
+    const float TargetWaves = FMath::Lerp(IdleAddWaves, MaxAddWaves, MotionNorm);
+
+    // 4) 平滑：上升时快、下降时慢，避免抳动
+    const bool bRising = TargetWaves > CurrentDynamicWaves;
+    const float Speed  = bRising ? WavesRiseSpeed : WavesDecaySpeed;
+    const float Alpha  = FMath::Clamp(Speed * DeltaTime, 0.f, 1.f);
+    CurrentDynamicWaves = FMath::Lerp(CurrentDynamicWaves, TargetWaves, Alpha);
+
+    // 5) 写入 P_Liquid
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"), CurrentDynamicWaves);
+}
+
+//=====================================================================
 // 内部：初始化 LiquidFX（P_Liquid User 参数）
 //=====================================================================
 
@@ -171,4 +265,54 @@ void ALiquidContainerActor::InitLiquidFX()
 
     // 3) 重启以让 User 参数生效
     LiquidFX->ReinitializeSystem();
+}
+
+//=====================================================================
+// 材质相关：一键换材质 + 从材质读颜色
+//=====================================================================
+
+void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMaterial, bool bReadColor)
+{
+    if (!NewMaterial)
+    {
+        return;
+    }
+
+    LiquidMaterialAsset = NewMaterial;
+
+    // 顺便读取颜色，让 PourFX/Splash 保持一致
+    if (bReadColor)
+    {
+        TryReadColorFromMaterial();
+    }
+
+    // 同步到 P_Liquid
+    if (LiquidFX)
+    {
+        LiquidFX->SetNiagaraVariableObject(TEXT("User.Material"), LiquidMaterialAsset);
+        // 更换 Material 后重启 Niagara，让新材质立即接管渲染
+        LiquidFX->ReinitializeSystem();
+    }
+
+    // 混色权威变了，广播一次事件，便于蓝图侧联动
+    OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
+}
+
+bool ALiquidContainerActor::TryReadColorFromMaterial()
+{
+    if (!LiquidMaterialAsset || LiquidColorParamName.IsNone())
+    {
+        return false;
+    }
+
+    // UMaterialInterface::GetVectorParameterValue 对 MI / M 都能用；
+    // 参数不存在时返回 false，不修改 OutValue。
+    FLinearColor Out;
+    if (LiquidMaterialAsset->GetVectorParameterValue(FMaterialParameterInfo(LiquidColorParamName), Out))
+    {
+        LiquidColor = Out;
+        LiquidColor.A = 1.f;
+        return true;
+    }
+    return false;
 }

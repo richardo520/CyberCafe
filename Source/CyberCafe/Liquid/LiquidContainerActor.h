@@ -122,6 +122,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
     TObjectPtr<UMaterialInterface> LiquidMaterialAsset;
 
+    /**
+     * 材质里"液体颜色"参数的名字（Vector Parameter）。
+     * 默认 "Liquid_Color01"（对应 LiquidMaterials_VFXPack 的 M_Liquid 的 00_GLOBAL 组）。
+     * BeginPlay 时会从当前 LiquidMaterialAsset 读取该参数值并写入 LiquidColor，供 PourFX/Splash 使用。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    FName LiquidColorParamName;
+
     /** 液体内芯 Mesh 的包围盒大小（写入 P_Liquid.User.BottleSize，由美术手填） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
     FVector BottleSize;
@@ -161,6 +169,42 @@ public:
     /** 液体粘稠度（写入 P_Liquid.User.Viscosity） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|FX", meta = (ClampMin = "0.0"))
     float Viscosity;
+
+    //=====================================================================
+    // 液面动态波动（根据容器运动强度实时调节 AddWaves）
+    //=====================================================================
+
+    /**
+     * 是否启用动态波动：
+     *   - true  ：静止时液面平静，运动/抓握时液面晃动（推荐）
+     *   - false ：AddWaves 始终使用 IdleAddWaves 常量
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves")
+    bool bDynamicWaves;
+
+    /** 静止时的基础波动强度（0 = 完全平静） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "0.0", EditCondition = "bDynamicWaves"))
+    float IdleAddWaves;
+
+    /** 运动时能达到的最大波动强度 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "0.0", EditCondition = "bDynamicWaves"))
+    float MaxAddWaves;
+
+    /** 线速度达到此值时波动达到最大值（cm/s） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "1.0", EditCondition = "bDynamicWaves"))
+    float LinearVelocityRefCms;
+
+    /** 角速度达到此值时波动达到最大值（度/s） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "1.0", EditCondition = "bDynamicWaves"))
+    float AngularVelocityRefDegs;
+
+    /** 波动上升平滑（值越大追随越快，1/s） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "0.1", EditCondition = "bDynamicWaves"))
+    float WavesRiseSpeed;
+
+    /** 波动衰减速度（值越大静下越快，1/s） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "0.1", EditCondition = "bDynamicWaves"))
+    float WavesDecaySpeed;
 
     //=====================================================================
     // 事件
@@ -210,7 +254,44 @@ public:
     UFUNCTION(BlueprintPure, Category = "Liquid")
     bool IsHeld() const;
 
+    /**
+     * 每 Tick 调用：根据容器的线速度/角速度更新液面动态波动强度。
+     * 由子类（如 ABottleActor）在自己的 Tick 中调用；基类默认不 Tick。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Liquid|Waves")
+    void UpdateDynamicWaves(float DeltaTime);
+
+    /**
+     * 运行时替换液体材质：更新 LiquidMaterialAsset 并同步给 P_Liquid.User.Material。
+     * 用于"倒酒到杯子"时把瓶子的 MI 直接赋给杯子，让杯内液体立刻变成瓶内液体的外观。
+     *
+     * @param NewMaterial 新的液体材质（通常是 MI_Liquid_XX）
+     * @param bReadColor  是否顺便从该材质读取 Liquid_Color01 并写入 LiquidColor
+     */
+    UFUNCTION(BlueprintCallable, Category = "Liquid")
+    void SetLiquidMaterialAsset(UMaterialInterface* NewMaterial, bool bReadColor = true);
+
+    /**
+     * 从当前 LiquidMaterialAsset 读取 LiquidColorParamName 对应的 Vector 参数值，写入 LiquidColor。
+     * 适用于 MaterialInstance——若参数没找到则不修改 LiquidColor。
+     * @return 是否成功读取到颜色
+     */
+    UFUNCTION(BlueprintCallable, Category = "Liquid")
+    bool TryReadColorFromMaterial();
+
 protected:
     /** 初始化 LiquidFX：设置 P_Liquid 的 User.Mesh / User.Material / User.BottleSize，并首次同步一次表现参数 */
     void InitLiquidFX();
+
+    /** 当前平滑后的动态波动强度（每 Tick 更新，写入 P_Liquid.User.AddWaves） */
+    UPROPERTY(Transient)
+    float CurrentDynamicWaves;
+
+    /** 上一帧容器位置，用于非物理情况下估算线速度 */
+    UPROPERTY(Transient)
+    FVector PrevLocation;
+
+    /** 上一帧容器旋转，用于非物理情况下估算角速度 */
+    UPROPERTY(Transient)
+    FQuat PrevRotation;
 };

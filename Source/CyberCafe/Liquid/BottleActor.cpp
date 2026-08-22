@@ -93,6 +93,9 @@ void ABottleActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
+    // 根据瓶身运动状态实时调节液面波动（基类实现）
+    UpdateDynamicWaves(DeltaTime);
+
     const bool bShouldPour =
         (FillAmount > KINDA_SMALL_NUMBER) &&
         (GetTiltAngleDegrees() >= PourAngleThreshold);
@@ -240,18 +243,31 @@ void ABottleActor::UpdatePouring(float DeltaTime)
     {
         if (ACupActor* Cup = Cast<ACupActor>(Hit.GetActor()))
         {
+            // 1) 把瓶子的液体材质"简单粗暴"地赋给杯子（含 MI 的颜色一起传递）
+            //    ：注意——只在杯子当前材质与瓶子不同的时候才换，避免每帧调 ReinitializeSystem。
+            if (LiquidMaterialAsset && Cup->LiquidMaterialAsset != LiquidMaterialAsset)
+            {
+                Cup->SetLiquidMaterialAsset(LiquidMaterialAsset, /*bReadColor=*/true);
+            }
+
+            // 2) 加液体到杯子（走基类混色逻辑，颜色权威由 LiquidColor 决定）
             Cup->AddLiquid(ActualML, LiquidColor);
 
-            // 在命中点弹出一次水花（P_Splash）
+            // 3) 在命中点弹出一次水花（P_Splash），同步颜色
             if (SplashEffectTemplate)
             {
-                UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                UNiagaraComponent* SplashComp = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
                     GetWorld(),
                     SplashEffectTemplate,
                     Hit.ImpactPoint,
                     Hit.ImpactNormal.Rotation(),
                     FVector(1.f),
                     /*bAutoDestroy=*/true);
+                if (SplashComp)
+                {
+                    // 若 P_Splash 支持 User.Color 则会生效；不支持时 Niagara 会静默忽略。
+                    SplashComp->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
+                }
             }
         }
         // 命中非杯子 → 液体"洒到地上"，P_Ribbon 内部会自己处理地面 Decal（若 bEnableDecal=true）

@@ -110,7 +110,12 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Bottle|Runtime")
     bool bIsPouring;
 
-    /** 当前激活的出液粒子实例（P_Ribbon，预挂在瓶子上） */
+    /**
+     * 出液粒子组件（P_Ribbon，预挂在瓶子上）。
+     * 由 C++ 完全接管：Asset 由 PourEffectTemplate 指定并在 BeginPlay 中 SetAsset；
+     * Transform 每 Tick 强制吸附到瓶口；User.* 参数由 C++ 写入。
+     * 不暴露到 Details（暴露也会被 C++ 覆盖，容易误导使用者）。
+     */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Bottle|Runtime")
     TObjectPtr<UNiagaraComponent> PourFX;
 

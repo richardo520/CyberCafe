@@ -10,6 +10,7 @@
  * ACupActor
  * 酒杯：接收酒瓶倒入的液体。逻辑完全走基类 AddLiquid()。
  * 首版不做溢出效果，`MaxVolumeML` 满了以后 AddLiquid 会直接返回 0。
+ * Tick 中调用基类 UpdateDynamicWaves，使杯子静止时液面平静、晃动时液面波动。
  */
 UCLASS(Blueprintable, BlueprintType)
 class CYBERCAFE_API ACupActor : public ALiquidContainerActor
@@ -18,4 +19,6 @@ class CYBERCAFE_API ACupActor : public ALiquidContainerActor
 
 public:
     ACupActor();
+
+    virtual void Tick(float DeltaTime) override;
 };
