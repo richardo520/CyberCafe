@@ -7,8 +7,11 @@
 #include "LiquidContainerActor.generated.h"
 
 class UStaticMeshComponent;
+class UStaticMesh;
+class UMaterialInterface;
 class UGrabComponent;
-class UMaterialInstanceDynamic;
+class UNiagaraComponent;
+class UNiagaraSystem;
 
 /**
  * 液体变化事件
@@ -18,24 +21,64 @@ class UMaterialInstanceDynamic;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnLiquidChangedSignature, float, NewFillAmount, FLinearColor, NewColor);
 
 /**
+ * FStr_Bottle
+ * 酒瓶/酒杯的静态数据结构（对应 LiquidMaterials_VFXPack 中的 Str_Bottle）。
+ * 用于数据表配置多种酒（外壳 Mesh + 液体 Mesh + 液体材质 + 容量 + 颜色 等）。
+ */
+USTRUCT(BlueprintType)
+struct CYBERCAFE_API FStr_Bottle
+{
+    GENERATED_BODY()
+
+    /** 液体显示名（如 "Red Wine"） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    FName LiquidName = NAME_None;
+
+    /** 容器外壳 Mesh（瓶身/杯身） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    TObjectPtr<UStaticMesh> ContainerMesh = nullptr;
+
+    /** 液体内芯 Mesh（酒瓶内部形状，写入 P_Liquid.User.Mesh） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    TObjectPtr<UStaticMesh> LiquidMesh = nullptr;
+
+    /** 液体材质（MI_Liquid_XX，写入 P_Liquid.User.Material） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    TObjectPtr<UMaterialInterface> LiquidMaterial = nullptr;
+
+    /** 液体内芯 Mesh 的包围盒大小（写入 P_Liquid.User.BottleSize，由美术手填） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    FVector BottleSize = FVector(10.f, 10.f, 20.f);
+
+    /** 初始液面 0~1 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float InitialFill = 1.f;
+
+    /** 最大容量 mL */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle", meta = (ClampMin = "0.0"))
+    float MaxVolumeML = 750.f;
+
+    /** 液体颜色（用于混色 & 出液流颜色） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Str_Bottle")
+    FLinearColor LiquidColor = FLinearColor(0.35f, 0.05f, 0.08f, 1.f);
+};
+
+/**
  * ALiquidContainerActor
  * 液体容器基类：酒瓶(ABottleActor)与酒杯(ACupActor)的公共父类。
  *
- * 提供：
- *   - 容器外壳 Mesh (ContainerMesh，物理模拟目标 & 抓取根)
- *   - 液体 Mesh    (LiquidMesh，附加在容器内部，禁止碰撞)
- *   - 抓取组件    (UGrabComponent)
- *   - 液体状态：FillAmount(0~1) / LiquidColor / MaxVolumeML
- *   - API：AddLiquid / ConsumeLiquid / RefreshLiquidMaterial
- *   - 事件：OnLiquidChanged(蓝图可绑)
+ * 视觉表现层使用 LiquidMaterials_VFXPack 的 P_Liquid Niagara 系统，
+ * 由该 NiagaraComponent 内部自己渲染液体网格。
  *
- * 液体材质约定的参数名(Scalar/Vector Parameter)：
- *   - Scalar : FillAmount     -- 液面比例 0~1
- *   - Scalar : Opacity        -- 液体透明度(默认 0.85)
- *   - Scalar : WaveAmplitude  -- 液面波动幅度(cm)
- *   - Scalar : WaveFrequency  -- 液面波动频率
- *   - Scalar : ContainerHeight -- 容器内高度(cm，运行时自动写入)
- *   - Vector : LiquidColor    -- 液体颜色(RGB)
+ * P_Liquid User 参数写入约定：
+ *   - User.Mesh       (StaticMesh)   液体内芯模型
+ *   - User.Material   (Material)     液体材质
+ *   - User.BottleSize (Vector)       液体 Mesh 的包围盒尺寸
+ *   - User.Fill       (Float 0~1)    当前液面
+ *   - User.Opacity    (Float)        透明度
+ *   - User.AddWaves   (Float)        波动强度
+ *   - User.WavesScale (Float)        波动尺度
+ *   - User.Viscosity  (Float)        粘稠度
  */
 UCLASS(Abstract, Blueprintable, BlueprintType)
 class CYBERCAFE_API ALiquidContainerActor : public AActor
@@ -55,13 +98,33 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
     TObjectPtr<UStaticMeshComponent> ContainerMesh;
 
-    /** 内部液体 Mesh(自定义模型：酒瓶/酒杯内部形状)，无碰撞 */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
-    TObjectPtr<UStaticMeshComponent> LiquidMesh;
-
     /** 抓取组件 */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
     TObjectPtr<UGrabComponent> GrabComp;
+
+    /** P_Liquid Niagara 组件：负责液体网格显示（替代原本自建的 LiquidMesh） */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
+    TObjectPtr<UNiagaraComponent> LiquidFX;
+
+    //=====================================================================
+    // Niagara 模板 & 资产（LiquidMaterials_VFXPack）
+    //=====================================================================
+
+    /** P_Liquid Niagara System 模板资产（子类蓝图指定 /Game/LiquidMaterials_VFXPack/Effects/P_Liquid） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    TObjectPtr<UNiagaraSystem> LiquidFXTemplate;
+
+    /** 液体内芯 Mesh（写入 P_Liquid.User.Mesh） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    TObjectPtr<UStaticMesh> LiquidMeshAsset;
+
+    /** 液体材质（MI_Liquid_XX，写入 P_Liquid.User.Material） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    TObjectPtr<UMaterialInterface> LiquidMaterialAsset;
+
+    /** 液体内芯 Mesh 的包围盒大小（写入 P_Liquid.User.BottleSize，由美术手填） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    FVector BottleSize;
 
     //=====================================================================
     // 液体属性(编辑器可调 / 蓝图可读写)
@@ -79,17 +142,25 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid")
     FLinearColor LiquidColor;
 
-    /** 液体材质透明度参数(默认写入 MID) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Material", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    //=====================================================================
+    // P_Liquid 表现参数
+    //=====================================================================
+
+    /** 液体透明度（写入 P_Liquid.User.Opacity） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|FX", meta = (ClampMin = "0.0", ClampMax = "1.0"))
     float LiquidOpacity;
 
-    /** 液面波动幅度(cm) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Material", meta = (ClampMin = "0.0"))
-    float WaveAmplitude;
+    /** 液面波动幅度（写入 P_Liquid.User.AddWaves） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|FX", meta = (ClampMin = "0.0"))
+    float AddWaves;
 
-    /** 液面波动频率 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Material", meta = (ClampMin = "0.0"))
-    float WaveFrequency;
+    /** 液面波动尺度（写入 P_Liquid.User.WavesScale） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|FX", meta = (ClampMin = "0.0"))
+    float WavesScale;
+
+    /** 液体粘稠度（写入 P_Liquid.User.Viscosity） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|FX", meta = (ClampMin = "0.0"))
+    float Viscosity;
 
     //=====================================================================
     // 事件
@@ -123,9 +194,13 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Liquid")
     float ConsumeLiquid(float DeltaML);
 
-    /** 将 FillAmount / LiquidColor / 波动等参数写回 LiquidMID */
+    /**
+     * 将 FillAmount / 波动 / 粘稠度 等参数写入 P_Liquid 的 User 参数。
+     * 注意：模式 A 下不改颜色（颜色由 Material 决定），
+     *       但混色逻辑仍会更新 LiquidColor，供 P_Ribbon 出液流用。
+     */
     UFUNCTION(BlueprintCallable, Category = "Liquid")
-    void RefreshLiquidMaterial();
+    void RefreshLiquidFX();
 
     /** 获取当前液体的体积(mL) */
     UFUNCTION(BlueprintPure, Category = "Liquid")
@@ -136,14 +211,6 @@ public:
     bool IsHeld() const;
 
 protected:
-    /** LiquidMesh 用来创建的动态材质实例(每个 Slot 一个) */
-    UPROPERTY(Transient)
-    TArray<TObjectPtr<UMaterialInstanceDynamic>> LiquidMIDs;
-
-    /** LiquidMesh 局部包围盒的高度(cm)，用于材质裁剪 */
-    UPROPERTY(Transient)
-    float ContainerHeight;
-
-    /** 初始化 LiquidMesh 的 MID 并写入初始参数 */
-    void InitLiquidMaterials();
+    /** 初始化 LiquidFX：设置 P_Liquid 的 User.Mesh / User.Material / User.BottleSize，并首次同步一次表现参数 */
+    void InitLiquidFX();
 };

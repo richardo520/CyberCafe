@@ -27,12 +27,25 @@ ABottleActor::ABottleActor()
     PourSocketName      = NAME_None;
     PourAngleThreshold  = 60.f;
     PourRatePerSecond   = 60.f;    // 每秒 60mL
+    FlowStrength        = 1.f;
     PourTraceDistance   = 60.f;    // 60cm，足够从桌面高度倒到杯子
     PourEffectTemplate  = nullptr;
+    SplashEffectTemplate= nullptr;
     PourHaptic          = nullptr;
+    bEnableDecal        = true;
+    bNoSplashes         = false;
+    bNoList             = true;
 
-    bIsPouring   = false;
-    ActivePourFX = nullptr;
+    bIsPouring = false;
+
+    // 预挂载的 P_Ribbon Niagara 组件（默认不自动激活）
+    PourFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("PourFX"));
+    if (PourFX)
+    {
+        PourFX->SetupAttachment(GetRootComponent());
+        PourFX->SetAutoActivate(false);
+        PourFX->bAutoActivate = false;
+    }
 
     // 酒瓶默认容量：750mL(一瓶红酒)
     MaxVolumeML = 750.f;
@@ -42,8 +55,38 @@ ABottleActor::ABottleActor()
 void ABottleActor::BeginPlay()
 {
     Super::BeginPlay();
-    // 抓取事件不需要绑定：Tick 里根据倾角/剩余量自行判定，
-    // 松手后瓶子若仍倾斜也会继续出液(方案确认)。
+
+    // 为 P_Ribbon 预挂载模板 + 预写入静态参数
+    if (PourFX)
+    {
+        // 将瓶口位置作为 Ribbon 发送点
+        if (PourSocketName != NAME_None && ContainerMesh && ContainerMesh->DoesSocketExist(PourSocketName))
+        {
+            PourFX->AttachToComponent(ContainerMesh, FAttachmentTransformRules::SnapToTargetIncludingScale, PourSocketName);
+        }
+        else
+        {
+            PourFX->SetRelativeLocation(PourOffset);
+        }
+
+        if (PourEffectTemplate && PourFX->GetAsset() != PourEffectTemplate)
+        {
+            PourFX->SetAsset(PourEffectTemplate);
+        }
+
+        // 预写入静态参数
+        PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
+        PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
+
+        // User.Data = self (Actor)，同官方 BP_Pouring 的做法（参图 1 中 Ribbon Init）
+        PourFX->SetNiagaraVariableObject(TEXT("User.Data"), this);
+
+        // 默认关闭，要倒酒时才 Activate
+        PourFX->Deactivate();
+    }
 }
 
 void ABottleActor::Tick(float DeltaTime)
@@ -114,25 +157,17 @@ void ABottleActor::StartPouring()
 {
     bIsPouring = true;
 
-    if (PourEffectTemplate && !ActivePourFX)
+    if (PourFX)
     {
-        const FTransform PourXform = GetPourWorldTransform();
+        // 重新同步一次颜色/强度/开关，防止编辑器运行时改变后未生效
+        PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
+        PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
+        PourFX->SetNiagaraVariableObject     (TEXT("User.Data"),         this);
 
-        ActivePourFX = UNiagaraFunctionLibrary::SpawnSystemAttached(
-            PourEffectTemplate,
-            ContainerMesh,
-            PourSocketName,                        // 若无 socket 也会 fallback 到 Component 原点
-            PourXform.GetLocation(),               // 用于 KeepWorld 位置
-            PourXform.Rotator(),
-            EAttachLocation::KeepWorldPosition,
-            /*bAutoDestroy=*/false);
-
-        if (ActivePourFX)
-        {
-            // 传递液体颜色 & 速率
-            ActivePourFX->SetVariableLinearColor(TEXT("User.LiquidColor"), LiquidColor);
-            ActivePourFX->SetVariableFloat(TEXT("User.PourRate"), PourRatePerSecond);
-        }
+        PourFX->Activate(/*bReset=*/true);
     }
 
     // 播放持瓶手柄的触觉反馈(可选)
@@ -149,11 +184,10 @@ void ABottleActor::StopPouring()
 {
     bIsPouring = false;
 
-    if (ActivePourFX)
+    if (PourFX)
     {
-        ActivePourFX->Deactivate();     // 让粒子自然消散
-        ActivePourFX->DestroyComponent();
-        ActivePourFX = nullptr;
+        // 不销毁，只关闭；下次 Activate 可直接重启
+        PourFX->Deactivate();
     }
 }
 
@@ -172,9 +206,9 @@ void ABottleActor::UpdatePouring(float DeltaTime)
     const FVector PourLocationWS = PourXform.GetLocation();
 
     // 更新 Niagara 的实时颜色(液体颜色会因混色变化)
-    if (ActivePourFX)
+    if (PourFX)
     {
-        ActivePourFX->SetVariableLinearColor(TEXT("User.LiquidColor"), LiquidColor);
+        PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
     }
 
     // 本帧应流出的液体量
@@ -207,8 +241,20 @@ void ABottleActor::UpdatePouring(float DeltaTime)
         if (ACupActor* Cup = Cast<ACupActor>(Hit.GetActor()))
         {
             Cup->AddLiquid(ActualML, LiquidColor);
+
+            // 在命中点弹出一次水花（P_Splash）
+            if (SplashEffectTemplate)
+            {
+                UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                    GetWorld(),
+                    SplashEffectTemplate,
+                    Hit.ImpactPoint,
+                    Hit.ImpactNormal.Rotation(),
+                    FVector(1.f),
+                    /*bAutoDestroy=*/true);
+            }
         }
-        // 命中非杯子 → 液体"洒到地上"，就单纯扣掉不入杯(首版不做溢出/地面湿迹)
+        // 命中非杯子 → 液体"洒到地上"，P_Ribbon 内部会自己处理地面 Decal（若 bEnableDecal=true）
     }
     // 未命中 → 液体飞入虚空，扣掉即可
 }

@@ -3,8 +3,10 @@
 #include "Liquid/LiquidContainerActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "NiagaraFunctionLibrary.h"
 #include "GrabComponent.h"
 
 ALiquidContainerActor::ALiquidContainerActor()
@@ -17,37 +19,42 @@ ALiquidContainerActor::ALiquidContainerActor()
     ContainerMesh->SetSimulatePhysics(true);
     ContainerMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
 
-    // 液体 Mesh：附在容器内部，无碰撞，物理不参与
-    LiquidMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LiquidMesh"));
-    LiquidMesh->SetupAttachment(ContainerMesh);
-    LiquidMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    LiquidMesh->SetGenerateOverlapEvents(false);
-    LiquidMesh->SetSimulatePhysics(false);
-
     // 抓取组件（附在 ContainerMesh 上）
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
     GrabComp->SetupAttachment(ContainerMesh);
     GrabComp->GrabType = EGrabType::Snap;
     GrabComp->GrabPriority = 0;
 
+    // P_Liquid Niagara 组件：负责液体网格渲染
+    LiquidFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("LiquidFX"));
+    LiquidFX->SetupAttachment(ContainerMesh);
+    LiquidFX->SetAutoActivate(true);
+    LiquidFX->bAutoActivate = true;
+
     // 液体状态默认值
     FillAmount    = 0.5f;
     MaxVolumeML   = 750.f;   // 一瓶红酒 = 750mL
     LiquidColor   = FLinearColor(0.35f, 0.05f, 0.08f, 1.f); // 默认红酒色
 
-    // 材质外观默认值
+    // P_Liquid 表现默认值
     LiquidOpacity = 0.85f;
-    WaveAmplitude = 0.3f;
-    WaveFrequency = 2.0f;
+    AddWaves      = 1.0f;
+    WavesScale    = 1.0f;
+    Viscosity     = 1.0f;
 
-    ContainerHeight = 0.f;
+    // 默认包围盒（美术会在蓝图里重新填）
+    BottleSize    = FVector(10.f, 10.f, 20.f);
+
+    LiquidFXTemplate    = nullptr;
+    LiquidMeshAsset     = nullptr;
+    LiquidMaterialAsset = nullptr;
 }
 
 void ALiquidContainerActor::BeginPlay()
 {
     Super::BeginPlay();
-    InitLiquidMaterials();
-    RefreshLiquidMaterial();
+    InitLiquidFX();
+    RefreshLiquidFX();
 }
 
 //=====================================================================
@@ -81,7 +88,7 @@ float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
 
     FillAmount = FMath::Clamp(NewTotalML / MaxVolumeML, 0.f, 1.f);
 
-    RefreshLiquidMaterial();
+    RefreshLiquidFX();
     OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
 
     return AcceptedML;
@@ -105,24 +112,26 @@ float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
     const float NewTotalML = CurrentML - ConsumedML;
     FillAmount = FMath::Clamp(NewTotalML / MaxVolumeML, 0.f, 1.f);
 
-    RefreshLiquidMaterial();
+    RefreshLiquidFX();
     OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
 
     return ConsumedML;
 }
 
-void ALiquidContainerActor::RefreshLiquidMaterial()
+void ALiquidContainerActor::RefreshLiquidFX()
 {
-    for (UMaterialInstanceDynamic* MID : LiquidMIDs)
+    if (!LiquidFX)
     {
-        if (!MID) continue;
-        MID->SetScalarParameterValue(TEXT("FillAmount"),      FillAmount);
-        MID->SetScalarParameterValue(TEXT("Opacity"),         LiquidOpacity);
-        MID->SetScalarParameterValue(TEXT("WaveAmplitude"),   WaveAmplitude);
-        MID->SetScalarParameterValue(TEXT("WaveFrequency"),   WaveFrequency);
-        MID->SetScalarParameterValue(TEXT("ContainerHeight"), ContainerHeight);
-        MID->SetVectorParameterValue(TEXT("LiquidColor"),     LiquidColor);
+        return;
     }
+
+    // 只写入 P_Liquid 定义的 User 参数。
+    // 颜色在1行内由 Material 决定（模式 A），因此不在此处写。
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"),       FillAmount);
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Opacity"),    LiquidOpacity);
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"),   AddWaves);
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.WavesScale"), WavesScale);
+    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Viscosity"),  Viscosity);
 }
 
 bool ALiquidContainerActor::IsHeld() const
@@ -131,29 +140,35 @@ bool ALiquidContainerActor::IsHeld() const
 }
 
 //=====================================================================
-// 内部：初始化 MID
+// 内部：初始化 LiquidFX（P_Liquid User 参数）
 //=====================================================================
 
-void ALiquidContainerActor::InitLiquidMaterials()
+void ALiquidContainerActor::InitLiquidFX()
 {
-    LiquidMIDs.Reset();
-
-    if (!LiquidMesh || !LiquidMesh->GetStaticMesh())
+    if (!LiquidFX)
     {
         return;
     }
 
-    // 用局部包围盒的 Z 高度作为容器内高度
-    const FBox LocalBounds = LiquidMesh->GetStaticMesh()->GetBounds().GetBox();
-    ContainerHeight = LocalBounds.GetSize().Z;
-
-    const int32 NumMaterials = LiquidMesh->GetNumMaterials();
-    LiquidMIDs.Reserve(NumMaterials);
-
-    for (int32 i = 0; i < NumMaterials; ++i)
+    // 1) 附上 Niagara 模板（P_Liquid）
+    if (LiquidFXTemplate && LiquidFX->GetAsset() != LiquidFXTemplate)
     {
-        // CreateDynamicMaterialInstance 会自动使用当前 Slot 上的材质作为 Parent
-        UMaterialInstanceDynamic* MID = LiquidMesh->CreateDynamicMaterialInstance(i);
-        LiquidMIDs.Add(MID);
+        LiquidFX->SetAsset(LiquidFXTemplate);
     }
+
+    // 2) 写入静态 User 参数
+    if (LiquidMeshAsset)
+    {
+        // StaticMesh 需用 UNiagaraFunctionLibrary 提供的专用静态方法
+        UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMesh(LiquidFX, TEXT("User.Mesh"), LiquidMeshAsset);
+    }
+    if (LiquidMaterialAsset)
+    {
+        // Material 作为 UObject 传入
+        LiquidFX->SetNiagaraVariableObject(TEXT("User.Material"), LiquidMaterialAsset);
+    }
+    LiquidFX->SetNiagaraVariableVec3(TEXT("User.BottleSize"), BottleSize);
+
+    // 3) 重启以让 User 参数生效
+    LiquidFX->ReinitializeSystem();
 }
