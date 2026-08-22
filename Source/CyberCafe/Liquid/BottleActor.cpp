@@ -23,11 +23,13 @@ ABottleActor::ABottleActor()
     PrimaryActorTick.bCanEverTick = true;
 
     // 默认值
-    PourAngleThreshold  = 60.f;
-    PourRatePerSecond   = 60.f;    // 每秒 60mL
-    FlowStrength        = 1.f;
-    PourTraceDistance   = 60.f;    // 60cm，足够从桌面高度倒到杯子
-    bDebugDrawTrace     = false;   // 默认关闭射线调试绘制
+    PourAngleThreshold      = 60.f;
+    PourRatePerSecond       = 60.f;    // 每秒 60mL
+    FlowStrength            = 1.f;
+    PourTraceDistance       = 60.f;    // 60cm，足够从桌面高度倒到杯子
+    PourTraceRadius         = 6.f;     // 6cm "胖射线"，兑住水流弧度的落点偏差
+    PourTraceForwardOffset  = 0.f;     // 默认不前推；水流水平位移大时才需要
+    bDebugDrawTrace         = false;   // 默认关闭射线调试绘制
     SplashEffectTemplate= nullptr;
     PourHaptic          = nullptr;
     bEnableDecal        = true;
@@ -211,23 +213,35 @@ void ABottleActor::UpdatePouring(float DeltaTime)
         return;
     }
 
-    // 从瓶口沿世界 -Z 做 LineTrace，判断下方是否有酒杯
-    const FVector TraceStart = PourLocationWS;
-    const FVector TraceEnd   = PourLocationWS + FVector(0.f, 0.f, -PourTraceDistance);
+    // 从瓶口沜世界 -Z 方向做 SphereTrace（胖射线），兑住水流弧度的落点偏差。
+    // 为了进一步补偿水流初速度的水平位移，将起点沿 PourFX 局部 +X 方向前推一个可配置量。
+    const FVector ForwardWS  = PourXform.GetUnitAxis(EAxis::X);
+    const FVector TraceStart = PourLocationWS + ForwardWS * PourTraceForwardOffset;
+    const FVector TraceEnd   = TraceStart + FVector(0.f, 0.f, -PourTraceDistance);
 
     FHitResult Hit;
     FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(BottlePourTrace), /*bTraceComplex=*/false, this);
     QueryParams.AddIgnoredActor(this);
 
-    const bool bHit = GetWorld()->LineTraceSingleByChannel(
-        Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
+    const bool bHit = GetWorld()->SweepSingleByChannel(
+        Hit,
+        TraceStart,
+        TraceEnd,
+        FQuat::Identity,
+        ECC_Visibility,
+        FCollisionShape::MakeSphere(PourTraceRadius),
+        QueryParams);
 
 #if ENABLE_DRAW_DEBUG
     // 编辑器下方便调试，需在 BP 里把 bDebugDrawTrace 打开才会显示
     if (bDebugDrawTrace)
     {
-        DrawDebugLine(GetWorld(), TraceStart, bHit ? Hit.ImpactPoint : TraceEnd,
-                      bHit ? FColor::Green : FColor::Red, false, 0.f, 0, 0.2f);
+        const FColor LineColor    = bHit ? FColor::Green : FColor::Red;
+        const FVector EndPointVis = bHit ? Hit.ImpactPoint : TraceEnd;
+        DrawDebugLine(GetWorld(), TraceStart, EndPointVis, LineColor, false, 0.f, 0, 0.2f);
+        // 可视化横截面：在起点和终点各画一个线框球，直观看到 SphereTrace 的实际范围
+        DrawDebugSphere(GetWorld(), TraceStart, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
+        DrawDebugSphere(GetWorld(), EndPointVis, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
     }
 #endif
 

@@ -64,6 +64,22 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour", meta = (ClampMin = "1.0"))
     float PourTraceDistance;
 
+    /**
+     * 检测用球体半径(cm)。
+     * 由于 P_Ribbon 水流有弧度而 Trace 是直线，用一个"胖射线"(SphereTrace)去兜住水流落点范围。
+     * 默认 6cm，视杯口大小/水流弯曲程度可调；调大会更宽容，调小会更精确。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour", meta = (ClampMin = "0.1"))
+    float PourTraceRadius;
+
+    /**
+     * Trace 起点沿"瓶口局部 +X"方向的前推距离(cm)，用于补偿水流的初速度水平位移。
+     * 若发现水流是往前抛出去的、检测点却停留在瓶口正下方 → 调大此值让 Trace 也往前挪。
+     * 默认 0，通常配合 PourTraceRadius 已足够；只有在水流特别倾斜时才需要。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour")
+    float PourTraceForwardOffset;
+
     /** 是否在编辑器中绘制倒酒射线（调试用；打包版本自动关闭） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour|Debug")
     bool bDebugDrawTrace;
