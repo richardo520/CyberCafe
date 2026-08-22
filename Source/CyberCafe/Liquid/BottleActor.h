@@ -17,8 +17,9 @@ class ACupActor;
  * 沿瓶口 -Z 方向 LineTrace，命中 ACupActor 则给杯子加液、给瓶子扣液，并在命中点生成 P_Splash 水花。
  *
  * 说明：
- *   - P_Ribbon 作为预挂载的 UNiagaraComponent，通过 Activate/Deactivate 控制显隐
- *     （与 LiquidMaterials_VFXPack 官方示例 BP_Pouring 一致）。
+ *   - P_Ribbon 作为预挂载的 UNiagaraComponent，Niagara 资产(P_Ribbon)与位置/旋转
+ *     均由美术在蓝图里直接在 PourFX 组件的 Details 面板配置，C++ 不再插手。
+ *     LineTrace 起点使用 PourFX 的世界 Transform，保证与水流一致。
  *   - P_Ribbon 的 User.Data 传 self（Actor 本身），供 Ribbon 内部反查瓶子状态。
  *   - 松手后瓶子如果仍在物理模拟下继续倾斜，倒酒逻辑照样触发。
  *   - P_Ribbon User 参数：
@@ -45,17 +46,6 @@ public:
     //=====================================================================
 
     /**
-     * 瓶口相对 ContainerMesh 的偏移(局部坐标，cm)。
-     * 如果指定了 PourSocketName，则优先使用 Socket。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour")
-    FVector PourOffset;
-
-    /** 瓶口 Socket 名(可选，指定后优先于 PourOffset) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour")
-    FName PourSocketName;
-
-    /**
      * 触发倒酒的倾斜角度阈值(度)。
      * 瓶身局部 +Z 与世界 +Z 的夹角超过此值即出液。默认 60°。
      */
@@ -74,13 +64,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour", meta = (ClampMin = "1.0"))
     float PourTraceDistance;
 
+    /** 是否在编辑器中绘制倒酒射线（调试用；打包版本自动关闭） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|Pour|Debug")
+    bool bDebugDrawTrace;
+
     //=====================================================================
     // Niagara 资产（LiquidMaterials_VFXPack）
     //=====================================================================
-
-    /** 出液流 Niagara System 模板（P_Ribbon）——子类蓝图指定 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|FX")
-    TObjectPtr<UNiagaraSystem> PourEffectTemplate;
 
     /** 水花粒子 Niagara System 模板（P_Splash）——命中杯子时将在命中点弹出 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bottle|FX")
@@ -111,16 +101,15 @@ public:
     bool bIsPouring;
 
     /**
-     * 出液粒子组件（P_Ribbon，预挂在瓶子上）。
-     * 由 C++ 完全接管：Asset 由 PourEffectTemplate 指定并在 BeginPlay 中 SetAsset；
-     * Transform 每 Tick 强制吸附到瓶口；User.* 参数由 C++ 写入。
-     * 不暴露到 Details（暴露也会被 C++ 覆盖，容易误导使用者）。
+     * 出液粒子组件（预挂在瓶子上）。
+     * Niagara Asset（P_Ribbon）与 Transform 均由美术在蓝图里直接在组件 Details 面板配置；
+     * C++ 只在 BeginPlay 预写 User.* 参数，Tick 中控制 Activate/Deactivate。
      */
-    UPROPERTY(BlueprintReadOnly, Transient, Category = "Bottle|Runtime")
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bottle|Runtime", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UNiagaraComponent> PourFX;
 
 protected:
-    /** 计算瓶口的世界变换(优先用 Socket，否则用 PourOffset) */
+    /** 获取瓶口的世界变换 — 直接使用 PourFX 的当前 Transform（由美术在蓝图里配置） */
     FTransform GetPourWorldTransform() const;
 
     /** 计算当前瓶身与世界+Z的夹角(度)：0=直立，180=完全倒置 */

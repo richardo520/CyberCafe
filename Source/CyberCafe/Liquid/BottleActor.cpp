@@ -23,13 +23,11 @@ ABottleActor::ABottleActor()
     PrimaryActorTick.bCanEverTick = true;
 
     // 默认值
-    PourOffset          = FVector(0.f, 0.f, 15.f); // 假设瓶口在瓶身局部 +Z 15cm 处
-    PourSocketName      = NAME_None;
     PourAngleThreshold  = 60.f;
     PourRatePerSecond   = 60.f;    // 每秒 60mL
     FlowStrength        = 1.f;
     PourTraceDistance   = 60.f;    // 60cm，足够从桌面高度倒到杯子
-    PourEffectTemplate  = nullptr;
+    bDebugDrawTrace     = false;   // 默认关闭射线调试绘制
     SplashEffectTemplate= nullptr;
     PourHaptic          = nullptr;
     bEnableDecal        = true;
@@ -56,22 +54,17 @@ void ABottleActor::BeginPlay()
 {
     Super::BeginPlay();
 
-    // 为 P_Ribbon 预挂载模板 + 预写入静态参数
+    // 预写入 P_Ribbon 的 User.* 参数
+    // 注意：PourFX 的 Niagara Asset(P_Ribbon) 与 Transform 均由美术在蓝图组件 Details 里配置，
+    //       C++ 不再插手，只写运行时参数。
     if (PourFX)
     {
-        // 将瓶口位置作为 Ribbon 发送点
-        if (PourSocketName != NAME_None && ContainerMesh && ContainerMesh->DoesSocketExist(PourSocketName))
+        // 安全检查：提醒美术在蓝图 PourFX 组件的 Niagara Asset 一栏指定 P_Ribbon
+        if (!PourFX->GetAsset())
         {
-            PourFX->AttachToComponent(ContainerMesh, FAttachmentTransformRules::SnapToTargetIncludingScale, PourSocketName);
-        }
-        else
-        {
-            PourFX->SetRelativeLocation(PourOffset);
-        }
-
-        if (PourEffectTemplate && PourFX->GetAsset() != PourEffectTemplate)
-        {
-            PourFX->SetAsset(PourEffectTemplate);
+            UE_LOG(LogTemp, Warning,
+                TEXT("[%s] PourFX 未指定 Niagara Asset，请在蓝图选中 PourFX 组件，Details → Niagara → Asset 里指定 P_Ribbon。"),
+                *GetName());
         }
 
         // 预写入静态参数
@@ -81,7 +74,7 @@ void ABottleActor::BeginPlay()
         PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
         PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
 
-        // User.Data = self (Actor)，同官方 BP_Pouring 的做法（参图 1 中 Ribbon Init）
+        // User.Data = self (Actor)，同官方 BP_Pouring 的做法
         PourFX->SetNiagaraVariableObject(TEXT("User.Data"), this);
 
         // 默认关闭，要倒酒时才 Activate
@@ -121,22 +114,18 @@ void ABottleActor::Tick(float DeltaTime)
 
 FTransform ABottleActor::GetPourWorldTransform() const
 {
-    if (!ContainerMesh)
+    // 直接使用 PourFX 的世界 Transform——美术在蓝图里拖动的位置就是瓶口。
+    // 保证水流发射点与 LineTrace 起点一致，避免两者不同步。
+    if (PourFX)
     {
-        return GetActorTransform();
+        return PourFX->GetComponentTransform();
     }
-
-    if (PourSocketName != NAME_None && ContainerMesh->DoesSocketExist(PourSocketName))
+    // fallback：PourFX 意外不存在时退回 Root
+    if (ContainerMesh)
     {
-        return ContainerMesh->GetSocketTransform(PourSocketName, RTS_World);
+        return ContainerMesh->GetComponentTransform();
     }
-
-    // 用 PourOffset 从容器局部变换到世界
-    const FTransform CompXform = ContainerMesh->GetComponentTransform();
-    FTransform PourXform;
-    PourXform.SetLocation(CompXform.TransformPosition(PourOffset));
-    PourXform.SetRotation(CompXform.GetRotation());
-    return PourXform;
+    return GetActorTransform();
 }
 
 float ABottleActor::GetTiltAngleDegrees() const
@@ -234,9 +223,12 @@ void ABottleActor::UpdatePouring(float DeltaTime)
         Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
 
 #if ENABLE_DRAW_DEBUG
-    // 编辑器下方便调试，Shipping 会自动去除
-    DrawDebugLine(GetWorld(), TraceStart, bHit ? Hit.ImpactPoint : TraceEnd,
-                  bHit ? FColor::Green : FColor::Red, false, 0.f, 0, 0.2f);
+    // 编辑器下方便调试，需在 BP 里把 bDebugDrawTrace 打开才会显示
+    if (bDebugDrawTrace)
+    {
+        DrawDebugLine(GetWorld(), TraceStart, bHit ? Hit.ImpactPoint : TraceEnd,
+                      bHit ? FColor::Green : FColor::Red, false, 0.f, 0, 0.2f);
+    }
 #endif
 
     if (bHit)
