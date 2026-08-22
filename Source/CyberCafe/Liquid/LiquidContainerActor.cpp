@@ -5,7 +5,7 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
-#include "Materials/MaterialParameters.h"
+#include "MaterialTypes.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "NiagaraFunctionLibrary.h"
