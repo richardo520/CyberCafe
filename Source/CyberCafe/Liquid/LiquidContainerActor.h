@@ -89,6 +89,7 @@ public:
     ALiquidContainerActor();
 
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaTime) override;
 
     //=====================================================================
     // 组件
@@ -105,6 +106,15 @@ public:
     /** P_Liquid Niagara 组件：负责液体网格显示（替代原本自建的 LiquidMesh） */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
     TObjectPtr<UNiagaraComponent> LiquidFX;
+
+    /**
+     * 出液粒子组件（预挂在容器上）。
+     * Niagara Asset（P_Ribbon）与 Transform 均由美术在蓝图里直接在组件 Details 面板配置；
+     * C++ 只在 BeginPlay 预写 User.* 参数，Tick 中控制 Activate/Deactivate。
+     * 瓶子、杯子等所有可倒液容器共用此组件。
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components", meta = (AllowPrivateAccess = "true"))
+    TObjectPtr<UNiagaraComponent> PourFX;
 
     //=====================================================================
     // Niagara 模板 & 资产（LiquidMaterials_VFXPack）
@@ -133,6 +143,82 @@ public:
     /** 液体内芯 Mesh 的包围盒大小（写入 P_Liquid.User.BottleSize，由美术手填） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
     FVector BottleSize;
+
+    //=====================================================================
+    // 倒液（Pour）配置——瓶子/杯子共用
+    //=====================================================================
+
+    /** 是否允许当前容器"作为倒出方"倾斜出液。默认 true；如某些容器（如封口罐）不希望倒出，可关闭。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour")
+    bool bCanPour;
+
+    /**
+     * 是否允许其他容器倒液进入本容器（作为"接液方"）。
+     * 瓶子建议 false（水不会倒回瓶子），杯子建议 true。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour")
+    bool bAcceptLiquidFromOthers;
+
+    /**
+     * 触发倒液的倾斜角度阈值(度)。
+     * 容器局部 +Z 与世界 +Z 的夹角超过此值即出液。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+    float PourAngleThreshold;
+
+    /** 出液速率(mL/秒) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float PourRatePerSecond;
+
+    /** 传入 P_Ribbon.User.FlowStrength 的水流强度 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float FlowStrength;
+
+    /** 从瓶口/杯口沿世界 -Z 方向的最大检测距离(cm) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "1.0"))
+    float PourTraceDistance;
+
+    /**
+     * 检测用球体半径(cm)。
+     * 由于 P_Ribbon 水流有弧度而 Trace 是直线，用一个"胖射线"(SphereTrace)去兜住水流落点范围。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.1"))
+    float PourTraceRadius;
+
+    /**
+     * Trace 起点沿 PourFX 局部 +X 方向的前推距离(cm)，用于补偿水流的初速度水平位移。
+     * 若发现水流是往前抛出去的、检测点却停留在正下方 → 调大此值让 Trace 也往前挪。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour")
+    float PourTraceForwardOffset;
+
+    /** 是否在编辑器中绘制倒液射线（调试用；打包版本自动关闭） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|Debug")
+    bool bDebugDrawTrace;
+
+    //=====================================================================
+    // 倒液（Pour）—— Niagara 资产 & FX 开关
+    //=====================================================================
+
+    /** 水花粒子 Niagara System 模板（P_Splash）——命中接液容器时将在命中点弹出 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
+    TObjectPtr<UNiagaraSystem> SplashEffectTemplate;
+
+    /** 是否启用命中容器时的水花效果（P_Splash）。默认 true。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
+    bool bEnableSplash;
+
+    /** 是否启用 P_Ribbon 内部的地面湿迹 Decal */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
+    bool bEnableDecal;
+
+    /** 是否禁用 P_Ribbon 内部的小水花 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
+    bool bNoSplashes;
+
+    /** 传入 P_Ribbon.User.NoList（默认 true，禁用它内部的 Bottle List） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
+    bool bNoList;
 
     //=====================================================================
     // 液体属性(编辑器可调 / 蓝图可读写)
@@ -205,6 +291,14 @@ public:
     /** 波动衰减速度（值越大静下越快，1/s） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Waves", meta = (ClampMin = "0.1", EditCondition = "bDynamicWaves"))
     float WavesDecaySpeed;
+
+    //=====================================================================
+    // 运行时
+    //=====================================================================
+
+    /** 当前是否处于倒液状态 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Liquid|Runtime")
+    bool bIsPouring;
 
     //=====================================================================
     // 事件
@@ -282,6 +376,26 @@ public:
 protected:
     /** 初始化 LiquidFX：设置 P_Liquid 的 User.Mesh / User.Material / User.BottleSize，并首次同步一次表现参数 */
     void InitLiquidFX();
+
+    /** 初始化 PourFX：写入 P_Ribbon 的 User.* 参数并默认关闭 */
+    void InitPourFX();
+
+    /** 获取出液口的世界变换 — 直接使用 PourFX 的当前 Transform（由美术在蓝图里配置） */
+    UFUNCTION(BlueprintPure, Category = "Liquid|Pour")
+    FTransform GetPourWorldTransform() const;
+
+    /** 计算当前容器与世界+Z的夹角(度)：0=直立，180=完全倒置 */
+    UFUNCTION(BlueprintPure, Category = "Liquid|Pour")
+    float GetTiltAngleDegrees() const;
+
+    /** 启动倒液 VFX / 状态 */
+    virtual void StartPouring();
+
+    /** 停止倒液 VFX / 状态 */
+    virtual void StopPouring();
+
+    /** 每 Tick 执行的倒液实际逻辑(FX 位置更新 + SphereTrace 判定 + 加/扣液) */
+    virtual void UpdatePouring(float DeltaTime);
 
     /** 当前平滑后的动态波动强度（每 Tick 更新，写入 P_Liquid.User.AddWaves） */
     UPROPERTY(Transient)

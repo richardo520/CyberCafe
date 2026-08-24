@@ -10,10 +10,14 @@
 #include "NiagaraSystem.h"
 #include "NiagaraFunctionLibrary.h"
 #include "GrabComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/World.h"
+#include "CollisionQueryParams.h"
 
 ALiquidContainerActor::ALiquidContainerActor()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    // 打开 Tick：基类统一驱动"动态波动 + 倒液"两条主流程，子类无需重复
+    PrimaryActorTick.bCanEverTick = true;
 
     // 容器外壳作为 Root（模拟物理 + 抓取目标）
     ContainerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ContainerMesh"));
@@ -33,6 +37,12 @@ ALiquidContainerActor::ALiquidContainerActor()
     LiquidFX->SetAutoActivate(true);
     LiquidFX->bAutoActivate = true;
 
+    // 预挂载的 P_Ribbon Niagara 组件（默认不自动激活；由 StartPouring 触发）
+    PourFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("PourFX"));
+    PourFX->SetupAttachment(ContainerMesh);
+    PourFX->SetAutoActivate(false);
+    PourFX->bAutoActivate = false;
+
     // 液体状态默认值
     FillAmount    = 0.5f;
     MaxVolumeML   = 750.f;   // 一瓶红酒 = 750mL
@@ -44,7 +54,7 @@ ALiquidContainerActor::ALiquidContainerActor()
     WavesScale    = 1.0f;
     Viscosity     = 1.0f;
 
-    // 动态波动默认值（静止时完全平静，抓握晚动时漸起波动）
+    // 动态波动默认值（静止时完全平静，抓握晃动时渐起波动）
     bDynamicWaves          = true;
     IdleAddWaves           = 0.0f;
     MaxAddWaves            = 1.0f;
@@ -63,6 +73,25 @@ ALiquidContainerActor::ALiquidContainerActor()
     LiquidMeshAsset     = nullptr;
     LiquidMaterialAsset = nullptr;
     LiquidColorParamName = FName(TEXT("Liquid_Color01"));
+
+    // 倒液（Pour）默认值——瓶子/杯子子类构造里可各自覆盖
+    bCanPour                = true;
+    bAcceptLiquidFromOthers = false;   // 基类默认不接液，杯子子类构造里改为 true
+    PourAngleThreshold      = 60.f;
+    PourRatePerSecond       = 60.f;    // 每秒 60mL
+    FlowStrength            = 1.f;
+    PourTraceDistance       = 60.f;    // 60cm，足够从桌面高度倒到杯子
+    PourTraceRadius         = 6.f;     // 6cm "胖射线"，兜住水流弧度的落点偏差
+    PourTraceForwardOffset  = 0.f;
+    bDebugDrawTrace         = false;
+
+    SplashEffectTemplate    = nullptr;
+    bEnableSplash           = true;
+    bEnableDecal            = true;
+    bNoSplashes             = false;
+    bNoList                 = true;
+
+    bIsPouring              = false;
 }
 
 void ALiquidContainerActor::BeginPlay()
@@ -76,11 +105,48 @@ void ALiquidContainerActor::BeginPlay()
     InitLiquidFX();
     RefreshLiquidFX();
 
+    InitPourFX();
+
     // 初始化上一帧参考位置/旋转
     if (ContainerMesh)
     {
         PrevLocation = ContainerMesh->GetComponentLocation();
         PrevRotation = ContainerMesh->GetComponentQuat();
+    }
+}
+
+void ALiquidContainerActor::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    // 1) 根据容器运动状态实时调节液面波动
+    UpdateDynamicWaves(DeltaTime);
+
+    // 2) 倒液流程：允许倒液 + 有液体 + 超阈值 → StartPouring；否则 StopPouring
+    if (bCanPour)
+    {
+        const bool bShouldPour =
+            (FillAmount > KINDA_SMALL_NUMBER) &&
+            (GetTiltAngleDegrees() >= PourAngleThreshold);
+
+        if (bShouldPour && !bIsPouring)
+        {
+            StartPouring();
+        }
+        else if (!bShouldPour && bIsPouring)
+        {
+            StopPouring();
+        }
+
+        if (bIsPouring)
+        {
+            UpdatePouring(DeltaTime);
+        }
+    }
+    else if (bIsPouring)
+    {
+        // 运行时被关掉 bCanPour 时兜底
+        StopPouring();
     }
 }
 
@@ -215,7 +281,7 @@ void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
         }
     }
 
-    // 2) 将速度归一化到 0~1，取两者最大作为“运动强度”
+    // 2) 将速度归一化到 0~1，取两者最大作为"运动强度"
     const float LinearNorm  = FMath::Clamp(LinearSpeed  / FMath::Max(LinearVelocityRefCms,  1.f), 0.f, 1.f);
     const float AngularNorm = FMath::Clamp(AngularSpeed / FMath::Max(AngularVelocityRefDegs, 1.f), 0.f, 1.f);
     const float MotionNorm  = FMath::Max(LinearNorm, AngularNorm);
@@ -223,7 +289,7 @@ void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
     // 3) 目标波动强度：在 [IdleAddWaves, MaxAddWaves] 之间插值
     const float TargetWaves = FMath::Lerp(IdleAddWaves, MaxAddWaves, MotionNorm);
 
-    // 4) 平滑：上升时快、下降时慢，避免抳动
+    // 4) 平滑：上升时快、下降时慢，避免抖动
     const bool bRising = TargetWaves > CurrentDynamicWaves;
     const float Speed  = bRising ? WavesRiseSpeed : WavesDecaySpeed;
     const float Alpha  = FMath::Clamp(Speed * DeltaTime, 0.f, 1.f);
@@ -265,6 +331,205 @@ void ALiquidContainerActor::InitLiquidFX()
 
     // 3) 重启以让 User 参数生效
     LiquidFX->ReinitializeSystem();
+}
+
+//=====================================================================
+// 内部：初始化 PourFX（P_Ribbon User 参数）
+//=====================================================================
+
+void ALiquidContainerActor::InitPourFX()
+{
+    if (!PourFX)
+    {
+        return;
+    }
+
+    // 安全检查：提醒美术在蓝图 PourFX 组件的 Niagara Asset 一栏指定 P_Ribbon
+    if (!PourFX->GetAsset())
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("[%s] PourFX 未指定 Niagara Asset，请在蓝图选中 PourFX 组件，Details → Niagara → Asset 里指定 P_Ribbon。"),
+            *GetName());
+    }
+
+    // 预写入静态参数
+    PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
+    PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
+    PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
+    PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
+    PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
+
+    // User.Data = self (Actor)，同官方 BP_Pouring 的做法
+    PourFX->SetNiagaraVariableObject(TEXT("User.Data"), this);
+
+    // 默认关闭，要倒液时才 Activate
+    PourFX->Deactivate();
+}
+
+//=====================================================================
+// 出液口变换 / 倾角
+//=====================================================================
+
+FTransform ALiquidContainerActor::GetPourWorldTransform() const
+{
+    // 直接使用 PourFX 的世界 Transform——美术在蓝图里拖动的位置就是出液口。
+    // 保证水流发射点与 SphereTrace 起点一致，避免两者不同步。
+    if (PourFX)
+    {
+        return PourFX->GetComponentTransform();
+    }
+    // fallback：PourFX 意外不存在时退回 Root
+    if (ContainerMesh)
+    {
+        return ContainerMesh->GetComponentTransform();
+    }
+    return GetActorTransform();
+}
+
+float ALiquidContainerActor::GetTiltAngleDegrees() const
+{
+    if (!ContainerMesh)
+    {
+        return 0.f;
+    }
+    // 容器局部 +Z 在世界空间的方向
+    const FVector UpWS = ContainerMesh->GetUpVector();
+    const float Dot = FVector::DotProduct(UpWS.GetSafeNormal(), FVector::UpVector);
+    const float AngleRad = FMath::Acos(FMath::Clamp(Dot, -1.f, 1.f));
+    return FMath::RadiansToDegrees(AngleRad);
+}
+
+//=====================================================================
+// 倒液开始 / 结束
+//=====================================================================
+
+void ALiquidContainerActor::StartPouring()
+{
+    bIsPouring = true;
+
+    if (PourFX)
+    {
+        // 重新同步一次颜色/强度/开关，防止编辑器运行时改变后未生效
+        PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
+        PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
+        PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
+        PourFX->SetNiagaraVariableObject     (TEXT("User.Data"),         this);
+
+        PourFX->Activate(/*bReset=*/true);
+    }
+}
+
+void ALiquidContainerActor::StopPouring()
+{
+    bIsPouring = false;
+
+    if (PourFX)
+    {
+        // 不销毁，只关闭；下次 Activate 可直接重启
+        PourFX->Deactivate();
+    }
+}
+
+//=====================================================================
+// 倒液 Tick 逻辑
+//=====================================================================
+
+void ALiquidContainerActor::UpdatePouring(float DeltaTime)
+{
+    if (!ContainerMesh)
+    {
+        return;
+    }
+
+    const FTransform PourXform = GetPourWorldTransform();
+    const FVector PourLocationWS = PourXform.GetLocation();
+
+    // 更新 Niagara 的实时颜色(液体颜色会因混色变化)
+    if (PourFX)
+    {
+        PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
+    }
+
+    // 本帧应流出的液体量
+    const float DesiredML = PourRatePerSecond * DeltaTime;
+    const float ActualML  = ConsumeLiquid(DesiredML);
+    if (ActualML <= KINDA_SMALL_NUMBER)
+    {
+        return;
+    }
+
+    // 从出液口沿世界 -Z 方向做 SphereTrace（胖射线），兜住水流弧度的落点偏差。
+    // 为进一步补偿水流初速度的水平位移，将起点沿 PourFX 局部 +X 方向前推一个可配置量。
+    const FVector ForwardWS  = PourXform.GetUnitAxis(EAxis::X);
+    const FVector TraceStart = PourLocationWS + ForwardWS * PourTraceForwardOffset;
+    const FVector TraceEnd   = TraceStart + FVector(0.f, 0.f, -PourTraceDistance);
+
+    FHitResult Hit;
+    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(LiquidPourTrace), /*bTraceComplex=*/false, this);
+    QueryParams.AddIgnoredActor(this);
+
+    const bool bHit = GetWorld()->SweepSingleByChannel(
+        Hit,
+        TraceStart,
+        TraceEnd,
+        FQuat::Identity,
+        ECC_Visibility,
+        FCollisionShape::MakeSphere(PourTraceRadius),
+        QueryParams);
+
+#if ENABLE_DRAW_DEBUG
+    // 编辑器下方便调试，需在 BP 里把 bDebugDrawTrace 打开才会显示
+    if (bDebugDrawTrace)
+    {
+        const FColor LineColor    = bHit ? FColor::Green : FColor::Red;
+        const FVector EndPointVis = bHit ? Hit.ImpactPoint : TraceEnd;
+        DrawDebugLine(GetWorld(), TraceStart, EndPointVis, LineColor, false, 0.f, 0, 0.2f);
+        DrawDebugSphere(GetWorld(), TraceStart, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
+        DrawDebugSphere(GetWorld(), EndPointVis, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
+    }
+#endif
+
+    if (bHit)
+    {
+        // 命中任意可接液的 ALiquidContainerActor（不再特判 CupActor 类型）
+        if (ALiquidContainerActor* TargetContainer = Cast<ALiquidContainerActor>(Hit.GetActor()))
+        {
+            if (TargetContainer != this && TargetContainer->bAcceptLiquidFromOthers)
+            {
+                // 1) 把源容器的液体材质"简单粗暴"地赋给目标容器（含 MI 的颜色一起传递）
+                //    只在材质不同的时候才换，避免每帧 ReinitializeSystem。
+                if (LiquidMaterialAsset && TargetContainer->LiquidMaterialAsset != LiquidMaterialAsset)
+                {
+                    TargetContainer->SetLiquidMaterialAsset(LiquidMaterialAsset, /*bReadColor=*/true);
+                }
+
+                // 2) 加液到目标容器（走基类混色逻辑）
+                TargetContainer->AddLiquid(ActualML, LiquidColor);
+
+                // 3) 在命中点弹出一次水花（P_Splash），同步颜色
+                if (bEnableSplash && SplashEffectTemplate)
+                {
+                    UNiagaraComponent* SplashComp = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                        GetWorld(),
+                        SplashEffectTemplate,
+                        Hit.ImpactPoint,
+                        Hit.ImpactNormal.Rotation(),
+                        FVector(1.f),
+                        /*bAutoDestroy=*/true);
+                    if (SplashComp)
+                    {
+                        // 若 P_Splash 支持 User.Color 则会生效；不支持时 Niagara 会静默忽略。
+                        SplashComp->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
+                    }
+                }
+            }
+            // 命中的容器不接液 → 只当作洒到物体上，扣液已在上面完成
+        }
+        // 命中非容器（桌面/地面等）→ 液体"洒到地上"，P_Ribbon 内部会自己处理地面 Decal（若 bEnableDecal=true）
+    }
+    // 未命中 → 液体飞入虚空，扣掉即可
 }
 
 //=====================================================================
