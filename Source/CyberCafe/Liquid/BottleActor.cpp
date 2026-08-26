@@ -101,3 +101,13 @@ void ABottleActor::StartPouring()
         }
     }
 }
+
+void ABottleActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const
+{
+    // 拧下的瓶盖可能挂在手上并悬在瓶口下方——需要在倒液 Trace 里忽略它，
+    // 否则盖子会挡住 SphereTrace，液体倒不进下方的杯子。
+    if (CapActor)
+    {
+        OutActors.Add(CapActor);
+    }
+}

@@ -36,6 +36,7 @@ ABottleCapActor::ABottleCapActor()
     // 默认参数
     DetachTwistAngle     = 45.f;   // 拧 45° 拔出
     ReattachSnapDistance = 8.f;    // 8cm 内自动吸回
+    HandGripOffset       = FTransform::Identity;  // 盖子的 pivot 与手柄原点重合
     DetachHaptic         = nullptr;
     DetachSound          = nullptr;
     ReattachSound        = nullptr;
@@ -172,10 +173,15 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
         return;
     }
 
-    // 1) 从瓶子上脱离并 Attach 到手柄（保持世界 Transform，避免瞬移）
-    FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
+    // 1) 从瓶子上脱离并 Attach 到手柄。
+    //    使用 SnapToTargetNotIncludingScale：盖子的 Root 相对手柄的 transform 被强制置零，
+    //    然后我们再应用 HandGripOffset 让盖子稳定停留在手掌里的期望位置。
+    //    这样即使盖子 Mesh 资产 pivot 有偏移，玩家也能看到盖子在手里。
+    FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
     AttachRule.bWeldSimulatedBodies = true;
     AttachToComponent(MotionController, AttachRule);
+    // 应用手柄 Offset
+    SetActorRelativeTransform(HandGripOffset);
 
     if (CapMesh)
     {
@@ -201,9 +207,13 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
     }
 
     // 3) 通知瓶子解锁倒液
+    UE_LOG(LogTemp, Log, TEXT("[BottleCap] DetachFromBottle done. OwnerBottle=%s, calling OnCapDetached..."),
+           OwnerBottle ? *OwnerBottle->GetName() : TEXT("NULL"));
     if (OwnerBottle)
     {
         OwnerBottle->OnCapDetached();
+        UE_LOG(LogTemp, Log, TEXT("[BottleCap] After OnCapDetached: bCanPour=%d, bIsCapped=%d"),
+               OwnerBottle->bCanPour ? 1 : 0, OwnerBottle->bIsCapped ? 1 : 0);
     }
 }
 

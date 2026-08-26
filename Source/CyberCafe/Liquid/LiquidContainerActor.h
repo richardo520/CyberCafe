@@ -397,6 +397,13 @@ protected:
     /** 每 Tick 执行的倒液实际逻辑(FX 位置更新 + SphereTrace 判定 + 加/扣液) */
     virtual void UpdatePouring(float DeltaTime);
 
+    /**
+     * 收集本次倒液 Trace 需要忽略的 Actor。
+     * 默认实现：忽略自己 + 当前抓着自己的手所属 Pawn（避免误命中玩家手骨骼）。
+     * 子类可 override 追加更多忽略项（例如 ABottleActor 需要额外忽略拧下的瓶盖）。
+     */
+    virtual void GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const;
+
     /** 当前平滑后的动态波动强度（每 Tick 更新，写入 P_Liquid.User.AddWaves） */
     UPROPERTY(Transient)
     float CurrentDynamicWaves;

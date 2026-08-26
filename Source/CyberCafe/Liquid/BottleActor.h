@@ -86,4 +86,7 @@ public:
 protected:
     /** 覆写：在基类流程之上，追加触觉反馈的播放 */
     virtual void StartPouring() override;
+
+    /** 覆写：让倒液 Trace 忽略拧下的瓶盖，避免盖子挡在瓶口下方阻塞液体命中目标容器 */
+    virtual void GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const override;
 };

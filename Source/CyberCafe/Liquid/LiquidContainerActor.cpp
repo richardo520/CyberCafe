@@ -470,6 +470,18 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
     FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(LiquidPourTrace), /*bTraceComplex=*/false, this);
     QueryParams.AddIgnoredActor(this);
 
+    // 让子类补充需要忽略的 Actor（例如 ABottleActor 会追加拧下的瓶盖），
+    // 避免瓶盖挡在瓶口下方阻塞 Trace 导致液体倒不进目标容器。
+    TArray<AActor*> ExtraIgnores;
+    GetPourTraceIgnoreActors(ExtraIgnores);
+    for (AActor* A : ExtraIgnores)
+    {
+        if (A)
+        {
+            QueryParams.AddIgnoredActor(A);
+        }
+    }
+
     const bool bHit = GetWorld()->SweepSingleByChannel(
         Hit,
         TraceStart,
@@ -561,6 +573,12 @@ void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMateri
 
     // 混色权威变了，广播一次事件，便于蓝图侧联动
     OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
+}
+
+void ALiquidContainerActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const
+{
+    // 默认实现：什么都不加。子类可 override 追加需要忽略的 Actor。
+    // （示例：ABottleActor 会追加它的瓶盖 Actor，避免拧下的盖子挡住倒液射线。）
 }
 
 bool ALiquidContainerActor::TryReadColorFromMaterial()

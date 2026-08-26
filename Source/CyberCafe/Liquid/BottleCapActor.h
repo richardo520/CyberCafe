@@ -68,6 +68,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Reattach", meta = (ClampMin = "0.0"))
     float ReattachSnapDistance;
 
+    /**
+     * 拧下瓶盖后，盖子相对于持盖手柄的 Transform（Snap 到手柄时用）。
+     * 由于盖子 Mesh 资产的 pivot 未必在几何中心，仅用 KeepWorldTransform 可能导致
+     * "盖子在瓶口 Socket 位置被 Attach 到手，但玩家手里看不到盖子"。
+     * 通过设置这个 offset 强制盖子 Snap 到手柄一个稳定的相对位置，
+     * 避免因资产 pivot 偏移导致的显示错乱。
+     * 默认 (0,0,0) —— 盖子的 pivot 会与手柄原点重合；美术可按盖子 Mesh 微调。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Detach")
+    FTransform HandGripOffset;
+
     /** 拧下瓶盖时给持盖手的触觉反馈(可选) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Feedback")
     TObjectPtr<UHapticFeedbackEffect_Base> DetachHaptic;
