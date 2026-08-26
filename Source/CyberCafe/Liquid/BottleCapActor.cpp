@@ -310,22 +310,39 @@ float ABottleCapActor::GetHandTwistAngleDegrees(UMotionControllerComponent* MC) 
     UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
     const FTransform SocketXform = BottleMesh->GetSocketTransform(CapSocketName, RTS_World);
 
-    // 手柄前向投影到瓶口局部 XY 平面（垂直于瓶口 +Z）
-    const FVector SocketUp   = SocketXform.GetUnitAxis(EAxis::Z);
-    const FVector SocketX    = SocketXform.GetUnitAxis(EAxis::X);
-    const FVector SocketY    = SocketXform.GetUnitAxis(EAxis::Y);
-    const FVector HandFwdWS  = MC->GetForwardVector();
+    // 计算"手柄相对于瓶口 Socket 的局部旋转"
+    //   拧瓶盖的物理动作是：手绕手柄自身 +X 轴（手指向方向）自转（Roll）；
+    //   而这个 Roll 在瓶口 Socket 局部空间里，正好等价于"绕 Socket +Z 轴的旋转"（前提：
+    //   玩家握瓶盖时手前向大致对齐瓶口轴向——这也是最自然的拧盖姿势）。
+    //
+    // 所以：把手柄的世界 Quat 转到 Socket 局部空间，然后提取绕 Socket +Z（局部 Z 轴）的
+    // 旋转分量，就得到真正的"扭转角度"。
+    const FQuat HandWS   = MC->GetComponentQuat();
+    const FQuat SocketWS = SocketXform.GetRotation();
+    const FQuat HandLocal = SocketWS.Inverse() * HandWS;
 
-    // 把手柄前向投影到瓶口 XY 平面上
-    const FVector HandFwdOnPlane = FVector::VectorPlaneProject(HandFwdWS, SocketUp).GetSafeNormal();
-    if (HandFwdOnPlane.IsNearlyZero())
+    // 提取"绕局部 Z 轴的 Swing/Twist 分解 Twist 分量"
+    // 参考 Unreal 的 FQuat::ToSwingTwist：先把四元数的向量分量投影到 Twist 轴上，
+    // 保留 W 与投影分量，再归一化即可得到"绕该轴的纯旋转四元数"。
+    const FVector TwistAxis(0.f, 0.f, 1.f); // Socket 的局部 +Z
+    FVector       QVec = FVector(HandLocal.X, HandLocal.Y, HandLocal.Z);
+    const float   Proj = FVector::DotProduct(QVec, TwistAxis);
+    FQuat         TwistQuat(TwistAxis.X * Proj, TwistAxis.Y * Proj, TwistAxis.Z * Proj, HandLocal.W);
+    // 若接近零四元数（罕见）则直接返回 0
+    if (TwistQuat.SizeSquared() < KINDA_SMALL_NUMBER)
     {
         return 0.f;
     }
+    TwistQuat.Normalize();
 
-    // 计算投影向量在 Socket 局部坐标系下的 Yaw
-    const float LocalX = FVector::DotProduct(HandFwdOnPlane, SocketX);
-    const float LocalY = FVector::DotProduct(HandFwdOnPlane, SocketY);
-    const float AngleDeg = FMath::RadiansToDegrees(FMath::Atan2(LocalY, LocalX));
-    return AngleDeg;
+    // Quat → 角度（度）。SafeAcos 保证数值稳定。
+    // 注意：ToAxisAndAngle 得到的角度总是正的，方向信息藏在 Axis 里。
+    FVector Axis;
+    float   AngleRad = 0.f;
+    TwistQuat.ToAxisAndAngle(Axis, AngleRad);
+    AngleRad = FMath::UnwindRadians(AngleRad);
+
+    // 用 Axis 与 TwistAxis 的方向一致性给角度带上符号
+    const float Sign = (FVector::DotProduct(Axis, TwistAxis) >= 0.f) ? 1.f : -1.f;
+    return FMath::RadiansToDegrees(AngleRad) * Sign;
 }
