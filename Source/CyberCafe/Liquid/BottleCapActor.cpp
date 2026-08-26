@@ -19,10 +19,12 @@ ABottleCapActor::ABottleCapActor()
     SetRootComponent(CapMesh);
     // 初始不模拟物理——盖在瓶口时跟随瓶子 Transform
     CapMesh->SetSimulatePhysics(false);
-    // 初始使用 NoCollision：盖在瓶口上时不与瓶身发生刚体碰撞，
-    // 避免两个 PhysicsActor 刚体紧贴互撞把瓶子弹飞；
+    // 盖在瓶口时的碰撞策略：
+    //   - QueryOnly：不参与物理刚体计算（不会把瓶子弹飞）
+    //   - AllChannels 设为 Overlap：VRPawn 的 SphereTrace 才能命中盖子从而找到它的 GrabComp
     // 拧下瓶盖后（DetachFromBottle）再切回 PhysicsActor 参与正常物理交互。
-    CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
+    CapMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    CapMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
 
     // 抓取组件：Custom 模式，不由 GrabComponent 自动 Attach 到手上，扭转达到阈值后由本类主动 Attach
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
@@ -50,12 +52,14 @@ void ABottleCapActor::BeginPlay()
     Super::BeginPlay();
 
     // 注意：UGrabComponent::BeginPlay 会把父组件的碰撞档案强制改成 PhysicsActor，
-    // 我们希望盖子盖在瓶口时不与瓶身产生碰撞（否则会把瓶子弹飞），
-    // 因此这里再刷回 NoCollision。
+    // 我们希望盖子盖在瓶口时可被 SphereTrace 命中（用于抓取判定）
+    // 但不与瓶身产生刚体碰撞（否则会把瓶子弹飞）。
+    // 因此这里再刷回 QueryOnly + Overlap。
     if (CapMesh)
     {
-        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
         CapMesh->SetSimulatePhysics(false);
+        CapMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        CapMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
     }
 
     if (GrabComp)
@@ -106,17 +110,17 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
     OwnerBottle   = InBottle;
     CapSocketName = InSocketName;
 
-    // 关物理 + 关碰撞，Snap 到瓶口 Socket
+    // 关物理 + 切到 QueryOnly + Overlap（可被抓取射线命中但不推动瓶身），Snap 到瓶口 Socket
     if (CapMesh)
     {
         CapMesh->SetSimulatePhysics(false);
-        // 盖在瓶口时不参与碰撞，避免与瓶身互撞把瓶子推飞
-        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
+        CapMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        CapMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
     }
     UStaticMeshComponent* BottleMesh = InBottle->ContainerMesh;
     if (BottleMesh)
     {
-        // 关键：Weld 到瓶身刚体上，让盖子成为瓶身刚体的一部分
+        // 关键：Weld 到瓶身刚体上，让盖子成为瓶身刚体的一部分（虽已 QueryOnly 但 Weld 依然是好习惯）
         FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
         AttachRule.bWeldSimulatedBodies = true;
         AttachToComponent(BottleMesh, AttachRule, CapSocketName);
@@ -133,11 +137,12 @@ void ABottleCapActor::ReattachToBottle()
         return;
     }
 
-    // 关物理 + 关碰撞，重新 Snap 回瓶口 Socket 并 Weld 到瓶身刚体
+    // 关物理 + 切到 QueryOnly + Overlap，重新 Snap 回瓶口 Socket 并 Weld 到瓶身刚体
     if (CapMesh)
     {
         CapMesh->SetSimulatePhysics(false);
-        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
+        CapMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        CapMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
     }
     UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
     if (BottleMesh)

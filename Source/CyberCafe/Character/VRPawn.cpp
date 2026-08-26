@@ -421,12 +421,15 @@ UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerC
         { UEngineTypes::ConvertToObjectType(ECC_WorldDynamic), UEngineTypes::ConvertToObjectType(ECC_PhysicsBody) },
         false, IgnoreActors, EDrawDebugTrace::None, Hits, true);
 
-    // 遍历所有命中的Actor上的GrabComponent，选取距离手柄最近的一个。
-    // 说明：
+    // 遍历所有命中的Actor上的GrabComponent，按【优先级降序 + 距离近】选取：
     //   1) 用GrabComponent自身的世界位置作为距离基准（GrabComponent通常放在Actor的抓取锚点上）
     //   2) 跳过 None 类型 与 已被抓取 的组件
     //   3) 使用 SetVisited 避免同一Actor被多次Hit时重复处理
+    //   4) 优先级高的 GrabComponent 优先被选中；同优先级下选距离最近者。
+    //      这样类似"瓶盖(优先级1) vs 瓶身(优先级0)"的场景，即便瓶身几何中心离手更近，
+    //      也会优先抓到瓶盖，符合玩家直觉。
     UGrabComponent* Nearest = nullptr;
+    int32 BestPriority = TNumericLimits<int32>::Min();
     float NearestDistSq = TNumericLimits<float>::Max();
 
     TSet<const AActor*> VisitedActors;
@@ -453,11 +456,19 @@ UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerC
                 continue;
             }
 
+            const int32 Prio   = G->GrabPriority;
             const float DistSq = FVector::DistSquared(HandLocation, G->GetComponentLocation());
-            if (DistSq < NearestDistSq)
+
+            // 优先级严格更高 → 直接换；优先级相同 → 比距离
+            const bool bBetter =
+                (Prio > BestPriority) ||
+                (Prio == BestPriority && DistSq < NearestDistSq);
+
+            if (bBetter)
             {
+                BestPriority  = Prio;
                 NearestDistSq = DistSq;
-                Nearest = G;
+                Nearest       = G;
             }
         }
     }
