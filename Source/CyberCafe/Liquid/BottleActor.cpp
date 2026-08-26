@@ -3,9 +3,11 @@
 #include "Liquid/BottleActor.h"
 
 #include "GrabComponent.h"
+#include "Liquid/BottleCapActor.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 
 ABottleActor::ABottleActor()
 {
@@ -29,6 +31,60 @@ ABottleActor::ABottleActor()
     bAcceptLiquidFromOthers = false;
 
     PourHaptic              = nullptr;
+
+    // 瓶盖默认参数（美术可在蓝图里覆盖）
+    CapClass                = nullptr;
+    CapSocketName           = TEXT("CapSocket");
+    bStartCapped            = true;
+    CapActor                = nullptr;
+    bIsCapped               = false;
+}
+
+void ABottleActor::BeginPlay()
+{
+    Super::BeginPlay();
+
+    // 若指定了瓶盖类，Spawn 一个盖子并绑定
+    if (CapClass && bStartCapped)
+    {
+        UWorld* World = GetWorld();
+        if (World && ContainerMesh)
+        {
+            FActorSpawnParameters SpawnParams;
+            SpawnParams.Owner  = this;
+            SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+            // 用瓶口 Socket 的 Transform 作为初始位置（Attach 时会再对齐一次）
+            const FTransform SocketXform = ContainerMesh->GetSocketTransform(CapSocketName, RTS_World);
+            CapActor = World->SpawnActor<ABottleCapActor>(CapClass, SocketXform, SpawnParams);
+
+            if (CapActor)
+            {
+                CapActor->AttachToBottle(this, CapSocketName);
+                // 初始上锁：盖着不能倒
+                OnCapAttached();
+            }
+        }
+    }
+}
+
+void ABottleActor::OnCapAttached()
+{
+    bIsCapped = true;
+    // 盖着不能倒
+    bCanPour = false;
+    // 如果此刻正在倒液（比如玩家把盖子塞回时瓶子刚好在倾斜），立即停下
+    if (bIsPouring)
+    {
+        StopPouring();
+    }
+}
+
+void ABottleActor::OnCapDetached()
+{
+    bIsCapped = false;
+    // 解锁倒液（基类 Tick 会自动判定倾角）
+    bCanPour = true;
 }
 
 void ABottleActor::StartPouring()
