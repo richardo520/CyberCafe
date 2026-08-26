@@ -19,7 +19,10 @@ ABottleCapActor::ABottleCapActor()
     SetRootComponent(CapMesh);
     // 初始不模拟物理——盖在瓶口时跟随瓶子 Transform
     CapMesh->SetSimulatePhysics(false);
-    CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+    // 初始使用 NoCollision：盖在瓶口上时不与瓶身发生刚体碰撞，
+    // 避免两个 PhysicsActor 刚体紧贴互撞把瓶子弹飞；
+    // 拧下瓶盖后（DetachFromBottle）再切回 PhysicsActor 参与正常物理交互。
+    CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
 
     // 抓取组件：Custom 模式，不由 GrabComponent 自动 Attach 到手上，扭转达到阈值后由本类主动 Attach
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
@@ -45,6 +48,15 @@ ABottleCapActor::ABottleCapActor()
 void ABottleCapActor::BeginPlay()
 {
     Super::BeginPlay();
+
+    // 注意：UGrabComponent::BeginPlay 会把父组件的碰撞档案强制改成 PhysicsActor，
+    // 我们希望盖子盖在瓶口时不与瓶身产生碰撞（否则会把瓶子弹飞），
+    // 因此这里再刷回 NoCollision。
+    if (CapMesh)
+    {
+        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
+        CapMesh->SetSimulatePhysics(false);
+    }
 
     if (GrabComp)
     {
@@ -94,17 +106,20 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
     OwnerBottle   = InBottle;
     CapSocketName = InSocketName;
 
-    // 关物理并 Snap 到瓶口 Socket
+    // 关物理 + 关碰撞，Snap 到瓶口 Socket
     if (CapMesh)
     {
         CapMesh->SetSimulatePhysics(false);
+        // 盖在瓶口时不参与碰撞，避免与瓶身互撞把瓶子推飞
+        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
     }
     UStaticMeshComponent* BottleMesh = InBottle->ContainerMesh;
     if (BottleMesh)
     {
-        AttachToComponent(BottleMesh,
-                          FAttachmentTransformRules::SnapToTargetNotIncludingScale,
-                          CapSocketName);
+        // 关键：Weld 到瓶身刚体上，让盖子成为瓶身刚体的一部分
+        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
+        AttachRule.bWeldSimulatedBodies = true;
+        AttachToComponent(BottleMesh, AttachRule, CapSocketName);
     }
 
     bIsAttached            = true;
@@ -118,17 +133,18 @@ void ABottleCapActor::ReattachToBottle()
         return;
     }
 
-    // 关物理，重新 Snap 回瓶口 Socket
+    // 关物理 + 关碰撞，重新 Snap 回瓶口 Socket 并 Weld 到瓶身刚体
     if (CapMesh)
     {
         CapMesh->SetSimulatePhysics(false);
+        CapMesh->SetCollisionProfileName(TEXT("NoCollision"));
     }
     UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
     if (BottleMesh)
     {
-        AttachToComponent(BottleMesh,
-                          FAttachmentTransformRules::SnapToTargetNotIncludingScale,
-                          CapSocketName);
+        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
+        AttachRule.bWeldSimulatedBodies = true;
+        AttachToComponent(BottleMesh, AttachRule, CapSocketName);
     }
 
     bIsAttached            = true;
@@ -159,6 +175,8 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
     if (CapMesh)
     {
         CapMesh->SetSimulatePhysics(false);
+        // 拧下后恢复正常碰撞档案，允许盖子与世界物体（桌面、地面等）产生碰撞
+        CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
     }
 
     bIsAttached            = false;
@@ -240,6 +258,7 @@ void ABottleCapActor::HandleDropped()
         // 没有归属瓶子——只能当独立物体落地
         if (CapMesh)
         {
+            CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
             CapMesh->SetSimulatePhysics(true);
         }
         return;
@@ -250,6 +269,7 @@ void ABottleCapActor::HandleDropped()
     {
         if (CapMesh)
         {
+            CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
             CapMesh->SetSimulatePhysics(true);
         }
         return;
@@ -266,9 +286,10 @@ void ABottleCapActor::HandleDropped()
     }
     else
     {
-        // 远离瓶口——盖子掉落
+        // 远离瓶口——盖子作为独立物体掉落，恢复碰撞并开启物理
         if (CapMesh)
         {
+            CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
             CapMesh->SetSimulatePhysics(true);
         }
     }
