@@ -17,15 +17,14 @@ class ABottleActor;
  * ABottleCapActor
  * 酒瓶盖子：作为独立 Actor 出现，可被 VR 手柄单独抓取。
  *
- * 交互流程：
+ * 交互流程（拔出/盖回都做成"低操作难度"）：
  *   1. 初始时 Attach 到 ABottleActor::ContainerMesh 的 CapSocket 上，物理关闭；
- *      GrabComp 使用 EGrabType::Custom（不自动 Attach 到手/不关物理），
- *      这样"抓住但还没扭下来"时盖子仍跟随瓶口。
- *   2. 玩家抓住后必须扭转手柄——通过对比"抓取起始时刻手柄相对瓶口的旋转"与
- *      "当前手柄相对瓶口的旋转"，累计扭转角度超过 DetachTwistAngle 时，
- *      才把盖子真正 Attach 到手柄上（"拧下来"），并置 bIsAttached=false。
- *   3. 玩家松手时，若盖子当前世界位置距瓶口 Socket < ReattachSnapDistance，
- *      自动吸附回 Socket；否则盖子以物理体形式掉在地上（bSimulateOnDrop=true）。
+ *      GrabComp 使用 EGrabType::Custom（抓取瞬间不 Attach 到手，仍保持在瓶口）。
+ *   2. 抓住后，只要手柄相对瓶口 Socket 的距离 > DetachPullDistance，
+ *      就把盖子真正 Attach 到手上（"拔下来"），并置 bIsAttached=false。
+ *      —— 玩家只需"往外拉"即可拔盖，无需扭转。
+ *   3. 玩家松手时，若盖子当前位置距瓶口 Socket <= ReattachSnapDistance，
+ *      自动吸附回 Socket；否则盖子以物理体形式掉落。
  */
 UCLASS(Blueprintable, BlueprintType)
 class CYBERCAFE_API ABottleCapActor : public AActor
@@ -55,29 +54,20 @@ public:
     //=====================================================================
 
     /**
-     * "拧下来"所需的累计扭转角度（度）。
-     * 玩家抓住盖子后，手柄相对瓶口 Yaw（沿瓶口局部 +Z）方向累计旋转达此值即拔出。
+     * "拔下来"所需的位移距离(cm)：
+     * 抓住盖子后，若手柄距离瓶口 Socket 超过该值，盖子自动从瓶口脱离并落到手上。
+     * 太小会不小心拔掉，太大玩家拉不动。默认 3cm。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Detach", meta = (ClampMin = "0.0"))
-    float DetachTwistAngle;
+    float DetachPullDistance;
 
     /**
-     * 松手后自动吸附回瓶口的距离阈值(cm)。
-     * 盖子世界位置与瓶口 Socket 世界位置距离小于此值时，自动 Snap 回瓶口。
+     * 松手时自动吸回瓶口的距离阈值(cm)。
+     * 玩家松手瞬间，若盖子世界位置距瓶口 Socket <= 此值，自动 Snap 回瓶口；
+     * 否则盖子作为独立物体掉落。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Reattach", meta = (ClampMin = "0.0"))
     float ReattachSnapDistance;
-
-    /**
-     * 拧下瓶盖后，盖子相对于持盖手柄的 Transform（Snap 到手柄时用）。
-     * 由于盖子 Mesh 资产的 pivot 未必在几何中心，仅用 KeepWorldTransform 可能导致
-     * "盖子在瓶口 Socket 位置被 Attach 到手，但玩家手里看不到盖子"。
-     * 通过设置这个 offset 强制盖子 Snap 到手柄一个稳定的相对位置，
-     * 避免因资产 pivot 偏移导致的显示错乱。
-     * 默认 (0,0,0) —— 盖子的 pivot 会与手柄原点重合；美术可按盖子 Mesh 微调。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Detach")
-    FTransform HandGripOffset;
 
     /** 拧下瓶盖时给持盖手的触觉反馈(可选) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Feedback")
@@ -124,7 +114,7 @@ public:
     void ReattachToBottle();
 
     /**
-     * "拧下来"：将盖子 Attach 到 MotionController，关物理，标记 bIsAttached=false，
+     * "拔下来"：将盖子 Attach 到 MotionController，关物理，标记 bIsAttached=false，
      * 通知瓶子解锁倒液。
      */
     UFUNCTION(BlueprintCallable, Category = "Cap")
@@ -139,18 +129,8 @@ protected:
     UFUNCTION()
     void HandleDropped();
 
-    /**
-     * 计算"当前手柄绕瓶口 +Z 的角度"（度）——将手柄前向投影到瓶口 XY 平面后取相对 X 轴角度。
-     * 只有 OwnerBottle 有效时才有意义。
-     */
-    float GetHandTwistAngleDegrees(UMotionControllerComponent* MC) const;
-
 private:
-    /** 抓取瞬间"手柄绕瓶口 +Z 的角度"（度），用于累计扭转 */
-    UPROPERTY(Transient)
-    float TwistBaselineDegrees;
-
-    /** 是否处于"已抓住但尚未拧下来"的中间状态（Custom Grab 生效但仍附在瓶口 Socket 上） */
+    /** 是否处于"已抓住但尚未拔下来"的中间状态（Custom Grab 生效但仍附在瓶口 Socket 上） */
     UPROPERTY(Transient)
     bool bGrabbedButNotDetached;
 };

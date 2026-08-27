@@ -34,9 +34,8 @@ ABottleCapActor::ABottleCapActor()
     GrabComp->GrabPriority = 1;
 
     // 默认参数
-    DetachTwistAngle     = 45.f;   // 拧 45° 拔出
-    ReattachSnapDistance = 8.f;    // 8cm 内自动吸回
-    HandGripOffset       = FTransform::Identity;  // 盖子的 pivot 与手柄原点重合
+    DetachPullDistance   = 3.f;    // 抓住后拉 3cm 即拔出
+    ReattachSnapDistance = 15.f;   // 松手时若在此距离内自动吸回瓶口
     DetachHaptic         = nullptr;
     DetachSound          = nullptr;
     ReattachSound        = nullptr;
@@ -44,7 +43,6 @@ ABottleCapActor::ABottleCapActor()
     bIsAttached              = true;
     OwnerBottle              = nullptr;
     CapSocketName            = NAME_None;
-    TwistBaselineDegrees     = 0.f;
     bGrabbedButNotDetached   = false;
 }
 
@@ -74,8 +72,9 @@ void ABottleCapActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // 只在"已抓住但尚未拧下来"状态下检测扭转
-    if (!bGrabbedButNotDetached || !GrabComp || !OwnerBottle)
+    // 仅在"已抓住但尚未拔下来"状态下检测"往外拉"距离，超过阈值就拔出。
+    // 知道盖子已拔下后的一切盖回逻辑都在 HandleDropped 里完成。
+    if (!bGrabbedButNotDetached || !GrabComp || !OwnerBottle || !OwnerBottle->ContainerMesh)
     {
         return;
     }
@@ -86,13 +85,10 @@ void ABottleCapActor::Tick(float DeltaTime)
         return;
     }
 
-    // 计算当前手柄相对瓶口 +Z 的旋转角度，与抓握瞬间的基准值做差得到累计扭转
-    const float CurrentDeg = GetHandTwistAngleDegrees(MC);
-    float DeltaDeg = CurrentDeg - TwistBaselineDegrees;
-    // 归一化到 [-180, 180]
-    DeltaDeg = FRotator::NormalizeAxis(DeltaDeg);
-
-    if (FMath::Abs(DeltaDeg) >= DetachTwistAngle)
+    UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
+    const FVector SocketWS = BottleMesh->GetSocketLocation(CapSocketName);
+    const float HandToSocketDist = FVector::Dist(MC->GetComponentLocation(), SocketWS);
+    if (HandToSocketDist >= DetachPullDistance)
     {
         DetachFromBottle(MC);
     }
@@ -175,13 +171,10 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
 
     // 1) 从瓶子上脱离并 Attach 到手柄。
     //    使用 SnapToTargetNotIncludingScale：盖子的 Root 相对手柄的 transform 被强制置零，
-    //    然后我们再应用 HandGripOffset 让盖子稳定停留在手掌里的期望位置。
-    //    这样即使盖子 Mesh 资产 pivot 有偏移，玩家也能看到盖子在手里。
+    //    盖子会固定在手柄原点上（盖子 Mesh 的 pivot 已在编辑器里调好）。
     FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
     AttachRule.bWeldSimulatedBodies = true;
     AttachToComponent(MotionController, AttachRule);
-    // 应用手柄 Offset
-    SetActorRelativeTransform(HandGripOffset);
 
     if (CapMesh)
     {
@@ -223,8 +216,8 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
 
 void ABottleCapActor::HandleGrabbed()
 {
-    // Custom 模式下 GrabComponent 不 Attach 也不关物理，我们在这里做"扭转前的准备"：
-    // 记录抓取起始时刻手柄相对瓶口的扭转基准角度，进入 Tick 检测阶段。
+    // Custom 模式下 GrabComponent 不 Attach 也不关物理，我们在这里做"拔出前的准备"：
+    // 只有在盖着状态下才进入"拉出拔盖"流程；若盖子已经掉下来后再次被抓，直接 Attach 到手
     if (!GrabComp || !OwnerBottle)
     {
         return;
@@ -236,16 +229,16 @@ void ABottleCapActor::HandleGrabbed()
         return;
     }
 
-    // 只有在盖着状态下才进入"扭转拔出"流程；若盖子已经掉下来后再次被抓，直接 Attach 到手
     if (bIsAttached)
     {
-        TwistBaselineDegrees   = GetHandTwistAngleDegrees(MC);
+        // 进入"抓住但还没拔下"状态；Tick 里检测手柄距瓶口 Socket 的距离，
+        // 一旦超过 DetachPullDistance，就在 DetachFromBottle 里正式 Attach 到手上。
         bGrabbedButNotDetached = true;
     }
     else
     {
         // 已经不在瓶口上——直接把盖子 Attach 到手（走一遍标准 Snap 逻辑）
-        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
+        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
         AttachRule.bWeldSimulatedBodies = true;
         AttachToComponent(MC, AttachRule);
         if (CapMesh)
@@ -314,50 +307,4 @@ void ABottleCapActor::HandleDropped()
 // 工具
 //=====================================================================
 
-float ABottleCapActor::GetHandTwistAngleDegrees(UMotionControllerComponent* MC) const
-{
-    if (!MC || !OwnerBottle || !OwnerBottle->ContainerMesh)
-    {
-        return 0.f;
-    }
-
-    // 瓶口 Socket 的世界 Transform
-    UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
-    const FTransform SocketXform = BottleMesh->GetSocketTransform(CapSocketName, RTS_World);
-
-    // 计算"手柄相对于瓶口 Socket 的局部旋转"
-    //   拧瓶盖的物理动作是：手绕手柄自身 +X 轴（手指向方向）自转（Roll）；
-    //   而这个 Roll 在瓶口 Socket 局部空间里，正好等价于"绕 Socket +Z 轴的旋转"（前提：
-    //   玩家握瓶盖时手前向大致对齐瓶口轴向——这也是最自然的拧盖姿势）。
-    //
-    // 所以：把手柄的世界 Quat 转到 Socket 局部空间，然后提取绕 Socket +Z（局部 Z 轴）的
-    // 旋转分量，就得到真正的"扭转角度"。
-    const FQuat HandWS   = MC->GetComponentQuat();
-    const FQuat SocketWS = SocketXform.GetRotation();
-    const FQuat HandLocal = SocketWS.Inverse() * HandWS;
-
-    // 提取"绕局部 Z 轴的 Swing/Twist 分解 Twist 分量"
-    // 参考 Unreal 的 FQuat::ToSwingTwist：先把四元数的向量分量投影到 Twist 轴上，
-    // 保留 W 与投影分量，再归一化即可得到"绕该轴的纯旋转四元数"。
-    const FVector TwistAxis(0.f, 0.f, 1.f); // Socket 的局部 +Z
-    FVector       QVec = FVector(HandLocal.X, HandLocal.Y, HandLocal.Z);
-    const float   Proj = FVector::DotProduct(QVec, TwistAxis);
-    FQuat         TwistQuat(TwistAxis.X * Proj, TwistAxis.Y * Proj, TwistAxis.Z * Proj, HandLocal.W);
-    // 若接近零四元数（罕见）则直接返回 0
-    if (TwistQuat.SizeSquared() < KINDA_SMALL_NUMBER)
-    {
-        return 0.f;
-    }
-    TwistQuat.Normalize();
-
-    // Quat → 角度（度）。SafeAcos 保证数值稳定。
-    // 注意：ToAxisAndAngle 得到的角度总是正的，方向信息藏在 Axis 里。
-    FVector Axis;
-    float   AngleRad = 0.f;
-    TwistQuat.ToAxisAndAngle(Axis, AngleRad);
-    AngleRad = FMath::UnwindRadians(AngleRad);
-
-    // 用 Axis 与 TwistAxis 的方向一致性给角度带上符号
-    const float Sign = (FVector::DotProduct(Axis, TwistAxis) >= 0.f) ? 1.f : -1.f;
-    return FMath::RadiansToDegrees(AngleRad) * Sign;
-}
+// （旧 GetHandTwistAngleDegrees 已移除：现在用位移触发拔盖，不再检测扭转角度）
