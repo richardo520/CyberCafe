@@ -4,7 +4,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "MotionControllerComponent.h"
-#include "PhysicsEngine/PhysicsConstraintComponent.h"
+#include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -78,18 +78,30 @@ void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
         }
     }
 
-    // ConstraintDrive 模式：若物体被环境卡住、手柄拉得太远，自动断开约束，避免弹簧无限拉伸
-    if (bIsHeld && GrabConstraint && MotionControllerRef && BreakDistance > 0.f)
+    // PhysicsHandle 模式：
+    //   1) 每帧将 PhysicsHandle 的目标位姿更新为"手柄世界变换 * 抓取瞬间的相对变换"
+    //      → 保持抓取时的相对位姿，手柄移动/旋转时物体被弹簧拉着跟
+    //   2) 若物体被环境卡住、手柄拉得太远，自动释放，避免弹簧无限拉伸
+    if (bIsHeld && GrabPhysicsHandle && MotionControllerRef)
     {
-        if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
+        // Step 1: 更新目标位姿
+        const FTransform CtrlWorld(MotionControllerRef->GetComponentQuat(), MotionControllerRef->GetComponentLocation());
+        const FTransform TargetWorld = HeldRelativeToController * CtrlWorld;
+        GrabPhysicsHandle->SetTargetLocationAndRotation(TargetWorld.GetLocation(), TargetWorld.Rotator());
+
+        // Step 2: 距离 break 检查
+        if (BreakDistance > 0.f)
         {
-            const float DistSq = FVector::DistSquared(
-                Prim->GetComponentLocation(),
-                MotionControllerRef->GetComponentLocation());
-            if (DistSq > BreakDistance * BreakDistance)
+            if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
             {
-                // 主动释放（会走 TryRelease 里拆约束 + 派发 OnDropped）
-                TryRelease();
+                const float DistSq = FVector::DistSquared(
+                    Prim->GetComponentLocation(),
+                    MotionControllerRef->GetComponentLocation());
+                if (DistSq > BreakDistance * BreakDistance)
+                {
+                    // 主动释放（会走 TryRelease 里拆 PhysicsHandle + 派发 OnDropped）
+                    TryRelease();
+                }
             }
         }
     }
@@ -155,19 +167,17 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
 
 void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
 {
-    // ConstraintDrive 模式仅对 Free / Snap 生效；SnapInPlace / Custom 保持原有行为
-    const bool bUseConstraint =
-        (PhysicsMode == EGrabPhysicsMode::ConstraintDrive) &&
+    // PhysicsHandle 模式仅对 Free / Snap 生效；SnapInPlace / Custom 保持原有行为
+    const bool bUsePhysHandle =
+        (PhysicsMode == EGrabPhysicsMode::PhysicsHandle) &&
         (GrabType == EGrabType::Free || GrabType == EGrabType::Snap);
 
-    // === 关键：Pull 结束时 Kinematic 位置差会被 Chaos 记为初速度，切到 Dynamic 会"甩"出去 ===
-    // 所以对所有走 ConstraintDrive 分支的情况，抓取前先强制把物体 Teleport 到当前位置（清除位置差历史）
-    // 具体的速度清零在 SetupGrabConstraint 里做
-    if (bUseConstraint)
+    // === 关键：Pull 阶段 Kinematic 位置差会被 Chaos 记为初速度，切到 Dynamic 会"甩"出去 ===
+    // 所以对所有走 PhysicsHandle 分支的情况，抓取前先强制把物体 Teleport 到当前位置（清除位置差历史）
+    if (bUsePhysHandle)
     {
         if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
         {
-            // 用 TeleportPhysics 把当前位置"锚定"一次，确保 Chaos 内部不残留任何来自 Pull 或前一状态的位置差
             const FVector CurLoc = Prim->GetComponentLocation();
             const FQuat   CurRot = Prim->GetComponentQuat();
             Prim->SetWorldLocationAndRotation(CurLoc, CurRot, false, nullptr, ETeleportType::TeleportPhysics);
@@ -178,10 +188,10 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
     {
     case EGrabType::Free:
     {
-        if (bUseConstraint)
+        if (bUsePhysHandle)
         {
-            // 保持物理开启，不 Attach，仅创建约束驱动物体追随手柄
-            SetupGrabConstraint(MotionController);
+            // 保持物理开启，不 Attach，仅创建 PhysicsHandle 驱动物体追随手柄
+            SetupPhysicsHandle(MotionController);
             bIsHeld = true;
         }
         else
@@ -195,12 +205,15 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
     }
     case EGrabType::Snap:
     {
-        if (bUseConstraint)
+        if (bUsePhysHandle)
         {
-            // ConstraintDrive + Snap：不做强制 Teleport（避免瞬移造成物体与手/环境穿透而被 Chaos 弹飞），
-            // 直接建约束 + 用 SetConstraintReferenceFrame 将"目标相对位姿"设为GrabComponent自身的相对变换，
-            // 约束驱动会用弹簧将物体平滑地"吸"到吸附位姿。
-            SetupGrabConstraint(MotionController);
+            // PhysicsHandle + Snap：先创建 PhysicsHandle，然后将 HeldRelativeToController 覆盖为
+            // "GrabComponent 相对 Owner 的本地变换的逆"，这样弹簧会把物体上的抓握锚点吸到手柄。
+            SetupPhysicsHandle(MotionController);
+            // 覆盖为 Snap 目标：物体相对手柄的目标变换 = GrabComponent 本地变换的逆
+            // 推导：希望 Grab世界 == Ctrl世界，即 Obj世界 * GrabLocal == Ctrl世界，所以 Obj世界 == Ctrl世界 * GrabLocal⁻¹
+            // 转为相对：Obj世界 * Ctrl世界⁻¹ = GrabLocal⁻¹
+            HeldRelativeToController = GetRelativeTransform().Inverse();
             bIsHeld = true;
         }
         else
@@ -253,12 +266,12 @@ bool UGrabComponent::TryRelease()
     // 拷贝一份采样出来，等下切物理之后再用（先切物理再Set速度）
     TArray<FThrowSample> SamplesForThrow = ThrowSamples;
 
-    // 先拆除 ConstraintDrive 模式下的物理约束（如果有）
-    // 注意：必须在 TrySimulateOnDrop 之前拆，否则 Detach 时会被约束盉住。
-    const bool bWasConstraintDrive = (GrabConstraint != nullptr);
-    if (bWasConstraintDrive)
+    // 先拆除 PhysicsHandle 模式下的抓取（如果有）
+    // 注意：必须在 TrySimulateOnDrop 之前拆，否则 Detach 时会与 PhysicsHandle 产生冲突。
+    const bool bWasPhysHandle = (GrabPhysicsHandle != nullptr);
+    if (bWasPhysHandle)
     {
-        TeardownGrabConstraint();
+        TeardownPhysicsHandle();
     }
 
     switch (GrabType)
@@ -266,17 +279,10 @@ bool UGrabComponent::TryRelease()
     case EGrabType::Free:
     case EGrabType::Snap:
     {
-        if (bWasConstraintDrive)
+        if (bWasPhysHandle)
         {
-            // ConstraintDrive 模式下本就开着物理，无需 TrySimulateOnDrop 重新开物理
-            // 但需要恢复 CCD 等临时修改的属性
-            if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
-            {
-                if (bUseCCDWhileHeld)
-                {
-                    Prim->GetBodyInstance()->bUseCCD = bCachedUseCCD;
-                }
-            }
+            // PhysicsHandle 模式下本就开着物理，无需 TrySimulateOnDrop 重新开物理
+            // CCD 与重力开关已在 TeardownPhysicsHandle 里恢复
             bIsHeld = false;
         }
         else
@@ -643,10 +649,10 @@ bool UGrabComponent::ComputeThrowVelocities(const TArray<FThrowSample>& Samples,
 }
 
 //===========================================================================
-// ConstraintDrive：物理约束驱动抓取（可与环境碰撞）
+// PhysicsHandle：使用引擎内置 UPhysicsHandleComponent 实现可碰撞抓取
 //===========================================================================
 
-void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionController)
+void UGrabComponent::SetupPhysicsHandle(UMotionControllerComponent* MotionController)
 {
     if (MotionController == nullptr)
     {
@@ -659,29 +665,27 @@ void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionContr
         return;
     }
 
-    // 抓取前若有残留约束，先清理，避免重复创建
-    if (GrabConstraint)
+    // 抓取前若有残留 PhysicsHandle，先清理
+    if (GrabPhysicsHandle)
     {
-        TeardownGrabConstraint();
+        TeardownPhysicsHandle();
     }
 
-    // ---- Step 1: 先开物理，再清速度、再唤醒（顺序敏感）----
-    // 说明：
-    //   * SetSimulatePhysics(true) 从 Kinematic 切到 Dynamic 时，Chaos 会用最近记录的位置差推算初速度。
-    //     Pull 阶段每帧 SetActorLocation(TeleportPhysics) 快速拖动物体，此位置差被记录后会变成
-    //     一个 10 m/s+ 的伪初速度。所以必须在 SetSimulatePhysics 之后立即 Set 速度为 0，覆盖这个残留。
-    //   * PerformGrab 里我们已经先 Teleport 一次锚定位置，这里再补上速度清零，双保险。
+    // ---- Step 1: 先开物理，再清速度，再唤醒（顺序敏感）----
+    // SetSimulatePhysics(true) 从 Kinematic 切到 Dynamic 时，Chaos 会用最近记录的位置差推算初速度。
+    // Pull 阶段每帧 SetActorLocation(TeleportPhysics) 快速拖动物体，此位置差被记录后会变成伪初速度。
+    // 所以必须在 SetSimulatePhysics 之后立即 Set 速度为 0，覆盖这个残留。
     GrabbedPrim->SetSimulatePhysics(true);
     GrabbedPrim->SetPhysicsLinearVelocity(FVector::ZeroVector, false);
     GrabbedPrim->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector, false);
     GrabbedPrim->WakeAllRigidBodies();
 
     // 【诊断日志】输出物体质量，方便调参时判断"不跟手"是否因为重量过大
-    UE_LOG(LogTemp, Log, TEXT("[Grab] Grabbed '%s' Mass=%.2fkg  Mode=%s  Stiffness=%.1f Damping=%.1f  DisableGravity=%d"),
+    UE_LOG(LogTemp, Log, TEXT("[Grab] Grabbed '%s' Mass=%.2fkg  LinStiff=%.1f LinDamp=%.1f AngStiff=%.1f AngDamp=%.1f  DisableGravity=%d"),
         *GrabbedPrim->GetName(),
         GrabbedPrim->GetMass(),
-        bUseAccelerationMode ? TEXT("Acceleration") : TEXT("Force"),
-        LinearStiffness, LinearDamping,
+        PhysicsHandleLinearStiffness, PhysicsHandleLinearDamping,
+        PhysicsHandleAngularStiffness, PhysicsHandleAngularDamping,
         bDisableGravityWhileHeld ? 1 : 0);
 
     // 按需禁用重力（避免弹簧驱动被重力拖住，重物也能轻盈跟手）
@@ -691,7 +695,7 @@ void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionContr
         GrabbedPrim->SetEnableGravity(false);
     }
 
-    // 缓存并按需开启 CCD（快速挥动时防止穿墙）—— 放在速度清零后，避免CCD启用时又抓到旧速度
+    // 缓存并按需开启 CCD（快速挥动时防止穿墙）
     if (FBodyInstance* Body = GrabbedPrim->GetBodyInstance())
     {
         bCachedUseCCD = Body->bUseCCD;
@@ -707,109 +711,62 @@ void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionContr
         GrabbedPrim->IgnoreActorWhenMoving(PawnOwner, true);
     }
 
-    // ---- Step 2: 记录抓取瞬间物体相对手柄的位姿，作为约束的 rest state ----
-    // Free 模式：直接用当前相对位姿（rest = 当前状态，弹簧初始受力为 0，绝对不会弹飞）
-    // Snap 模式：用 GrabComponent 自身相对 Owner 的 Transform（描述抓握点在物体本地空间的位置）
-    //           这会让弹簧把物体上的"抓握点"慢慢拉到手柄处（有一小段吸附动画，符合物理感）
-    const FTransform ObjWorld = GrabbedPrim->GetComponentTransform();
-    const FTransform CtrlWorld(MotionController->GetComponentQuat(), MotionController->GetComponentLocation());
+    // ---- Step 2: 记录抓取瞬间物体相对手柄的位姿（Free 默认； Snap 会在 PerformGrab 中覆盖）----
+    // Tick 中每帧计算 TargetWorld = HeldRelativeToController * CtrlWorld，作为 PhysicsHandle 的目标
+    {
+        const FTransform ObjWorld = GrabbedPrim->GetComponentTransform();
+        const FTransform CtrlWorld(MotionController->GetComponentQuat(), MotionController->GetComponentLocation());
+        HeldRelativeToController = ObjWorld.GetRelativeTransform(CtrlWorld);
+    }
 
-    // ---- Step 3: 动态创建 PhysicsConstraint ----
-    GrabConstraint = NewObject<UPhysicsConstraintComponent>(this, NAME_None, RF_Transient);
-    if (GrabConstraint == nullptr)
+    // ---- Step 3: 动态创建 PhysicsHandleComponent 并配参 ----
+    GrabPhysicsHandle = NewObject<UPhysicsHandleComponent>(this, NAME_None, RF_Transient);
+    if (GrabPhysicsHandle == nullptr)
     {
         return;
     }
 
-    GrabConstraint->SetupAttachment(MotionController);
-    GrabConstraint->RegisterComponent();
-    // 把约束放到当前手柄位置（其世界变换就是"约束端 Frame1 的世界锚点"）
-    GrabConstraint->SetWorldLocationAndRotation(CtrlWorld.GetLocation(), CtrlWorld.GetRotation());
+    // 先配好参数再 Register（内部 CreateJointHandle 时会读取这些值）
+    GrabPhysicsHandle->LinearStiffness  = PhysicsHandleLinearStiffness;
+    GrabPhysicsHandle->LinearDamping    = PhysicsHandleLinearDamping;
+    GrabPhysicsHandle->AngularStiffness = PhysicsHandleAngularStiffness;
+    GrabPhysicsHandle->AngularDamping   = PhysicsHandleAngularDamping;
+    GrabPhysicsHandle->InterpolationSpeed = PhysicsHandleInterpolationSpeed;
+    // Grab 硬度上限：给一个很大的默认值，避免内部 Clamp
+    GrabPhysicsHandle->bSoftLinearConstraint = true;
+    GrabPhysicsHandle->bSoftAngularConstraint = true;
 
-    // ---- Step 4: 允许所有轴自由度（不锁死），完全靠 Drive 拉过去 ----
-    GrabConstraint->SetLinearXLimit(LCM_Free, 0.f);
-    GrabConstraint->SetLinearYLimit(LCM_Free, 0.f);
-    GrabConstraint->SetLinearZLimit(LCM_Free, 0.f);
-    GrabConstraint->SetAngularSwing1Limit(ACM_Free, 0.f);
-    GrabConstraint->SetAngularSwing2Limit(ACM_Free, 0.f);
-    GrabConstraint->SetAngularTwistLimit(ACM_Free, 0.f);
+    GrabPhysicsHandle->RegisterComponent();
 
-    // 约束两端之间不禁用碰撞（但由于一端为 nullptr，实际也不会产生硬碰撞）
-    GrabConstraint->SetDisableCollision(false);
-
-    // ---- Step 5: 位置驱动 (Linear Drive) ----
-    // 【关键】先设 Acceleration Mode 再设参数，确保参数语义匹配
-    GrabConstraint->SetLinearDriveParams(LinearStiffness, LinearDamping, LinearMaxForce);
-    GrabConstraint->SetLinearPositionDrive(true, true, true);
-    GrabConstraint->SetLinearVelocityDrive(true, true, true);
-    // Acceleration Mode: 施加的是加速度而非力，与物体质量无关  → 无论物体多重都能均匀跟手
-    GrabConstraint->ConstraintInstance.SetLinearDriveAccelerationMode(bUseAccelerationMode);
-
-    // ---- Step 6: 姿态驱动 (Angular Drive)：使用 SLERP 一次性驱动全部三轴 ----
-    GrabConstraint->SetAngularDriveMode(EAngularDriveMode::SLERP);
-    GrabConstraint->SetAngularDriveParams(AngularStiffness, AngularDamping, AngularMaxTorque);
-    GrabConstraint->SetAngularOrientationDrive(true, true);
-    GrabConstraint->SetAngularVelocityDrive(true, true);
-    GrabConstraint->ConstraintInstance.SetAngularDriveAccelerationMode(bUseAccelerationMode);
-
-    // ---- Step 7: 建立约束 & 设置 rest 位姿（顺序很关键！）----
-    //
-    // UE PhysicsConstraint 语义：
-    //   约束试图让 "Frame1的世界位姿" 与 "Frame2的世界位姿" 重合。
-    //   Frame1 世界位姿 = Body1世界变换 * Frame1本地变换   （Body1 = nullptr 时 = 约束组件自身的世界变换 = 手柄位姿）
-    //   Frame2 世界位姿 = Body2世界变换 * Frame2本地变换
-    //
-    // 【关键】UE 中 SetConstrainedComponents 会以调用时两个 body 的相对位姿作为 rest state。
-    // 所以我们需要在**调用它之前**将两个 body 的世界位姿摆好，且**在此之后**通过
-    // SetConstraintReferenceFrame(Frame2) 显式指定物体上的锚点。
-    //
-    // 更简单可靠的做法：让 Frame2 = Identity（物体本地原点），Frame1 = 让整体等式成立的差值。
-    //   目标：Body2World * Identity == 手柄世界   →  Frame1World = 手柄
-    //   但物体当前 == ObjWorld，若强行让 Body2原点重合到手柄，会瞬间产生 |ObjWorld - CtrlWorld| 的位移
-    //   所以我们改把 Frame1 设为 "物体当前位姿相对手柄的偏移"，让 rest 位姿等于当前状态：
-    //      Frame1World = CtrlWorld * Frame1Local   要等于   Body2World * Identity = ObjWorld
-    //      => Frame1Local = CtrlWorld⁻¹ * ObjWorld
-    //
-    // Free 语义 = 保持当前相对位姿  → Frame1Local = CtrlWorld⁻¹ * ObjWorld,   Frame2 = Identity
-    // Snap 语义 = 抓握点吸到手柄    → Frame1 = Identity,                     Frame2 = GrabComponent 相对 Owner 的本地 Transform
-
-    const bool bIsSnap = (GrabType == EGrabType::Snap);
-
-    if (bIsSnap)
-    {
-        // Snap：手柄处 == 物体上的抓握锚点（GrabComponent 相对 Owner 的本地变换）
-        GrabConstraint->SetConstraintReferenceFrame(EConstraintFrame::Frame1, FTransform::Identity);
-        GrabConstraint->SetConstraintReferenceFrame(EConstraintFrame::Frame2, GetRelativeTransform());
-    }
-    else
-    {
-        // Free：rest 位姿 = 当前物体位姿（弹簧初始受力 = 0）
-        // Frame1Local = CtrlWorld⁻¹ * ObjWorld
-        const FTransform Frame1Local = ObjWorld.GetRelativeTransform(CtrlWorld);
-        GrabConstraint->SetConstraintReferenceFrame(EConstraintFrame::Frame1, Frame1Local);
-        GrabConstraint->SetConstraintReferenceFrame(EConstraintFrame::Frame2, FTransform::Identity);
-    }
-
-    // 关键：一端传 nullptr（等价于"锚在世界"），但约束组件本身 attach 在 MotionController 下，
-    // Chaos 会把约束自身的世界位姿作为"目标位姿"。
-    // 这样避免了把 UMotionControllerComponent 当作 Kinematic Body 参与解算（它的 BodyInstance
-    // 未必与手柄追踪同步，会引入伪速度导致弹飞）。
-    GrabConstraint->SetConstrainedComponents(
-        nullptr,     NAME_None,   // 一端：世界（约束自身 attach 到 MotionController 会跟随手柄）
-        GrabbedPrim, NAME_None);  // 一端：被抓物体
+    // ---- Step 4: 开始抓取 ----
+    // GrabComponentAtLocationWithRotation 会内部创建一个 Kinematic Actor 作为另一端的驱动锚点，
+    // Tick 中调用 SetTargetLocationAndRotation 就会移动它，从而拉动被抓物体。
+    // 将物体当前世界位姿作为初始抓取点 → rest state = 当前位姿，弹簧初始受力 = 0，不会弹飞。
+    const FVector  ObjLoc = GrabbedPrim->GetComponentLocation();
+    const FRotator ObjRot = GrabbedPrim->GetComponentRotation();
+    GrabPhysicsHandle->GrabComponentAtLocationWithRotation(GrabbedPrim, NAME_None, ObjLoc, ObjRot);
 }
 
-void UGrabComponent::TeardownGrabConstraint()
+void UGrabComponent::TeardownPhysicsHandle()
 {
-    if (GrabConstraint)
+    if (GrabPhysicsHandle)
     {
-        // 释放时同时恢复重力、取消 IgnoreActors（避免机位后玩家踢/推自己丢到地上的物体时仍被忽略）
+        // 释放时同时恢复重力、CCD，取消 IgnoreActors
         if (UPrimitiveComponent* GrabbedPrim = GetOwnerPrimitive())
         {
             // 恢复重力开关（如果抓取时禁用了）
             if (bDisableGravityWhileHeld)
             {
                 GrabbedPrim->SetEnableGravity(bCachedEnableGravity);
+            }
+
+            // 恢复 CCD 开关
+            if (bUseCCDWhileHeld)
+            {
+                if (FBodyInstance* Body = GrabbedPrim->GetBodyInstance())
+                {
+                    Body->bUseCCD = bCachedUseCCD;
+                }
             }
 
             if (MotionControllerRef)
@@ -821,8 +778,9 @@ void UGrabComponent::TeardownGrabConstraint()
             }
         }
 
-        GrabConstraint->BreakConstraint();
-        GrabConstraint->DestroyComponent();
-        GrabConstraint = nullptr;
+        // 释放抓取并销毁组件
+        GrabPhysicsHandle->ReleaseComponent();
+        GrabPhysicsHandle->DestroyComponent();
+        GrabPhysicsHandle = nullptr;
     }
 }
