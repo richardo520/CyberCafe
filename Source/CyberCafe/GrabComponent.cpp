@@ -51,13 +51,30 @@ void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    // 仅在被持有且有有效手柄时采样，用于估算释放瞬间的线/角速度
-    if (bIsHeld && MotionControllerRef && DeltaTime > SMALL_NUMBER)
+    // 仅在被持有且有有效手柄时采样：每帧 Push 一个样本到环形缓冲，
+    // 供 TryRelease 计算"峰值 + 加权平均"的投掷速度。
+    if (bIsHeld && MotionControllerRef)
     {
-        LastControllerLocation = MotionControllerRef->GetComponentLocation();
-        LastControllerRotation = MotionControllerRef->GetComponentQuat();
-        LastSampleDeltaTime    = DeltaTime;
-        bHasValidSample        = true;
+        const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+
+        FThrowSample Sample;
+        Sample.Time     = Now;
+        Sample.Location = MotionControllerRef->GetComponentLocation();
+        Sample.Rotation = MotionControllerRef->GetComponentQuat();
+        ThrowSamples.Add(Sample);
+
+        // 修剪：只保留最近 ThrowSampleWindow 秒内的样本
+        const double MinTime = Now - static_cast<double>(ThrowSampleWindow);
+        int32 RemoveCount = 0;
+        while (RemoveCount < ThrowSamples.Num() && ThrowSamples[RemoveCount].Time < MinTime)
+        {
+            ++RemoveCount;
+        }
+        // 至少保留2个样本（哪怕在窗口之外），保证释放时能算出速度
+        if (RemoveCount > 0 && ThrowSamples.Num() - RemoveCount >= 2)
+        {
+            ThrowSamples.RemoveAt(0, RemoveCount, EAllowShrinking::No);
+        }
     }
 }
 
@@ -99,11 +116,8 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
             MotionControllerRef = MotionController;
             TryCaptureHandMesh();
 
-            // 打开采样：把当前位姿作为第一帧基准，下一帧Tick才会得到有效速度
-            LastControllerLocation = MotionController->GetComponentLocation();
-            LastControllerRotation = MotionController->GetComponentQuat();
-            LastSampleDeltaTime    = 0.f;
-            bHasValidSample        = false;
+            // 打开投掷采样：清空环形缓冲，从下一帧 Tick 开始记录
+            ThrowSamples.Reset();
             SetComponentTickEnabled(true);
 
             // 播放触觉反馈
@@ -168,11 +182,21 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
 
 bool UGrabComponent::TryRelease()
 {
-    // 先在切物理之前把手柄的"最新一帧"位姿更新到Last，得到最贴近释放瞬间的速度
-    // （Tick每帧采样，但玩家松开扳机到执行TryRelease之间可能又过了小半帧）
-    float ReleaseDeltaTime = LastSampleDeltaTime;
-    FVector ReleaseFromLocation = LastControllerLocation;
-    FQuat   ReleaseFromRotation = LastControllerRotation;
+    // 释放前，先把当前的手柄位姿作为"最后一帧"补录到采样缓冲，
+    // 这样即使 Tick 与 TryRelease 之间还有半帧偏差也能覆盖到。
+    // 注意：只补录不清空，真正的速度计算在下面。
+    const double NowTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+    if (MotionControllerRef)
+    {
+        FThrowSample Sample;
+        Sample.Time     = NowTime;
+        Sample.Location = MotionControllerRef->GetComponentLocation();
+        Sample.Rotation = MotionControllerRef->GetComponentQuat();
+        ThrowSamples.Add(Sample);
+    }
+
+    // 拷贝一份采样出来，等下切物理之后再用（先切物理再Set速度）
+    TArray<FThrowSample> SamplesForThrow = ThrowSamples;
 
     switch (GrabType)
     {
@@ -195,41 +219,27 @@ bool UGrabComponent::TryRelease()
         return false;
     }
 
-    // === 投掷手感：把手柄最近一帧的线/角速度直接Set到物理体上 ===
-    // 只有在 Free/Snap 且真的进入模拟物理时才有意义
-    if (bHasValidSample && MotionControllerRef && ReleaseDeltaTime > SMALL_NUMBER)
+    // === 投掷手感：完整方案（时间窗口 + 峰值过滤 + 加权平均） ===
+    if (SamplesForThrow.Num() >= 2)
     {
         if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
         {
             if (Prim->IsSimulatingPhysics())
             {
-                const FVector CurLocation = MotionControllerRef->GetComponentLocation();
-                const FQuat   CurRotation = MotionControllerRef->GetComponentQuat();
-
-                // 线速度：位置差 / dt
-                const FVector LinearVel = (CurLocation - ReleaseFromLocation) / ReleaseDeltaTime;
-
-                // 角速度：从上一帧旋转到当前旋转的四元数差，转成 AxisAngle，再除以 dt
-                // 结果单位为 rad/s，正好对应 SetPhysicsAngularVelocityInRadians
-                const FQuat DeltaQuat = CurRotation * ReleaseFromRotation.Inverse();
-                FVector Axis; float Angle;
-                DeltaQuat.ToAxisAndAngle(Axis, Angle);
-                // ToAxisAndAngle返回的Angle在[0, 2PI]，需要归一到[-PI, PI]避免"绕远路"的角速度
-                if (Angle > PI)
+                FVector LinearVel = FVector::ZeroVector;
+                FVector AngularVel = FVector::ZeroVector;
+                if (ComputeThrowVelocities(SamplesForThrow, LinearVel, AngularVel))
                 {
-                    Angle -= 2.f * PI;
+                    Prim->SetPhysicsLinearVelocity(LinearVel * ThrowVelocityScale, false);
+                    Prim->SetPhysicsAngularVelocityInRadians(AngularVel * ThrowAngularVelocityScale, false);
                 }
-                const FVector AngularVel = Axis * (Angle / ReleaseDeltaTime);
-
-                Prim->SetPhysicsLinearVelocity(LinearVel * ThrowVelocityScale, false);
-                Prim->SetPhysicsAngularVelocityInRadians(AngularVel * ThrowAngularVelocityScale, false);
             }
         }
     }
 
     // 关闭采样
     SetComponentTickEnabled(false);
-    bHasValidSample = false;
+    ThrowSamples.Reset();
 
     // 释放手部Mesh
     TryReleaseHandMesh();
@@ -429,4 +439,126 @@ EControllerHand UGrabComponent::GetHeldByHand() const
         return EControllerHand::Right;
     }
     return EControllerHand::AnyHand;
+}
+
+//===========================================================================
+// 投掷速度计算：时间窗口 + 峰值过滤 + 加权平均
+//===========================================================================
+
+bool UGrabComponent::ComputeThrowVelocities(const TArray<FThrowSample>& Samples, FVector& OutLinearVel, FVector& OutAngularVel) const
+{
+    OutLinearVel  = FVector::ZeroVector;
+    OutAngularVel = FVector::ZeroVector;
+
+    const int32 N = Samples.Num();
+    if (N < 2)
+    {
+        return false;
+    }
+
+    // Step 1: 相邻两两差分，得到 N-1 段瞬时速度
+    struct FSegment
+    {
+        double  MidTime;      // 段中点时间（用于峰值定位）
+        FVector LinearVel;    // 段线速度
+        FVector AngularVel;   // 段角速度（rad/s）
+        float   Speed;        // 线速度模长（用于峰值检测）
+    };
+
+    TArray<FSegment> Segments;
+    Segments.Reserve(N - 1);
+
+    for (int32 i = 1; i < N; ++i)
+    {
+        const FThrowSample& A = Samples[i - 1];
+        const FThrowSample& B = Samples[i];
+
+        const double Dt = B.Time - A.Time;
+        if (Dt <= (double)SMALL_NUMBER)
+        {
+            continue;
+        }
+        const float DtF = static_cast<float>(Dt);
+
+        FSegment Seg;
+        Seg.MidTime   = 0.5 * (A.Time + B.Time);
+        Seg.LinearVel = (B.Location - A.Location) / DtF;
+
+        // 角速度：Delta 四元数 -> AxisAngle -> 归一到 [-PI, PI] -> /dt
+        FQuat DeltaQuat = B.Rotation * A.Rotation.Inverse();
+        DeltaQuat.EnforceShortestArcWith(FQuat::Identity); // 强制走最短弧，避免绕远路
+        FVector Axis; float Angle;
+        DeltaQuat.ToAxisAndAngle(Axis, Angle);
+        if (Angle > PI)
+        {
+            Angle -= 2.f * PI;
+        }
+        Seg.AngularVel = Axis * (Angle / DtF);
+        Seg.Speed      = Seg.LinearVel.Size();
+
+        Segments.Add(Seg);
+    }
+
+    if (Segments.Num() == 0)
+    {
+        return false;
+    }
+
+    // Step 2: 峰值检测 —— 找到速度模长最大的段作为"投掷意图峰值"
+    int32 PeakIdx = 0;
+    if (bUsePeakDetection)
+    {
+        for (int32 i = 1; i < Segments.Num(); ++i)
+        {
+            if (Segments[i].Speed > Segments[PeakIdx].Speed)
+            {
+                PeakIdx = i;
+            }
+        }
+    }
+    else
+    {
+        // 不启用峰值检测时，把"峰值"设为最后一段，等价于对整个窗口做加权平均
+        PeakIdx = Segments.Num() - 1;
+    }
+
+    const double PeakTime = Segments[PeakIdx].MidTime;
+
+    // Step 3: 加权平均
+    // 只考虑 [PeakTime - Radius, PeakTime + Radius] 内的段（默认丢弃松手瞬间的减速尾巴）；
+    // 权重 = 1 - |t - PeakTime| / Radius，越靠近峰值越大。
+    // 若关闭峰值检测，则对所有段做以"最新时间"为峰值的线性衰减加权。
+    const double Radius = bUsePeakDetection
+        ? static_cast<double>(ThrowPeakWindowRadius)
+        : static_cast<double>(ThrowSampleWindow);
+
+    FVector SumLinear  = FVector::ZeroVector;
+    FVector SumAngular = FVector::ZeroVector;
+    double  SumWeight  = 0.0;
+
+    for (int32 i = 0; i < Segments.Num(); ++i)
+    {
+        const double Dist = FMath::Abs(Segments[i].MidTime - PeakTime);
+        if (Dist > Radius)
+        {
+            continue; // 峰值窗口外，丢弃（这也顺带过滤了末端反向减速的样本）
+        }
+
+        const double Weight = 1.0 - (Dist / Radius); // [0, 1]
+        SumLinear  += Segments[i].LinearVel  * Weight;
+        SumAngular += Segments[i].AngularVel * Weight;
+        SumWeight  += Weight;
+    }
+
+    if (SumWeight <= (double)SMALL_NUMBER)
+    {
+        // Fallback：直接用峰值段
+        OutLinearVel  = Segments[PeakIdx].LinearVel;
+        OutAngularVel = Segments[PeakIdx].AngularVel;
+        return true;
+    }
+
+    OutLinearVel  = SumLinear  / SumWeight;
+    OutAngularVel = SumAngular / SumWeight;
+    return true;
 }

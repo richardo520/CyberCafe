@@ -174,6 +174,28 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw", meta = (ClampMin = "0.0"))
     float ThrowAngularVelocityScale = 1.0f;
 
+    /**
+     * 投掷速度采样的时间窗口（秒）。
+     * Release 时只考虑最近这段时间内的手柄轨迹，用于过滤更早之前无关的运动。
+     * 建议 0.1 ~ 0.2s。太短容易受抖动影响，太长会把玩家"举起手"的动作也算进去。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw", meta = (ClampMin = "0.02", ClampMax = "0.5"))
+    float ThrowSampleWindow = 0.15f;
+
+    /**
+     * 峰值检测启用：只使用速度峰值前后的样本做平均，丢弃松开扳机瞬间的反向减速。
+     * 这是解决"往前抛偏下"的关键。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw")
+    bool bUsePeakDetection = true;
+
+    /**
+     * 峰值窗口半径（秒）：找到最大速度后，只取该样本前后 ± 这段时间内的样本参与平均。
+     * 建议 0.03 ~ 0.06s。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw", meta = (ClampMin = "0.01", ClampMax = "0.2"))
+    float ThrowPeakWindowRadius = 0.05f;
+
     //~ End Throw
 
 public:
@@ -257,16 +279,25 @@ private:
     UPrimitiveComponent* GetOwnerPrimitive() const;
 
     //~ Begin Throw Sampling
-    /** 上一帧手柄（MotionControllerRef）的世界位置，用于估算释放瞬间的线速度 */
-    FVector LastControllerLocation = FVector::ZeroVector;
+    /** 单个采样点：记录时间戳与手柄的世界位姿 */
+    struct FThrowSample
+    {
+        double  Time;
+        FVector Location;
+        FQuat   Rotation;
+    };
 
-    /** 上一帧手柄的世界旋转，用于估算释放瞬间的角速度 */
-    FQuat LastControllerRotation = FQuat::Identity;
+    /** 环形缓冲：Held 期间每帧 Push 一个 FThrowSample，超过 ThrowSampleWindow 的样本会被丢弃 */
+    TArray<FThrowSample> ThrowSamples;
 
-    /** 上一次采样对应的 DeltaTime */
-    float LastSampleDeltaTime = 0.f;
-
-    /** 是否已经拿到过至少一帧有效采样（避免用初值算出巨大速度） */
-    bool bHasValidSample = false;
+    /**
+     * 根据采样序列计算释放瞬间的线速度与角速度。
+     * 内部会做：相邻差分 -> 峰值检测（可选） -> 加权平均。
+     * @param Samples          按时间升序排列的采样序列，至少 2 个
+     * @param OutLinearVel     世界坐标系下线速度（cm/s）
+     * @param OutAngularVel    世界坐标系下角速度（rad/s）
+     * @return 是否成功计算
+     */
+    bool ComputeThrowVelocities(const TArray<FThrowSample>& Samples, FVector& OutLinearVel, FVector& OutAngularVel) const;
     //~ End Throw Sampling
 };
