@@ -676,6 +676,21 @@ void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionContr
     GrabbedPrim->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector, false);
     GrabbedPrim->WakeAllRigidBodies();
 
+    // 【诊断日志】输出物体质量，方便调参时判断"不跟手"是否因为重量过大
+    UE_LOG(LogTemp, Log, TEXT("[Grab] Grabbed '%s' Mass=%.2fkg  Mode=%s  Stiffness=%.1f Damping=%.1f  DisableGravity=%d"),
+        *GrabbedPrim->GetName(),
+        GrabbedPrim->GetMass(),
+        bUseAccelerationMode ? TEXT("Acceleration") : TEXT("Force"),
+        LinearStiffness, LinearDamping,
+        bDisableGravityWhileHeld ? 1 : 0);
+
+    // 按需禁用重力（避免弹簧驱动被重力拖住，重物也能轻盈跟手）
+    bCachedEnableGravity = GrabbedPrim->IsGravityEnabled();
+    if (bDisableGravityWhileHeld)
+    {
+        GrabbedPrim->SetEnableGravity(false);
+    }
+
     // 缓存并按需开启 CCD（快速挥动时防止穿墙）—— 放在速度清零后，避免CCD启用时又抓到旧速度
     if (FBodyInstance* Body = GrabbedPrim->GetBodyInstance())
     {
@@ -723,15 +738,19 @@ void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionContr
     GrabConstraint->SetDisableCollision(false);
 
     // ---- Step 5: 位置驱动 (Linear Drive) ----
+    // 【关键】先设 Acceleration Mode 再设参数，确保参数语义匹配
     GrabConstraint->SetLinearDriveParams(LinearStiffness, LinearDamping, LinearMaxForce);
     GrabConstraint->SetLinearPositionDrive(true, true, true);
     GrabConstraint->SetLinearVelocityDrive(true, true, true);
+    // Acceleration Mode: 施加的是加速度而非力，与物体质量无关  → 无论物体多重都能均匀跟手
+    GrabConstraint->ConstraintInstance.SetLinearDriveAccelerationMode(bUseAccelerationMode);
 
     // ---- Step 6: 姿态驱动 (Angular Drive)：使用 SLERP 一次性驱动全部三轴 ----
     GrabConstraint->SetAngularDriveMode(EAngularDriveMode::SLERP);
     GrabConstraint->SetAngularDriveParams(AngularStiffness, AngularDamping, AngularMaxTorque);
     GrabConstraint->SetAngularOrientationDrive(true, true);
     GrabConstraint->SetAngularVelocityDrive(true, true);
+    GrabConstraint->ConstraintInstance.SetAngularDriveAccelerationMode(bUseAccelerationMode);
 
     // ---- Step 7: 建立约束 & 设置 rest 位姿（顺序很关键！）----
     //
@@ -784,9 +803,15 @@ void UGrabComponent::TeardownGrabConstraint()
 {
     if (GrabConstraint)
     {
-        // 释放时同时取消 IgnoreActors（避免机位后玩家踢/推自己丢到地上的物体时仍被忽略）
+        // 释放时同时恢复重力、取消 IgnoreActors（避免机位后玩家踢/推自己丢到地上的物体时仍被忽略）
         if (UPrimitiveComponent* GrabbedPrim = GetOwnerPrimitive())
         {
+            // 恢复重力开关（如果抓取时禁用了）
+            if (bDisableGravityWhileHeld)
+            {
+                GrabbedPrim->SetEnableGravity(bCachedEnableGravity);
+            }
+
             if (MotionControllerRef)
             {
                 if (AActor* PawnOwner = MotionControllerRef->GetOwner())

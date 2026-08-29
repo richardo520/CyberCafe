@@ -186,29 +186,62 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics")
     EGrabPhysicsMode PhysicsMode = EGrabPhysicsMode::Kinematic;
 
-    /** 位置驱动刚度：越大越"硬"追踪手柄。建议 10000 ~ 30000 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
-    float LinearStiffness = 15000.f;
+    /**
+     * 是否启用加速度驱动模式（强烈推荐开启）。
+     *   - true  : Chaos 施加"加速度"，与物体质量无关  → 无论物体多重都能均匀跟手
+     *   - false : Chaos 施加"力"，实际加速度 = F/m  → 重物跟手非常慢（需手动调大 Stiffness）
+     * 切换时 Stiffness/Damping 的单位完全不同，需重新调参。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint")
+    bool bUseAccelerationMode = true;
 
-    /** 位置驱动阻尼：抑制抖动与回弹。建议 800 ~ 2000 */
+    /**
+     * 位置驱动刚度。
+     * Acceleration Mode 下建议 1000 ~ 4000（调大 → 追踪更硬）
+     * Force Mode 下建议 10000 ~ 50000（需要根据物体质量同步放大）
+     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
-    float LinearDamping = 1500.f;
+    float LinearStiffness = 1500.f;
+
+    /**
+     * 位置驱动阻尼。
+     * Acceleration Mode 下建议 100 ~ 300（临界阻尼 ≈ 2√Stiffness）
+     * Force Mode 下建议 800 ~ 3000
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float LinearDamping = 200.f;
 
     /** 位置驱动最大力：0 表示无限制 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
     float LinearMaxForce = 0.f;
 
-    /** 角度驱动刚度。建议 2000 ~ 8000 */
+    /**
+     * 角度驱动刚度。
+     * Acceleration Mode 下建议 500 ~ 2000
+     * Force Mode 下建议 2000 ~ 8000
+     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
-    float AngularStiffness = 3000.f;
+    float AngularStiffness = 800.f;
 
-    /** 角度驱动阻尼。建议 300 ~ 800 */
+    /**
+     * 角度驱动阻尼。
+     * Acceleration Mode 下建议 50 ~ 150
+     * Force Mode 下建议 300 ~ 800
+     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
-    float AngularDamping = 500.f;
+    float AngularDamping = 100.f;
 
     /** 角度驱动最大力矩：0 表示无限制 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
     float AngularMaxTorque = 0.f;
+
+    /**
+     * 抓取期间是否禁用重力。
+     * 开启后：弹簧驱动不需对抗重力，手感轻盈跟手（VR 交互的典型选择）
+     * 关闭后：物体依然受重力，手感"重"，但需要更大 Stiffness 才能拉住
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint")
+    bool bDisableGravityWhileHeld = true;
 
     /**
      * 抓取期间是否为被抓物体开启 CCD（连续碰撞检测）。
@@ -360,6 +393,10 @@ private:
     /** 抓取前缓存的物理参数（CCD、AngularDamping 等），释放时恢复 */
     UPROPERTY(Transient)
     bool bCachedUseCCD = false;
+
+    /** 抓取前缓存的重力开关，释放时恢复 */
+    UPROPERTY(Transient)
+    bool bCachedEnableGravity = true;
 
     /** 抓取期间使用的物理约束组件（运行时动态创建） */
     UPROPERTY(Transient)
