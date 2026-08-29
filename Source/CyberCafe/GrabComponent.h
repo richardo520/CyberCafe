@@ -12,6 +12,20 @@ class UPrimitiveComponent;
 class USkeletalMeshComponent;
 class UHapticFeedbackEffect_Base;
 class UAnimInstance;
+class UPhysicsConstraintComponent;
+
+/**
+ * 抓取物理模式
+ *   Kinematic       : 传统 Attach + 关闭物理模拟。跟手最紧但会穿墙（保留兼容行为）。
+ *   ConstraintDrive : 保持物理模拟开启，通过 PhysicsConstraint 的电机驱动物体追随手柄。
+ *                     物体能与环境正常碰撞，撞墙会被挡住，玩家的手可能会"超前"于物体。
+ */
+UENUM(BlueprintType)
+enum class EGrabPhysicsMode : uint8
+{
+    Kinematic       UMETA(DisplayName = "Kinematic (Attach)"),
+    ConstraintDrive UMETA(DisplayName = "Constraint Drive (Physical)")
+};
 
 /**
  * 抓取类型枚举
@@ -161,6 +175,57 @@ public:
 
     //~ End Attach / Physics Helpers
 
+    //~ Begin Constraint Drive (工程内新增：物理约束驱动抓取，允许与环境碰撞)
+
+    /**
+     * 抓取时的物理模式。
+     *   - Kinematic       : 关物理 + Attach（会穿墙，跟手最紧）
+     *   - ConstraintDrive : 保持物理 + 约束电机驱动（能碰撞，撞墙会被挡住）
+     * 仅对 GrabType = Free / Snap 生效。SnapInPlace / Custom 不受影响。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics")
+    EGrabPhysicsMode PhysicsMode = EGrabPhysicsMode::Kinematic;
+
+    /** 位置驱动刚度：越大越"硬"追踪手柄。建议 10000 ~ 30000 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float LinearStiffness = 15000.f;
+
+    /** 位置驱动阻尼：抑制抖动与回弹。建议 800 ~ 2000 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float LinearDamping = 1500.f;
+
+    /** 位置驱动最大力：0 表示无限制 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float LinearMaxForce = 0.f;
+
+    /** 角度驱动刚度。建议 2000 ~ 8000 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float AngularStiffness = 3000.f;
+
+    /** 角度驱动阻尼。建议 300 ~ 800 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float AngularDamping = 500.f;
+
+    /** 角度驱动最大力矩：0 表示无限制 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float AngularMaxTorque = 0.f;
+
+    /**
+     * 抓取期间是否为被抓物体开启 CCD（连续碰撞检测）。
+     * 快速挥动薄物体时能显著减少穿墙，但性能开销略增。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint")
+    bool bUseCCDWhileHeld = true;
+
+    /**
+     * ConstraintDrive 模式下，物体离手柄超过此距离(cm)会自动松开。
+     * 防止约束被无限拉伸或穿墙滞留。 <= 0 表示不做距离检查。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Physics|Constraint", meta = (ClampMin = "0.0"))
+    float BreakDistance = 60.f;
+
+    //~ End Constraint Drive
+
     //~ Begin Throw (投掷手感)
 
     /**
@@ -277,6 +342,30 @@ private:
 
     /** 获取所属Actor上的可模拟物理的Primitive组件（通常是RootComponent） */
     UPrimitiveComponent* GetOwnerPrimitive() const;
+
+    //~ Begin Constraint Drive Runtime
+
+    /**
+     * 为 ConstraintDrive 模式创建/配置物理约束：
+     *   - 一端接 MotionController（Kinematic）
+     *   - 一端接被抓物体的 Root Primitive（Simulating）
+     * 约束的"目标位姿"通过 SetConstraintReferenceFrame 设定为当前物体与手柄的相对位姿，
+     * 之后手柄每帧移动时，物体会被电机拉着追过来。
+     */
+    void SetupGrabConstraint(UMotionControllerComponent* MotionController);
+
+    /** 释放/销毁抓取约束 */
+    void TeardownGrabConstraint();
+
+    /** 抓取前缓存的物理参数（CCD、AngularDamping 等），释放时恢复 */
+    UPROPERTY(Transient)
+    bool bCachedUseCCD = false;
+
+    /** 抓取期间使用的物理约束组件（运行时动态创建） */
+    UPROPERTY(Transient)
+    TObjectPtr<UPhysicsConstraintComponent> GrabConstraint = nullptr;
+
+    //~ End Constraint Drive Runtime
 
     //~ Begin Throw Sampling
     /** 单个采样点：记录时间戳与手柄的世界位姿 */

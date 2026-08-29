@@ -4,6 +4,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "MotionControllerComponent.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -70,10 +71,26 @@ void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
         {
             ++RemoveCount;
         }
-        // 至少保留2个样本（哪怕在窗口之外），保证释放时能算出速度
+        // 至少2个样本（哪怕在窗口之外），保证释放时能算出速度
         if (RemoveCount > 0 && ThrowSamples.Num() - RemoveCount >= 2)
         {
             ThrowSamples.RemoveAt(0, RemoveCount, EAllowShrinking::No);
+        }
+    }
+
+    // ConstraintDrive 模式：若物体被环境卡住、手柄拉得太远，自动断开约束，避免弹簧无限拉伸
+    if (bIsHeld && GrabConstraint && MotionControllerRef && BreakDistance > 0.f)
+    {
+        if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
+        {
+            const float DistSq = FVector::DistSquared(
+                Prim->GetComponentLocation(),
+                MotionControllerRef->GetComponentLocation());
+            if (DistSq > BreakDistance * BreakDistance)
+            {
+                // 主动释放（会走 TryRelease 里拆约束 + 派发 OnDropped）
+                TryRelease();
+            }
         }
     }
 }
@@ -138,30 +155,67 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
 
 void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
 {
-    
+    // ConstraintDrive 模式仅对 Free / Snap 生效；SnapInPlace / Custom 保持原有行为
+    const bool bUseConstraint =
+        (PhysicsMode == EGrabPhysicsMode::ConstraintDrive) &&
+        (GrabType == EGrabType::Free || GrabType == EGrabType::Snap);
+
     switch (GrabType)
     {
     case EGrabType::Free:
     {
-        // 保持相对手部当前偏移，直接使用KeepWorld规则附着
-        SetPrimitiveCompPhysics(false);
-        AttachParentToMotionController(MotionController);
-        bIsHeld = true;
+        if (bUseConstraint)
+        {
+            // 保持物理开启，不 Attach，仅创建约束驱动物体追随手柄
+            SetPrimitiveCompPhysics(true);
+            SetupGrabConstraint(MotionController);
+            bIsHeld = true;
+        }
+        else
+        {
+            // 保持相对手部当前偏移，直接使用KeepWorld规则附着
+            SetPrimitiveCompPhysics(false);
+            AttachParentToMotionController(MotionController);
+            bIsHeld = true;
+        }
         break;
     }
     case EGrabType::Snap:
     {
-        // 吸附到手部原点，使用本GrabComponent自身的相对变换作为吸附偏移
-        SetPrimitiveCompPhysics(false);
-        AttachParentToMotionController(MotionController);
-        bIsHeld = true;
-        GetAttachParent()->SetRelativeRotation(GetRelativeRotation().GetInverse(), false, nullptr,ETeleportType::TeleportPhysics);
-            
-        FVector3d ComponentLocation = GetComponentLocation();
-        FVector3d OwnerLocation = GetAttachParent()->GetComponentLocation();
-        FVector3d MotionControllerLocation = MotionController->GetComponentLocation();
-        FVector3d Offset = MotionControllerLocation - (ComponentLocation - OwnerLocation);
-        GetAttachParent()->SetWorldLocation(Offset, false, nullptr,ETeleportType::TeleportPhysics);
+        if (bUseConstraint)
+        {
+            // Snap 下先将物体 Teleport 到吸附位姿，再建约束
+            SetPrimitiveCompPhysics(true);
+            if (USceneComponent* Parent = GetAttachParent())
+            {
+                // 使用本GrabComponent自身的相对变换作为吸附偏移
+                Parent->SetWorldRotation(
+                    MotionController->GetComponentQuat() * GetRelativeRotation().Quaternion().Inverse(),
+                    false, nullptr, ETeleportType::TeleportPhysics);
+
+                const FVector ComponentLocation = GetComponentLocation();
+                const FVector OwnerLocation = Parent->GetComponentLocation();
+                const FVector MotionControllerLocation = MotionController->GetComponentLocation();
+                const FVector Offset = MotionControllerLocation - (ComponentLocation - OwnerLocation);
+                Parent->SetWorldLocation(Offset, false, nullptr, ETeleportType::TeleportPhysics);
+            }
+            SetupGrabConstraint(MotionController);
+            bIsHeld = true;
+        }
+        else
+        {
+            // 吸附到手部原点，使用本GrabComponent自身的相对变换作为吸附偏移
+            SetPrimitiveCompPhysics(false);
+            AttachParentToMotionController(MotionController);
+            bIsHeld = true;
+            GetAttachParent()->SetRelativeRotation(GetRelativeRotation().GetInverse(), false, nullptr,ETeleportType::TeleportPhysics);
+                
+            FVector3d ComponentLocation = GetComponentLocation();
+            FVector3d OwnerLocation = GetAttachParent()->GetComponentLocation();
+            FVector3d MotionControllerLocation = MotionController->GetComponentLocation();
+            FVector3d Offset = MotionControllerLocation - (ComponentLocation - OwnerLocation);
+            GetAttachParent()->SetWorldLocation(Offset, false, nullptr,ETeleportType::TeleportPhysics);
+        }
         break;
     }
     case EGrabType::SnapInPlace:
@@ -198,13 +252,37 @@ bool UGrabComponent::TryRelease()
     // 拷贝一份采样出来，等下切物理之后再用（先切物理再Set速度）
     TArray<FThrowSample> SamplesForThrow = ThrowSamples;
 
+    // 先拆除 ConstraintDrive 模式下的物理约束（如果有）
+    // 注意：必须在 TrySimulateOnDrop 之前拆，否则 Detach 时会被约束盉住。
+    const bool bWasConstraintDrive = (GrabConstraint != nullptr);
+    if (bWasConstraintDrive)
+    {
+        TeardownGrabConstraint();
+    }
+
     switch (GrabType)
     {
     case EGrabType::Free:
     case EGrabType::Snap:
     {
-        TrySimulateOnDrop();
-        bIsHeld = false;
+        if (bWasConstraintDrive)
+        {
+            // ConstraintDrive 模式下本就开着物理，无需 TrySimulateOnDrop 重新开物理
+            // 但需要恢复 CCD 等临时修改的属性
+            if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
+            {
+                if (bUseCCDWhileHeld)
+                {
+                    Prim->GetBodyInstance()->bUseCCD = bCachedUseCCD;
+                }
+            }
+            bIsHeld = false;
+        }
+        else
+        {
+            TrySimulateOnDrop();
+            bIsHeld = false;
+        }
         break;
     }
     case EGrabType::SnapInPlace:
@@ -561,4 +639,102 @@ bool UGrabComponent::ComputeThrowVelocities(const TArray<FThrowSample>& Samples,
     OutLinearVel  = SumLinear  / SumWeight;
     OutAngularVel = SumAngular / SumWeight;
     return true;
+}
+
+//===========================================================================
+// ConstraintDrive：物理约束驱动抓取（可与环境碰撞）
+//===========================================================================
+
+void UGrabComponent::SetupGrabConstraint(UMotionControllerComponent* MotionController)
+{
+    if (MotionController == nullptr)
+    {
+        return;
+    }
+
+    UPrimitiveComponent* GrabbedPrim = GetOwnerPrimitive();
+    if (GrabbedPrim == nullptr)
+    {
+        return;
+    }
+
+    // 抓取前若有残留约束，先清理，避免重复创建
+    if (GrabConstraint)
+    {
+        TeardownGrabConstraint();
+    }
+
+    // 缓存并按需开启 CCD（快速挥动时防止穿墙）
+    if (FBodyInstance* Body = GrabbedPrim->GetBodyInstance())
+    {
+        bCachedUseCCD = Body->bUseCCD;
+        if (bUseCCDWhileHeld)
+        {
+            Body->bUseCCD = true;
+        }
+    }
+
+    // 让被抓物体唤醒并保持物理模拟
+    GrabbedPrim->SetSimulatePhysics(true);
+    GrabbedPrim->WakeAllRigidBodies();
+
+    // 动态创建 PhysicsConstraint，附着到 MotionController 上（约束的世界位姿 = 手柄当前位姿）
+    GrabConstraint = NewObject<UPhysicsConstraintComponent>(this, NAME_None, RF_Transient);
+    if (GrabConstraint == nullptr)
+    {
+        return;
+    }
+
+    GrabConstraint->SetupAttachment(MotionController);
+    GrabConstraint->RegisterComponent();
+    // 把约束放到当前手柄位置，作为"目标锚点"
+    GrabConstraint->SetWorldLocationAndRotation(
+        MotionController->GetComponentLocation(),
+        MotionController->GetComponentQuat());
+
+    // ---- 关键配置：允许所有轴的自由度（不锁死），完全靠 Drive 拉过去 ----
+    GrabConstraint->SetLinearXLimit(LCM_Free, 0.f);
+    GrabConstraint->SetLinearYLimit(LCM_Free, 0.f);
+    GrabConstraint->SetLinearZLimit(LCM_Free, 0.f);
+    GrabConstraint->SetAngularSwing1Limit(ACM_Free, 0.f);
+    GrabConstraint->SetAngularSwing2Limit(ACM_Free, 0.f);
+    GrabConstraint->SetAngularTwistLimit(ACM_Free, 0.f);
+
+    // 不做本地碰撞禁用 —— 我们希望物体能撞环境，但需要让物体和手部Mesh互相不冲突
+    // 手部Mesh 在 VRPawn 里已经设为 NoCollision，所以这里不用额外处理
+    GrabConstraint->SetDisableCollision(false);
+
+    // ---- 位置驱动 (Linear Drive) ----
+    GrabConstraint->SetLinearDriveParams(LinearStiffness, LinearDamping, LinearMaxForce);
+    GrabConstraint->SetLinearPositionDrive(true, true, true);
+    GrabConstraint->SetLinearVelocityDrive(true, true, true);
+
+    // ---- 姿态驱动 (Angular Drive)：使用 SLERP 一次性驱动全部三轴，效果最稳定 ----
+    GrabConstraint->SetAngularDriveMode(EAngularDriveMode::SLERP);
+    GrabConstraint->SetAngularDriveParams(AngularStiffness, AngularDamping, AngularMaxTorque);
+    GrabConstraint->SetAngularOrientationDrive(true, true);
+    GrabConstraint->SetAngularVelocityDrive(true, true);
+
+    // ---- 建立约束 ----
+    // Component1 = MotionController 的祖先 Primitive（Kinematic），当此手柄没有 BodyInstance 时，
+    // 我们用 nullptr 让约束的"一端"锚在世界（且约束组件本身 attach 在 MotionController 上，会跟着走）
+    // Component2 = 被抓物体的 Root Primitive（Simulating）
+    UPrimitiveComponent* ControllerAsPrim = Cast<UPrimitiveComponent>(MotionController);
+    GrabConstraint->SetConstrainedComponents(
+        ControllerAsPrim, NAME_None,   // 一端：手柄（若非 Primitive 则为 nullptr，等价于锚在世界）
+        GrabbedPrim,      NAME_None);  // 一端：被抓物体
+
+    // 目标位姿 = 抓取瞬间物体相对手柄的位姿（保持"接触时的相对偏移不变"，类似 Free 模式的手感）
+    // ConstraintFrame 通过 SetConstraintReferenceFrame 更细粒度控制；此处使用默认帧即可，
+    // 因为 SetConstrainedComponents 会以两个 body 当前的相对位姿作为 rest state。
+}
+
+void UGrabComponent::TeardownGrabConstraint()
+{
+    if (GrabConstraint)
+    {
+        GrabConstraint->BreakConstraint();
+        GrabConstraint->DestroyComponent();
+        GrabConstraint = nullptr;
+    }
 }
