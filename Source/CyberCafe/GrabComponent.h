@@ -161,6 +161,21 @@ public:
 
     //~ End Attach / Physics Helpers
 
+    //~ Begin Throw (投掷手感)
+
+    /**
+     * 释放时把手部速度传给物体的放大系数。
+     * VR 中真实速度直接给玩家常觉得"太轻飘"，1.1~1.3 通常手感更跟手。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw", meta = (ClampMin = "0.0"))
+    float ThrowVelocityScale = 1.1f;
+
+    /** 释放时角速度的放大系数 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Throw", meta = (ClampMin = "0.0"))
+    float ThrowAngularVelocityScale = 1.0f;
+
+    //~ End Throw
+
 public:
     /** 抓取类型 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab")
@@ -240,4 +255,18 @@ private:
 
     /** 获取所属Actor上的可模拟物理的Primitive组件（通常是RootComponent） */
     UPrimitiveComponent* GetOwnerPrimitive() const;
+
+    //~ Begin Throw Sampling
+    /** 上一帧手柄（MotionControllerRef）的世界位置，用于估算释放瞬间的线速度 */
+    FVector LastControllerLocation = FVector::ZeroVector;
+
+    /** 上一帧手柄的世界旋转，用于估算释放瞬间的角速度 */
+    FQuat LastControllerRotation = FQuat::Identity;
+
+    /** 上一次采样对应的 DeltaTime */
+    float LastSampleDeltaTime = 0.f;
+
+    /** 是否已经拿到过至少一帧有效采样（避免用初值算出巨大速度） */
+    bool bHasValidSample = false;
+    //~ End Throw Sampling
 };

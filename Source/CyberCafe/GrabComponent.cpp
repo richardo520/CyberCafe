@@ -12,8 +12,9 @@
 
 UGrabComponent::UGrabComponent()
 {
-    // 该组件不需要每帧Tick，抓取状态维护通过附着/物理系统完成
-    PrimaryComponentTick.bCanEverTick = false;
+    // 启用Tick：仅在Held期间用于采样手柄的位置/旋转，估算释放瞬间的线/角速度
+    PrimaryComponentTick.bCanEverTick = true;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
 
     // 默认配置
     GrabType = EGrabType::Free;
@@ -49,6 +50,15 @@ void UGrabComponent::BeginPlay()
 void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+    // 仅在被持有且有有效手柄时采样，用于估算释放瞬间的线/角速度
+    if (bIsHeld && MotionControllerRef && DeltaTime > SMALL_NUMBER)
+    {
+        LastControllerLocation = MotionControllerRef->GetComponentLocation();
+        LastControllerRotation = MotionControllerRef->GetComponentQuat();
+        LastSampleDeltaTime    = DeltaTime;
+        bHasValidSample        = true;
+    }
 }
 
 UPrimitiveComponent* UGrabComponent::GetOwnerPrimitive() const
@@ -88,6 +98,13 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
             StopPull();
             MotionControllerRef = MotionController;
             TryCaptureHandMesh();
+
+            // 打开采样：把当前位姿作为第一帧基准，下一帧Tick才会得到有效速度
+            LastControllerLocation = MotionController->GetComponentLocation();
+            LastControllerRotation = MotionController->GetComponentQuat();
+            LastSampleDeltaTime    = 0.f;
+            bHasValidSample        = false;
+            SetComponentTickEnabled(true);
 
             // 播放触觉反馈
             if (OnGrabHapticEffect)
@@ -151,6 +168,12 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
 
 bool UGrabComponent::TryRelease()
 {
+    // 先在切物理之前把手柄的"最新一帧"位姿更新到Last，得到最贴近释放瞬间的速度
+    // （Tick每帧采样，但玩家松开扳机到执行TryRelease之间可能又过了小半帧）
+    float ReleaseDeltaTime = LastSampleDeltaTime;
+    FVector ReleaseFromLocation = LastControllerLocation;
+    FQuat   ReleaseFromRotation = LastControllerRotation;
+
     switch (GrabType)
     {
     case EGrabType::Free:
@@ -171,7 +194,43 @@ bool UGrabComponent::TryRelease()
     {
         return false;
     }
-    
+
+    // === 投掷手感：把手柄最近一帧的线/角速度直接Set到物理体上 ===
+    // 只有在 Free/Snap 且真的进入模拟物理时才有意义
+    if (bHasValidSample && MotionControllerRef && ReleaseDeltaTime > SMALL_NUMBER)
+    {
+        if (UPrimitiveComponent* Prim = GetOwnerPrimitive())
+        {
+            if (Prim->IsSimulatingPhysics())
+            {
+                const FVector CurLocation = MotionControllerRef->GetComponentLocation();
+                const FQuat   CurRotation = MotionControllerRef->GetComponentQuat();
+
+                // 线速度：位置差 / dt
+                const FVector LinearVel = (CurLocation - ReleaseFromLocation) / ReleaseDeltaTime;
+
+                // 角速度：从上一帧旋转到当前旋转的四元数差，转成 AxisAngle，再除以 dt
+                // 结果单位为 rad/s，正好对应 SetPhysicsAngularVelocityInRadians
+                const FQuat DeltaQuat = CurRotation * ReleaseFromRotation.Inverse();
+                FVector Axis; float Angle;
+                DeltaQuat.ToAxisAndAngle(Axis, Angle);
+                // ToAxisAndAngle返回的Angle在[0, 2PI]，需要归一到[-PI, PI]避免"绕远路"的角速度
+                if (Angle > PI)
+                {
+                    Angle -= 2.f * PI;
+                }
+                const FVector AngularVel = Axis * (Angle / ReleaseDeltaTime);
+
+                Prim->SetPhysicsLinearVelocity(LinearVel * ThrowVelocityScale, false);
+                Prim->SetPhysicsAngularVelocityInRadians(AngularVel * ThrowAngularVelocityScale, false);
+            }
+        }
+    }
+
+    // 关闭采样
+    SetComponentTickEnabled(false);
+    bHasValidSample = false;
+
     // 释放手部Mesh
     TryReleaseHandMesh();
     OnDropped.Broadcast();
