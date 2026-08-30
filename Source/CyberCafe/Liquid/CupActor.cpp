@@ -40,6 +40,7 @@ ACupActor::ACupActor()
     VolumeWidgetComp = CreateDefaultSubobject<UWidgetComponent>(TEXT("VolumeWidgetComp"));
     VolumeWidgetComp->SetupAttachment(GetRootComponent());
     VolumeWidgetComp->SetRelativeLocation(VolumeWidgetOffset);
+    VolumeWidgetComp->SetRelativeScale3D(FVector(0.05f)); // 默认缩放：DrawSize 400×80 → 世界里约 20cm×4cm
     VolumeWidgetComp->SetWidgetSpace(EWidgetSpace::World);
     VolumeWidgetComp->SetDrawSize(VolumeWidgetDrawSize);
     VolumeWidgetComp->SetPivot(FVector2D(0.5f, 0.5f));

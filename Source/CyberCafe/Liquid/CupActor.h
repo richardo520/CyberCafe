@@ -51,7 +51,7 @@ public:
 
     /** Widget 面板在 World Space 下的绘制尺寸（像素） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")
-    FVector2D VolumeWidgetDrawSize = FVector2D(200.f, 60.f);
+    FVector2D VolumeWidgetDrawSize = FVector2D(400.f, 80.f);
 
     /** 是否让 Widget 每帧朝向玩家相机（只保留 Yaw，避免歪脖子） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")
