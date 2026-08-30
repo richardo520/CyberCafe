@@ -82,6 +82,52 @@ public:
     TObjectPtr<USoundBase> ReattachSound;
 
     //=====================================================================
+    // "砸桌开盖"（SlamOpen）：握着瓶子带力撞击时，瓶盖向上飞出
+    //=====================================================================
+
+    /**
+     * 触发砸桌开盖的法向冲量阈值 (kg·cm/s，即 |NormalImpulse|)。
+     * 参考：1kg 物体 4m/s 撞墙 ≈ 冲量 400～800。
+     * 设小 → 轻碰就能开盖（容易误触发）；设大 → 需要重砸。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen", meta = (ClampMin = "0.0"))
+    float SlamOpenImpulseThreshold = 800.f;
+
+    /**
+     * 瓶盖飞出的初速度大小 (cm/s)。
+     * 建议 300 ~ 800（现实可乐瓶盖弹开大约 3~5m/s）。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen", meta = (ClampMin = "0.0"))
+    float SlamOpenLaunchSpeed = 400.f;
+
+    /**
+     * 瓶盖飞出后的自旋角速度 (deg/s)，增强观感。 
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen", meta = (ClampMin = "0.0"))
+    float SlamOpenSpinSpeedDegs = 720.f;
+
+    /**
+     * 飞出方向上"随机圆锥拖杆"的半角度 (deg)：
+     * 0   = 飞出方向完全确定（主方向）
+     * 15° = 在主方向周围 ±15° 随机（推荐）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen", meta = (ClampMin = "0.0", ClampMax = "45.0"))
+    float SlamOpenScatterDegs = 15.f;
+
+    /**
+     * 撞击反冲方向在飞出速度中的权重（0~1）：
+     * 0    = 完全沿瓶口向上（垂直喷发感）
+     * 0.3  = 以向上为主，叠加少量反冲（推荐）
+     * 1    = 完全沿撞击反方向（物理感最强但不像拔盖）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float SlamOpenReboundWeight = 0.3f;
+
+    /** 砸桌开盖时的音效（可选；为空时回退到 DetachSound） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|SlamOpen")
+    TObjectPtr<USoundBase> SlamOpenSound;
+
+    //=====================================================================
     // 运行时
     //=====================================================================
 
@@ -128,6 +174,21 @@ protected:
     /** GrabComp 广播的释放回调 */
     UFUNCTION()
     void HandleDropped();
+
+    /**
+     * 瓶身碰撞回调（订阅 OwnerBottle->ContainerMesh->OnComponentHit）。
+     * 当玩家握着瓶子撞击到足够强的环境时，自动弹飞盖子。
+     */
+    UFUNCTION()
+    void HandleBottleHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
+                         UPrimitiveComponent* OtherComp, FVector NormalImpulse,
+                         const FHitResult& Hit);
+
+    /**
+     * “砸桌开盖”实际执行：盖子从瓶口脱离，开启物理，施加向上+反冲+随机方向的速度将其弹出。
+     * @param HitNormal  撞击面的法向（世界空间），用于计算反冲方向
+     */
+    void SlamOpenCap(const FVector& HitNormal);
 
 private:
     /** 是否处于"已抓住但尚未拔下来"的中间状态（Custom Grab 生效但仍附在瓶口 Socket 上） */

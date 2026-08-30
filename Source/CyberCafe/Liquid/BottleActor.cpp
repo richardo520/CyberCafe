@@ -44,6 +44,13 @@ void ABottleActor::BeginPlay()
 {
     Super::BeginPlay();
 
+    // 开启瓶身刚体的碰撞通知：这样 UPrimitiveComponent::OnComponentHit 才会派发。
+    // BottleCapActor 需要监听瓶身 Hit 事件以实现"砸桌开盖"。
+    if (ContainerMesh)
+    {
+        ContainerMesh->SetNotifyRigidBodyCollision(true);
+    }
+
     // 若指定了瓶盖类，Spawn 一个盖子并绑定
     if (CapClass && bStartCapped)
     {
