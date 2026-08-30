@@ -38,11 +38,4 @@ protected:
      */
     UPROPERTY(meta = (BindWidgetOptional))
     TObjectPtr<UTextBlock> VolumeText;
-
-    /**
-     * 显示格式，默认 "%.0f / %.0f mL"。
-     * 使用两个 %f 占位符：第一个是当前mL，第二个是最大mL。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")
-    FString VolumeFormat = TEXT("%.0f / %.0f mL");
 };

@@ -10,7 +10,7 @@ void ULiquidVolumeWidget::UpdateVolume(float CurrentML, float MaxML)
         return;
     }
 
-    // 用配置的 Format 格式化。默认 "%.0f / %.0f mL" → "120 / 200 mL"
-    const FString Text = FString::Printf(*VolumeFormat, CurrentML, MaxML);
+    // 固定整数显示，例："120 mL / 200 mL"
+    const FString Text = FString::Printf(TEXT("%.0f mL / %.0f mL"), CurrentML, MaxML);
     VolumeText->SetText(FText::FromString(Text));
 }
