@@ -374,7 +374,8 @@ void ABottleCapActor::SlamOpenCap(const FVector& HitNormal)
     BottleMesh->OnComponentHit.RemoveDynamic(this, &ABottleCapActor::HandleBottleHit);
 
     // 1) 从瓶身脱离（保持世界位姿），开启物理，恢复正常碰撞档案让盖子能撞环境
-    DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+    //    AActor 的接口叫 DetachFromActor（它内部会走 RootComponent->DetachFromComponent）
+    DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
     CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
     CapMesh->SetSimulatePhysics(true);
 
