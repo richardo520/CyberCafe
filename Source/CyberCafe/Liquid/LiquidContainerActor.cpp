@@ -2,6 +2,7 @@
 
 #include "Liquid/LiquidContainerActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
@@ -45,6 +46,10 @@ ALiquidContainerActor::ALiquidContainerActor()
     PourFX->SetAutoActivate(false);
     PourFX->bAutoActivate = false;
 
+    // 杯口/接液口锚点：美术在蓝图里拖到杯子开口中心，搭配 PourTargetRadius 使用
+    PourTargetPoint = CreateDefaultSubobject<USceneComponent>(TEXT("PourTargetPoint"));
+    PourTargetPoint->SetupAttachment(ContainerMesh);
+
     // 液体状态默认值
     FillAmount    = 0.5f;
     MaxVolumeML   = 750.f;   // 一瓶红酒 = 750mL
@@ -84,6 +89,10 @@ ALiquidContainerActor::ALiquidContainerActor()
     PourTraceRadius         = 6.f;     // 6cm "胖射线"，兜住水流弧度的落点偏差
     PourTraceForwardOffset  = 0.f;
     bDebugDrawTrace         = false;
+
+    // 杯口判定默认关闭（对瓶子无影响）；
+    // 杯子子类或蓝图中将其设成大于 0 的值即可启用。
+    PourTargetRadius        = 0.f;
 
     SplashEffectTemplate    = nullptr;
     bEnableSplash           = true;
@@ -559,6 +568,40 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
         {
             if (TargetContainer != this && TargetContainer->bAcceptLiquidFromOthers)
             {
+                // === 杯口判定 ===
+                // 只有当命中点落在目标容器 PourTargetPoint 的水平圆形区域内（半径 = PourTargetRadius），
+                // 才认为是"倒进了杯口"。否则视为洒到杯身侧壁/底部，直接返回不接液。
+                // 说明：
+                //   - 用"XY 水平距离"而不是"3D 距离"，避免 SphereTrace 命中点在杯口边缘略高时被判定失败；
+                //   - Z 方向不做限制（水从上往下落，命中点必然低于杯口锚点，反而合理）；
+                //   - 若 PourTargetRadius <= 0 或 PourTargetPoint 缺失，则保持旧行为（命中即接液）。
+                bool bHitInsideMouth = true;
+                if (TargetContainer->PourTargetRadius > 0.f && TargetContainer->PourTargetPoint)
+                {
+                    const FVector MouthWS = TargetContainer->PourTargetPoint->GetComponentLocation();
+                    const FVector Delta   = Hit.ImpactPoint - MouthWS;
+                    const float   DistXY  = FVector2D(Delta.X, Delta.Y).Size();
+                    bHitInsideMouth = (DistXY <= TargetContainer->PourTargetRadius);
+
+#if ENABLE_DRAW_DEBUG
+                    if (bDebugDrawTrace)
+                    {
+                        // 用绿/红圆盘可视化杯口判定：绿=命中，红=未命中
+                        const FColor CircleColor = bHitInsideMouth ? FColor::Green : FColor::Red;
+                        DrawDebugCircle(GetWorld(), MouthWS, TargetContainer->PourTargetRadius,
+                                        32, CircleColor, false, 0.f, 0,
+                                        0.5f, FVector(1, 0, 0), FVector(0, 1, 0), false);
+                    }
+#endif
+                }
+
+                if (!bHitInsideMouth)
+                {
+                    // 命中的是杯身侧壁/底部——液体已在上面 ConsumeLiquid 里扣掉，
+                    // 视觉上就当作"洒到杯子外表面"，不加进杯子里。
+                    return;
+                }
+
                 // 1) 把源容器的液体材质"简单粗暴"地赋给目标容器（含 MI 的颜色一起传递）
                 //    只在材质不同的时候才换，避免每帧 ReinitializeSystem。
                 if (LiquidMaterialAsset && TargetContainer->LiquidMaterialAsset != LiquidMaterialAsset)

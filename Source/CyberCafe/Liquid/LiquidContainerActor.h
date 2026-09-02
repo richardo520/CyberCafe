@@ -12,6 +12,7 @@ class UMaterialInterface;
 class UGrabComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
+class USceneComponent;
 
 /**
  * 液体变化事件
@@ -116,6 +117,19 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components", meta = (AllowPrivateAccess = "true"))
     TObjectPtr<UNiagaraComponent> PourFX;
 
+    /**
+     * “杯口/接液口”锚点组件。
+     *
+     * ★ 用法：美术在蓝图里将其位置拖到杯子/瓶子开口的中心上，
+     *   搭配 PourTargetRadius 定义开口内的接液判定区域。
+     *
+     * 当本容器作为“接液方”时（bAcceptLiquidFromOthers = true）：
+     *   导液命中本 Actor 后，命中点到此锚点的“水平距离”必须 ≤ PourTargetRadius，
+     *   否则视为“没倒进杯口”（直接洒掉）。
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
+    TObjectPtr<USceneComponent> PourTargetPoint;
+
     //=====================================================================
     // Niagara 模板 & 资产（LiquidMaterials_VFXPack）
     //=====================================================================
@@ -195,6 +209,16 @@ public:
     /** 是否在编辑器中绘制倒液射线（调试用；打包版本自动关闭） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|Debug")
     bool bDebugDrawTrace;
+
+    /**
+     * 杯口/接液口判定半径（cm，以杯子局部 XY 平面为准）。
+     *
+     * 仅在本容器 bAcceptLiquidFromOthers = true 且 PourTargetRadius > 0 时生效：
+     *   - 倒液命中本 Actor 后，命中点到 PourTargetPoint 世界位置的 XY 平面距离需 ≤ 此值。
+     *   - 设为 0 或负数 ⇒ 关闭“杯口判定”，回到旧行为（命中任意部位都接液）。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float PourTargetRadius;
 
     //=====================================================================
     // 倒液（Pour）—— Niagara 资产 & FX 开关
