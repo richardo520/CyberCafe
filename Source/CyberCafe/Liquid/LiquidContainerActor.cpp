@@ -231,21 +231,25 @@ void ALiquidContainerActor::RefreshLiquidFX()
     }
 
     // 容器空了则隐藏整个液体网格：
-    // P_Liquid 内部即使 Fill=0 也会保留一个“最小可见层”，
-    // 直接 Deactivate 才能彻底消失；下次有液体时再 Activate。
+    // P_Liquid 内部即使 Fill=0 也会保留一个"最小可见层"，
+    // 且普通 Deactivate 只停止 Spawn、已有粒子会走完 lifetime 才消失（视觉上像"倒不干净"）。
+    // 因此这里：
+    //   1) 先把 User.Fill = 0 写下去，防止残留渲染时还用旧值
+    //   2) 用 DeactivateImmediate 立即清除所有存活粒子，让瓶底那点液面瞬间消失
     if (FillAmount <= KINDA_SMALL_NUMBER)
     {
+        LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"), 0.f);
         if (LiquidFX->IsActive())
         {
-            LiquidFX->Deactivate();
+            LiquidFX->DeactivateImmediate();
         }
         return;
     }
 
-    // 从空变非空：重新启动 LiquidFX
+    // 从空变非空：重新启动 LiquidFX（bReset=true 确保 Niagara 用当前 User 参数重新生成液面）
     if (!LiquidFX->IsActive())
     {
-        LiquidFX->Activate(/*bReset=*/false);
+        LiquidFX->Activate(/*bReset=*/true);
     }
 
     // 只写入 P_Liquid 定义的 User 参数。
@@ -471,9 +475,9 @@ void ALiquidContainerActor::StopPouring()
 
     if (PourFX)
     {
-        // 立即清除已在飞的 Ribbon 粒子，避免“余流”；
-        // 下次 Activate(bReset=true) 可直接重启。
-        PourFX->DeactivateImmediate();
+        // 不销毁，只停止 Spawn；已在飞的 Ribbon 粒子按 lifetime 自然消散，
+        // 视觉上更贴近真实的"水流断尾"过渡。下次 Activate 可直接重启。
+        PourFX->Deactivate();
     }
 }
 
