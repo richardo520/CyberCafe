@@ -206,7 +206,15 @@ float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
         return 0.f;
     }
 
-    const float NewTotalML = CurrentML - ConsumedML;
+    float NewTotalML = CurrentML - ConsumedML;
+
+    // “尾油”阅值：剩下不到 0.5mL 一律归零，
+    // 避免 Fill 浮点残留（如 0.00001）导致瓶底总看到一小层液体没法排干。
+    if (NewTotalML < 0.5f)
+    {
+        NewTotalML = 0.f;
+    }
+
     FillAmount = FMath::Clamp(NewTotalML / MaxVolumeML, 0.f, 1.f);
 
     RefreshLiquidFX();
@@ -220,6 +228,24 @@ void ALiquidContainerActor::RefreshLiquidFX()
     if (!LiquidFX)
     {
         return;
+    }
+
+    // 容器空了则隐藏整个液体网格：
+    // P_Liquid 内部即使 Fill=0 也会保留一个“最小可见层”，
+    // 直接 Deactivate 才能彻底消失；下次有液体时再 Activate。
+    if (FillAmount <= KINDA_SMALL_NUMBER)
+    {
+        if (LiquidFX->IsActive())
+        {
+            LiquidFX->Deactivate();
+        }
+        return;
+    }
+
+    // 从空变非空：重新启动 LiquidFX
+    if (!LiquidFX->IsActive())
+    {
+        LiquidFX->Activate(/*bReset=*/false);
     }
 
     // 只写入 P_Liquid 定义的 User 参数。
@@ -445,8 +471,9 @@ void ALiquidContainerActor::StopPouring()
 
     if (PourFX)
     {
-        // 不销毁，只关闭；下次 Activate 可直接重启
-        PourFX->Deactivate();
+        // 立即清除已在飞的 Ribbon 粒子，避免“余流”；
+        // 下次 Activate(bReset=true) 可直接重启。
+        PourFX->DeactivateImmediate();
     }
 }
 
