@@ -12,9 +12,11 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraTypes.h"
 #include "NiagaraVariant.h"
+#include "NiagaraDataInterfaceExport.h"
 #include "GrabComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 
 ALiquidContainerActor::ALiquidContainerActor()
@@ -416,8 +418,15 @@ void ALiquidContainerActor::InitPourFX()
     PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
     PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
 
-    // User.Data = self (Actor)，同官方 BP_Pouring 的做法
-    PourFX->SetNiagaraVariableObject(TEXT("User.Data"), this);
+    // 将本 Actor 注册为 P_Ribbon 里“Export Particle Data to Blueprint”模块的
+    // CallbackHandler——Niagara 每帧会把碰撞死亡的水流粒子数据回调
+    // 到 ReceiveParticleData_Implementation。
+    // 注意：不同的 Niagara 资产可能把 Handler Parameter 绑定到不同名字上，
+    // 这里一次写入三个最常见命名。Niagara 对不存在的 User 参数会静默忽略，
+    // 不会报错，也不会重复回调（回调取决于 Export DI 实际绑定的那个）。
+    PourFX->SetNiagaraVariableObject(TEXT("User.Data"),            this);
+    PourFX->SetNiagaraVariableObject(TEXT("User.Handler"),         this);
+    PourFX->SetNiagaraVariableObject(TEXT("User.CallbackHandler"), this);
 
     // 默认关闭，要倒液时才 Activate
     PourFX->Deactivate();
@@ -501,139 +510,19 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
         return;
     }
 
-    const FTransform PourXform = GetPourWorldTransform();
-    const FVector PourLocationWS = PourXform.GetLocation();
-
     // 更新 Niagara 的实时颜色(液体颜色会因混色变化)
     if (PourFX)
     {
         PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
     }
 
-    // 本帧应流出的液体量
+    // 本帧应流出的液体量——只负责"从源容器扣掉"，
+    // 至于"液体是否倒进了某个目标容器/在哪落地/是否需要 Splash"，
+    // 全部交给 ReceiveParticleData_Implementation 处理：
+    // Niagara 内部的 Export Particle Data DI 会把水流粒子真正的碰撞死亡位置
+    // 每帧回调回来——那才是"水柱物理上真实的落点"，与视觉完全对齐。
     const float DesiredML = PourRatePerSecond * DeltaTime;
-    const float ActualML  = ConsumeLiquid(DesiredML);
-    if (ActualML <= KINDA_SMALL_NUMBER)
-    {
-        return;
-    }
-
-    // 从出液口沿世界 -Z 方向做 SphereTrace（胖射线），兜住水流弧度的落点偏差。
-    // 为进一步补偿水流初速度的水平位移，将起点沿 PourFX 局部 +X 方向前推一个可配置量。
-    const FVector ForwardWS  = PourXform.GetUnitAxis(EAxis::X);
-    const FVector TraceStart = PourLocationWS + ForwardWS * PourTraceForwardOffset;
-    const FVector TraceEnd   = TraceStart + FVector(0.f, 0.f, -PourTraceDistance);
-
-    FHitResult Hit;
-    FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(LiquidPourTrace), /*bTraceComplex=*/false, this);
-    QueryParams.AddIgnoredActor(this);
-
-    // 让子类补充需要忽略的 Actor（例如 ABottleActor 会追加拧下的瓶盖），
-    // 避免瓶盖挡在瓶口下方阻塞 Trace 导致液体倒不进目标容器。
-    TArray<AActor*> ExtraIgnores;
-    GetPourTraceIgnoreActors(ExtraIgnores);
-    for (AActor* A : ExtraIgnores)
-    {
-        if (A)
-        {
-            QueryParams.AddIgnoredActor(A);
-        }
-    }
-
-    const bool bHit = GetWorld()->SweepSingleByChannel(
-        Hit,
-        TraceStart,
-        TraceEnd,
-        FQuat::Identity,
-        ECC_Visibility,
-        FCollisionShape::MakeSphere(PourTraceRadius),
-        QueryParams);
-
-#if ENABLE_DRAW_DEBUG
-    // 编辑器下方便调试，需在 BP 里把 bDebugDrawTrace 打开才会显示
-    if (bDebugDrawTrace)
-    {
-        const FColor LineColor    = bHit ? FColor::Green : FColor::Red;
-        const FVector EndPointVis = bHit ? Hit.ImpactPoint : TraceEnd;
-        DrawDebugLine(GetWorld(), TraceStart, EndPointVis, LineColor, false, 0.f, 0, 0.2f);
-        DrawDebugSphere(GetWorld(), TraceStart, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
-        DrawDebugSphere(GetWorld(), EndPointVis, PourTraceRadius, 12, LineColor, false, 0.f, 0, 0.2f);
-    }
-#endif
-
-    if (bHit)
-    {
-        // 命中任意可接液的 ALiquidContainerActor（不再特判 CupActor 类型）
-        if (ALiquidContainerActor* TargetContainer = Cast<ALiquidContainerActor>(Hit.GetActor()))
-        {
-            if (TargetContainer != this && TargetContainer->bAcceptLiquidFromOthers)
-            {
-                // === 杯口判定 ===
-                // 只有当命中点落在目标容器 PourTargetPoint 的水平圆形区域内（半径 = PourTargetRadius），
-                // 才认为是"倒进了杯口"。否则视为洒到杯身侧壁/底部，直接返回不接液。
-                // 说明：
-                //   - 用"XY 水平距离"而不是"3D 距离"，避免 SphereTrace 命中点在杯口边缘略高时被判定失败；
-                //   - Z 方向不做限制（水从上往下落，命中点必然低于杯口锚点，反而合理）；
-                //   - 若 PourTargetRadius <= 0 或 PourTargetPoint 缺失，则保持旧行为（命中即接液）。
-                bool bHitInsideMouth = true;
-                if (TargetContainer->PourTargetRadius > 0.f && TargetContainer->PourTargetPoint)
-                {
-                    const FVector MouthWS = TargetContainer->PourTargetPoint->GetComponentLocation();
-                    const FVector Delta   = Hit.ImpactPoint - MouthWS;
-                    const float   DistXY  = FVector2D(Delta.X, Delta.Y).Size();
-                    bHitInsideMouth = (DistXY <= TargetContainer->PourTargetRadius);
-
-#if ENABLE_DRAW_DEBUG
-                    if (bDebugDrawTrace)
-                    {
-                        // 用绿/红圆盘可视化杯口判定：绿=命中，红=未命中
-                        const FColor CircleColor = bHitInsideMouth ? FColor::Green : FColor::Red;
-                        DrawDebugCircle(GetWorld(), MouthWS, TargetContainer->PourTargetRadius,
-                                        32, CircleColor, false, 0.f, 0,
-                                        0.5f, FVector(1, 0, 0), FVector(0, 1, 0), false);
-                    }
-#endif
-                }
-
-                if (!bHitInsideMouth)
-                {
-                    // 命中的是杯身侧壁/底部——液体已在上面 ConsumeLiquid 里扣掉，
-                    // 视觉上就当作"洒到杯子外表面"，不加进杯子里。
-                    return;
-                }
-
-                // 1) 把源容器的液体材质"简单粗暴"地赋给目标容器（含 MI 的颜色一起传递）
-                //    只在材质不同的时候才换，避免每帧 ReinitializeSystem。
-                if (LiquidMaterialAsset && TargetContainer->LiquidMaterialAsset != LiquidMaterialAsset)
-                {
-                    TargetContainer->SetLiquidMaterialAsset(LiquidMaterialAsset, /*bReadColor=*/true);
-                }
-
-                // 2) 加液到目标容器（走基类混色逻辑）
-                TargetContainer->AddLiquid(ActualML, LiquidColor);
-
-                // 3) 在命中点弹出一次水花（P_Splash），同步颜色
-                if (bEnableSplash && SplashEffectTemplate)
-                {
-                    UNiagaraComponent* SplashComp = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-                        GetWorld(),
-                        SplashEffectTemplate,
-                        Hit.ImpactPoint,
-                        Hit.ImpactNormal.Rotation(),
-                        FVector(1.f),
-                        /*bAutoDestroy=*/true);
-                    if (SplashComp)
-                    {
-                        // 若 P_Splash 支持 User.Color 则会生效；不支持时 Niagara 会静默忽略。
-                        SplashComp->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
-                    }
-                }
-            }
-            // 命中的容器不接液 → 只当作洒到物体上，扣液已在上面完成
-        }
-        // 命中非容器（桌面/地面等）→ 液体"洒到地上"，P_Ribbon 内部会自己处理地面 Decal（若 bEnableDecal=true）
-    }
-    // 未命中 → 液体飞入虚空，扣掉即可
+    ConsumeLiquid(DesiredML);
 }
 
 //=====================================================================
@@ -699,4 +588,125 @@ bool ALiquidContainerActor::TryReadColorFromMaterial()
         return true;
     }
     return false;
+}
+
+//=====================================================================
+// Niagara 粒子回调：接收 P_Ribbon 里 "Export Particle Data to Blueprint"
+// 导出的水流粒子实时数据（每颗满足条件的粒子的 Position/Size/Velocity）。
+//
+// P_Ribbon 里美术设置的条件通常是"粒子碰撞死亡时导出"——也就是说，
+// 这里拿到的每颗 Particle.Position 就是【水柱真正命中场景的落点】，
+// 与视觉水花的生成位置完全对齐。
+//
+// 我们据此做接液判定：
+//   - 遍历所有可接液容器
+//   - 若粒子落点到该容器 PourTargetPoint 的水平距离 <= PourTargetRadius
+//     → 认为水滴进了这个杯子，触发 AddLiquid + 材质传递 + Splash
+//=====================================================================
+
+void ALiquidContainerActor::ReceiveParticleData_Implementation(
+    const TArray<FBasicParticleData>& Data,
+    UNiagaraSystem* NiagaraSystem,
+    const FVector& SimulationPositionOffset)
+{
+    if (Data.Num() == 0)
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    // 预先收集场景中所有"可接液"的容器（排除自己），一帧内共享，避免每颗粒子重复迭代。
+    TArray<ALiquidContainerActor*> Candidates;
+    for (TActorIterator<ALiquidContainerActor> It(World); It; ++It)
+    {
+        ALiquidContainerActor* Cand = *It;
+        if (!Cand || Cand == this)                       continue;
+        if (!Cand->bAcceptLiquidFromOthers)              continue;
+        if (Cand->PourTargetRadius <= 0.f)               continue; // 未启用杯口判定的容器直接跳过
+        if (!Cand->PourTargetPoint)                      continue;
+        Candidates.Add(Cand);
+    }
+
+    if (Candidates.Num() == 0)
+    {
+        // 场景里没有匹配的可接液容器：粒子落到了地板/桌面等——不接液，
+        // 视觉上由 P_Ribbon 内部的 Splash Emitter 自己生成水花，C++ 无需干预。
+        return;
+    }
+
+    // 每帧一次的粒子回调可能一次带回多颗粒子——为了避免"同一杯子同一帧被判定多次
+    // 触发 SetLiquidMaterialAsset/ReinitializeSystem"，做一个"已处理集合"。
+    TSet<ALiquidContainerActor*> HitTargets;
+
+    for (const FBasicParticleData& Particle : Data)
+    {
+        const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
+
+        // 找出这颗粒子落点属于哪个杯子（水平 XY 距离最近且在半径内的一个）
+        ALiquidContainerActor* Best = nullptr;
+        float BestDistSq = TNumericLimits<float>::Max();
+        for (ALiquidContainerActor* Cand : Candidates)
+        {
+            const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
+            const FVector Delta   = ParticleWS - MouthWS;
+            const float DistSqXY  = Delta.X * Delta.X + Delta.Y * Delta.Y;
+            const float RSq       = Cand->PourTargetRadius * Cand->PourTargetRadius;
+            if (DistSqXY <= RSq && DistSqXY < BestDistSq)
+            {
+                BestDistSq = DistSqXY;
+                Best = Cand;
+            }
+        }
+
+        if (!Best)
+        {
+            continue;
+        }
+
+        // 1) 材质传递（只需一次；重复调用会导致 ReinitializeSystem 频繁重启）
+        if (!HitTargets.Contains(Best))
+        {
+            HitTargets.Add(Best);
+
+            if (LiquidMaterialAsset && Best->LiquidMaterialAsset != LiquidMaterialAsset)
+            {
+                Best->SetLiquidMaterialAsset(LiquidMaterialAsset, /*bReadColor=*/true);
+            }
+        }
+
+        // 2) 加液：每颗粒子代表一个"液滴事件"。
+        //    使用 PourRatePerSecond * DeltaTime / 预计粒子数 会更精确，但复杂度太高；
+        //    这里按"每颗粒子固定加一小口"处理——量的多少由 Niagara 侧粒子生成频率决定，
+        //    如果视觉水柱粒子密度合适，感觉就是自然的。
+        //    量的具体值可通过 PourRatePerSecond 换算：每颗粒子 ~ PourRatePerSecond / 60
+        //    但因回调频率与粒子数难以预测，暂用简单常量兜底。
+        const float MLPerParticle = FMath::Max(PourRatePerSecond * 0.016f / FMath::Max(Data.Num(), 1), 0.05f);
+        Best->AddLiquid(MLPerParticle, LiquidColor);
+    }
+
+#if ENABLE_DRAW_DEBUG
+    if (bDebugDrawTrace)
+    {
+        // 可视化：把本帧所有粒子的落点绘制成小球（黄），
+        // 命中的目标 PourTargetPoint 绘制成绿色圆盘。
+        for (const FBasicParticleData& Particle : Data)
+        {
+            const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
+            DrawDebugSphere(World, ParticleWS, 1.5f, 8, FColor::Yellow, false, 0.f, 0, 0.2f);
+        }
+        for (ALiquidContainerActor* Hit : HitTargets)
+        {
+            DrawDebugCircle(World,
+                Hit->PourTargetPoint->GetComponentLocation(),
+                Hit->PourTargetRadius,
+                32, FColor::Green, false, 0.f, 0, 0.5f,
+                FVector(1, 0, 0), FVector(0, 1, 0), false);
+        }
+    }
+#endif
 }

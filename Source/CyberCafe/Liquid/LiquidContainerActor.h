@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "NiagaraDataInterfaceExport.h"
 #include "LiquidContainerActor.generated.h"
 
 class UStaticMeshComponent;
@@ -82,7 +83,7 @@ struct CYBERCAFE_API FStr_Bottle
  *   - User.Viscosity  (Float)        粘稠度
  */
 UCLASS(Abstract, Blueprintable, BlueprintType)
-class CYBERCAFE_API ALiquidContainerActor : public AActor
+class CYBERCAFE_API ALiquidContainerActor : public AActor, public INiagaraParticleCallbackHandler
 {
     GENERATED_BODY()
 
@@ -396,6 +397,20 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Liquid")
     bool TryReadColorFromMaterial();
+
+    //=====================================================================
+    // Niagara 粒子回调（INiagaraParticleCallbackHandler 接口实现）
+    //=====================================================================
+
+    /**
+     * P_Ribbon 中的 "Export Particle Data to Blueprint" 模块每帧把满足条件的粒子
+     * （本项目里：“碰撞死亡”的水流粒子）回调回来，提供真实落点位置。
+     * 我们在此基于落点判定“是否倒进了杯口”并触发接液。
+     */
+    virtual void ReceiveParticleData_Implementation(
+        const TArray<FBasicParticleData>& Data,
+        UNiagaraSystem* NiagaraSystem,
+        const FVector& SimulationPositionOffset) override;
 
 protected:
     /**
