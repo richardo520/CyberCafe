@@ -124,12 +124,16 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
     TObjectPtr<UNiagaraSystem> LiquidFXTemplate;
 
-    /** 液体内芯 Mesh（写入 P_Liquid.User.Mesh） */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
-    TObjectPtr<UStaticMesh> LiquidMeshAsset;
-
-    /** 液体材质（MI_Liquid_XX，写入 P_Liquid.User.Material） */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
+    /**
+     * 当前液体材质（运行时缓存，非美术配置项）。
+     *
+     * ★ 美术配置方式：在蓝图中选中 LiquidFX 组件，在其 Details 面板直接给
+     *   User.Material 指定 MI_Liquid_XX。蓝图编辑器可实时预览效果。
+     *
+     * BeginPlay 时 C++ 会从 LiquidFX.User.Material 反查并回填到此字段，
+     * 作为后续“倒液传递材质 / 读取颜色 / 混色”等逻辑的数据源。
+     */
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Assets")
     TObjectPtr<UMaterialInterface> LiquidMaterialAsset;
 
     /**
@@ -139,10 +143,6 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
     FName LiquidColorParamName;
-
-    /** 液体内芯 Mesh 的包围盒大小（写入 P_Liquid.User.BottleSize，由美术手填） */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Assets")
-    FVector BottleSize;
 
     //=====================================================================
     // 倒液（Pour）配置——瓶子/杯子共用
@@ -374,8 +374,17 @@ public:
     bool TryReadColorFromMaterial();
 
 protected:
-    /** 初始化 LiquidFX：设置 P_Liquid 的 User.Mesh / User.Material / User.BottleSize，并首次同步一次表现参数 */
+    /**
+     * 初始化 LiquidFX：只预写运行时表现参数（Fill / Opacity / Waves / Viscosity）。
+     * User.Mesh / User.Material / User.BottleSize 均由美术在蓝图的 LiquidFX 组件 Details 面板直接配置。
+     */
     void InitLiquidFX();
+
+    /**
+     * 从 LiquidFX 组件上反查美术配置的 User.Material Override，回填到 LiquidMaterialAsset 缓存。
+     * 在 BeginPlay 中调用一次，作为后续倒液传材质 / 读颜色 的数据源。
+     */
+    void ResolveLiquidMaterialFromFX();
 
     /** 初始化 PourFX：写入 P_Ribbon 的 User.* 参数并默认关闭 */
     void InitPourFX();

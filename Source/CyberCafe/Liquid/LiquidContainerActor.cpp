@@ -9,6 +9,8 @@
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "NiagaraFunctionLibrary.h"
+#include "NiagaraTypes.h"
+#include "NiagaraVariant.h"
 #include "GrabComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
@@ -66,11 +68,9 @@ ALiquidContainerActor::ALiquidContainerActor()
     PrevLocation           = FVector::ZeroVector;
     PrevRotation           = FQuat::Identity;
 
-    // 默认包围盒（美术会在蓝图里重新填）
-    BottleSize    = FVector(10.f, 10.f, 20.f);
+    // 默认包围盒仅作内部占位（现已不再自动写入 LiquidFX，User.BottleSize 由美术在 LiquidFX 中配置）
 
     LiquidFXTemplate    = nullptr;
-    LiquidMeshAsset     = nullptr;
     LiquidMaterialAsset = nullptr;
     LiquidColorParamName = FName(TEXT("Liquid_Color01"));
 
@@ -98,7 +98,11 @@ void ALiquidContainerActor::BeginPlay()
 {
     Super::BeginPlay();
 
-    // 启动时先尝试从材质里读出液体颜色（覆盖蓝图里默认的 LiquidColor），
+    // 从 LiquidFX 组件上反查美术配置的液体材质 Override，回填到 C++ 缓存，
+    // 作为后续“倒液传材质 / 读取颜色”的唯一数据源。
+    ResolveLiquidMaterialFromFX();
+
+    // 启动时尝试从材质里读出液体颜色（覆盖蓝图里默认的 LiquidColor），
     // 这样 PourFX/Splash 拿到的颜色和瓶内液体自然一致。
     TryReadColorFromMaterial();
 
@@ -316,21 +320,33 @@ void ALiquidContainerActor::InitLiquidFX()
         LiquidFX->SetAsset(LiquidFXTemplate);
     }
 
-    // 2) 写入静态 User 参数
-    if (LiquidMeshAsset)
-    {
-        // StaticMesh 需用 UNiagaraFunctionLibrary 提供的专用静态方法
-        UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMesh(LiquidFX, TEXT("User.Mesh"), LiquidMeshAsset);
-    }
-    if (LiquidMaterialAsset)
-    {
-        // Material 作为 UObject 传入
-        LiquidFX->SetNiagaraVariableObject(TEXT("User.Material"), LiquidMaterialAsset);
-    }
-    LiquidFX->SetNiagaraVariableVec3(TEXT("User.BottleSize"), BottleSize);
+    // 注意：User.Mesh / User.Material / User.BottleSize 不再在此处写入，
+    // 美术直接在蓝图的 LiquidFX 组件 Details 面板上配置即可（可在蓝图编辑器实时预览）。
+    // C++ 仅在 SetLiquidMaterialAsset（倒液到杯子时）主动覆写 User.Material。
 
-    // 3) 重启以让 User 参数生效
+    // 2) 重启以确保 Niagara 与美术在组件上配置的 Override 正常生效
     LiquidFX->ReinitializeSystem();
+}
+
+void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
+{
+    if (!LiquidFX)
+    {
+        return;
+    }
+
+    // 从 Niagara 组件反查美术在 Details 面板上为 User.Material 指定的 Override。
+    // FindParameterOverride 会查 InstanceParameterOverrides + TemplateParameterOverrides，
+    // 覆盖美术在蓝图 LiquidFX 组件里配置的所有情形。
+    const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUObjectDef(), FName(TEXT("User.Material")));
+    const FNiagaraVariant Variant = LiquidFX->FindParameterOverride(UserMaterialVar);
+    if (Variant.IsValid())
+    {
+        if (UMaterialInterface* Resolved = Cast<UMaterialInterface>(Variant.GetUObject()))
+        {
+            LiquidMaterialAsset = Resolved;
+        }
+    }
 }
 
 //=====================================================================
