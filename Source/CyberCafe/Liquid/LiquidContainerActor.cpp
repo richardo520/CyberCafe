@@ -353,6 +353,9 @@ void ALiquidContainerActor::InitPourFX()
     }
 
     // 预写入静态参数
+    UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] InitPourFX: 写入 PourFX.User.Color = %s (PourFX Asset = %s)"),
+        *GetName(), *LiquidColor.ToString(),
+        PourFX->GetAsset() ? *PourFX->GetAsset()->GetName() : TEXT("<null>"));
     PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
     PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
     PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
@@ -409,6 +412,8 @@ void ALiquidContainerActor::StartPouring()
 
     if (PourFX)
     {
+        UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] StartPouring: 写入 PourFX.User.Color = %s"),
+            *GetName(), *LiquidColor.ToString());
         // 重新同步一次颜色/强度/开关，防止编辑器运行时改变后未生效
         PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
         PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
@@ -583,8 +588,15 @@ void ALiquidContainerActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors)
 
 bool ALiquidContainerActor::TryReadColorFromMaterial()
 {
-    if (!LiquidMaterialAsset || LiquidColorParamName.IsNone())
+    if (!LiquidMaterialAsset)
     {
+        UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] TryReadColorFromMaterial: LiquidMaterialAsset 为空，无法读取颜色（LiquidColor 保持默认 %s）"),
+            *GetName(), *LiquidColor.ToString());
+        return false;
+    }
+    if (LiquidColorParamName.IsNone())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] TryReadColorFromMaterial: LiquidColorParamName 为 None"), *GetName());
         return false;
     }
 
@@ -595,7 +607,12 @@ bool ALiquidContainerActor::TryReadColorFromMaterial()
     {
         LiquidColor = Out;
         LiquidColor.A = 1.f;
+        UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] TryReadColorFromMaterial: 从材质 '%s' 参数 '%s' 读到颜色 = %s"),
+            *GetName(), *LiquidMaterialAsset->GetName(), *LiquidColorParamName.ToString(), *LiquidColor.ToString());
         return true;
     }
+
+    UE_LOG(LogTemp, Warning, TEXT("[LiquidColorDebug][%s] TryReadColorFromMaterial: 材质 '%s' 中未找到参数 '%s'，LiquidColor 保持 %s"),
+        *GetName(), *LiquidMaterialAsset->GetName(), *LiquidColorParamName.ToString(), *LiquidColor.ToString());
     return false;
 }
