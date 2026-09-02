@@ -579,10 +579,17 @@ void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMateri
         TryReadColorFromMaterial();
     }
 
-    // 同步到 P_Liquid
+    // 同步到 P_Liquid：
+    // 必须使用 SetParameterOverride 而不是 SetNiagaraVariableObject。
+    // 原因：美术在蓝图 LiquidFX 组件 Details 面板配置的 User.Material 存储在
+    //       InstanceParameterOverrides 里，ReinitializeSystem 会把它 apply 到
+    //       OverrideParameters，从而覆盖掉 SetNiagaraVariableObject 写入的值。
+    // SetParameterOverride 直接写 InstanceParameterOverrides，跟美术的配置是同一张表，
+    // 这样运行时切换材质（如倒液到杯子）才能真正生效。
     if (LiquidFX)
     {
-        LiquidFX->SetNiagaraVariableObject(TEXT("User.Material"), LiquidMaterialAsset);
+        const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUObjectDef(), FName(TEXT("User.Material")));
+        LiquidFX->SetParameterOverride(UserMaterialVar, FNiagaraVariant(TObjectPtr<UObject>(LiquidMaterialAsset)));
         // 更换 Material 后重启 Niagara，让新材质立即接管渲染
         LiquidFX->ReinitializeSystem();
     }
