@@ -338,7 +338,9 @@ void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
     // 从 Niagara 组件反查美术在 Details 面板上为 User.Material 指定的 Override。
     // FindParameterOverride 会查 InstanceParameterOverrides + TemplateParameterOverrides，
     // 覆盖美术在蓝图 LiquidFX 组件里配置的所有情形。
-    const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUObjectDef(), FName(TEXT("User.Material")));
+    // 使用精确的 GetUMaterialDef() 类型，与 P_Liquid 里 User.Material 的类型声明保持一致，
+    // 也与写入端 SetVariableMaterial 使用的类型对齐。
+    const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUMaterialDef(), FName(TEXT("User.Material")));
     const FNiagaraVariant Variant = LiquidFX->FindParameterOverride(UserMaterialVar);
     if (Variant.IsValid())
     {
@@ -580,17 +582,19 @@ void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMateri
     }
 
     // 同步到 P_Liquid：
-    // 必须使用 SetParameterOverride 而不是 SetNiagaraVariableObject。
-    // 原因：美术在蓝图 LiquidFX 组件 Details 面板配置的 User.Material 存储在
-    //       InstanceParameterOverrides 里，ReinitializeSystem 会把它 apply 到
-    //       OverrideParameters，从而覆盖掉 SetNiagaraVariableObject 写入的值。
-    // SetParameterOverride 直接写 InstanceParameterOverrides，跟美术的配置是同一张表，
-    // 这样运行时切换材质（如倒液到杯子）才能真正生效。
+    // 必须使用 SetVariableMaterial（专为 Niagara Mesh Renderer 材质 Override 设计的 API），
+    // 它做了几件通用 API 做不到的事：
+    //   1) 使用精确的 GetUMaterialDef() 类型，能正确匹配 P_Liquid 里 User.Material 的类型声明；
+    //   2) SystemInstanceController->SetVariable_Deferred 让运行中的 Niagara 实例即时感知；
+    //   3) bRecachePSOs = true 触发材质切换后的 PSO 重编译，避免渲染管线延后一帧或不刷新；
+    //   4) #if WITH_EDITOR 分支里内部会调用 SetParameterOverride，同步 InstanceParameterOverrides，
+    //      让编辑器里美术后续再改材质时行为一致。
+    // 之前用 SetNiagaraVariableObject / SetParameterOverride 都无法生效，是因为它们要么绕过
+    // 了 PSO 重建，要么类型匹配不上，导致 Mesh Renderer 实际用的还是杯子蓝图里美术手填的旧材质。
     if (LiquidFX)
     {
-        const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUObjectDef(), FName(TEXT("User.Material")));
-        LiquidFX->SetParameterOverride(UserMaterialVar, FNiagaraVariant(TObjectPtr<UObject>(LiquidMaterialAsset)));
-        // 更换 Material 后重启 Niagara，让新材质立即接管渲染
+        LiquidFX->SetVariableMaterial(FName(TEXT("User.Material")), LiquidMaterialAsset);
+        // 保险起见重启一次 Niagara，让 Mesh Renderer 立刻用新材质渲染
         LiquidFX->ReinitializeSystem();
     }
 
