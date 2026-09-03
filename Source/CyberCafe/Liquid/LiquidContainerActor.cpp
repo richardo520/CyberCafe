@@ -650,35 +650,42 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
     {
         const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
 
-        // 找出这颗粒子落点属于哪个杯子（水平 XY 距离最近且在半径内的一个）
+        // 找出这颗粒子落点属于哪个杯子（局部 XY 距离最近且在半径内的一个）
         //
-        // ★ 判定采用“XY 半径圆盘 + Z 上方锥形罩”双约束：
-        //   - 圆盘约束（XY）：粒子的水平落点必须在杯口圆内。
-        //   - 锥角约束（Z）：粒子相对杯口锚点的方向向量与世界 +Z 的夹角必须
-        //     ≤ PourTargetConeAngle，即粒子必须“从杯口上方进入”。
-        //   杯身侧面掠过的粒子（相对锚点方向接近水平 90°）会被锥角判定过滤掉。
+        // ★ 判定采用“XY 半径圆盘 + Z 上方锥形罩”双约束，均在
+        //   PourTargetPoint 的“局部坐标系”下进行——这样杯子被斜放/抓着时，
+        //   判定区域会跟着杯口姿态一起转，不会像世界坐标那样"绿盘永远水平"。
+        //
+        //   - 圆盘约束（局部 XY）：粒子落点投影到杯口平面上必须在圆内。
+        //   - 锥角约束（局部 +Z）：粒子必须从杯口朝外方向进入，即相对锚点
+        //     的方向向量与杯口 +Z 的夹角 ≤ PourTargetConeAngle。
+        //   杯身侧面掠过的粒子（相对锚点方向接近局部水平面 90°）会被锥角淘汰。
         ALiquidContainerActor* Best = nullptr;
         float BestDistSq = TNumericLimits<float>::Max();
         for (ALiquidContainerActor* Cand : Candidates)
         {
-            const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
-            const FVector Delta   = ParticleWS - MouthWS;
+            const FTransform& MouthTM = Cand->PourTargetPoint->GetComponentTransform();
+            const FVector MouthWS = MouthTM.GetLocation();
 
-            // 1) 锥角约束：Delta 方向与 +Z 夹角需 ≤ PourTargetConeAngle。
-            //    等价判定：Delta 单位向量 · +Z ≥ cos(角度)。
-            //    使用 SizeSquared 提前剔除退化情形（粒子恰好在锚点位置）。
-            const float DeltaLenSq = Delta.SizeSquared();
+            // 将粒子世界位置转到 PourTargetPoint 的局部空间：
+            //   DeltaLS.Z > 0 ⇒ 粒子在杯口朝外方向（正常倒入）
+            //   DeltaLS.Z < 0 ⇒ 粒子在杯底方向
+            //   DeltaLS.XY    ⇒ 粒子在杯口平面上的偏移
+            const FVector DeltaLS = MouthTM.InverseTransformPositionNoScale(ParticleWS);
+
+            // 1) 锥角约束：DeltaLS 方向与局部 +Z 的夹角需 ≤ PourTargetConeAngle。
+            //    等价判定：DeltaLS 单位向量 · (0,0,1) ≥ cos(角度)，即 DeltaLS.Z / |DeltaLS| ≥ cos(角度)。
+            const float DeltaLenSq = DeltaLS.SizeSquared();
             if (DeltaLenSq > KINDA_SMALL_NUMBER)
             {
-                // Delta.Z / |Delta| 就是 Dir · UpVector，无需真的 normalize
-                const float CosAngle    = Delta.Z / FMath::Sqrt(DeltaLenSq);
+                const float CosAngle    = DeltaLS.Z / FMath::Sqrt(DeltaLenSq);
                 const float CosThreshold = FMath::Cos(FMath::DegreesToRadians(Cand->PourTargetConeAngle));
                 if (CosAngle < CosThreshold) continue;
             }
             // else：粒子几乎和锚点重合，视为命中，落到下面 XY 判定处理
 
-            // 2) 水平（XY）约束：粒子落点必须在杯口圆盘内
-            const float DistSqXY  = Delta.X * Delta.X + Delta.Y * Delta.Y;
+            // 2) 水平（局部 XY）约束：粒子在杯口平面上的投影必须在杯口圆内
+            const float DistSqXY  = DeltaLS.X * DeltaLS.X + DeltaLS.Y * DeltaLS.Y;
             const float RSq       = Cand->PourTargetRadius * Cand->PourTargetRadius;
             if (DistSqXY <= RSq && DistSqXY < BestDistSq)
             {
@@ -717,38 +724,39 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
     if (bDebugDrawTrace)
     {
         // ======================================================================
-        // 调试可视化（三层信息）
+        // 调试可视化（三层信息）——全部使用 PourTargetPoint 的“局部坐标系”表达，
+        // 与实际判定保持一致，避免"绿盘世界水平、判定却在杯口局部"的错位。
         //   1. 洋红大球 = 每个候选杯子的 PourTargetPoint 世界位置
-        //      —— 帮助排查"锚点是否跑到了杯身外"
-        //   2. 水平绿色圆盘 + 上方浅蓝锥形罩 = 允许的进入区域
-        //      —— 使用 FMatrix 重载明确构造"世界水平"的圆盘，避免默认 YZ 平面朝向问题
+        //   2. 绿色圆盘 + 上方浅蓝锥形罩 = 允许的进入区域（跟着杯口姿态旋转）
         //   3. 每颗粒子 = 黄色小球 + 一条连线到最近的锚点
-        //      —— 连线绿色 = 通过锥角判定；红色 = 被锥角淘汰
-        //      让你直接看到"侧面粒子的连线是不是绿的"，一眼定位问题
+        //      连线绿色 = 通过锥角判定；红色 = 被锥角淘汰
         // ======================================================================
 
         // 1. 画出所有候选杯子的锚点、圆盘、锥形罩（不管本帧是否命中）
         for (ALiquidContainerActor* Cand : Candidates)
         {
-            const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
+            const FTransform& MouthTM = Cand->PourTargetPoint->GetComponentTransform();
+            const FVector MouthWS = MouthTM.GetLocation();
 
             // 锚点位置——洋红大球
             DrawDebugSphere(World, MouthWS, 2.5f, 12, FColor::Magenta, false, 0.f, 0, 0.4f);
 
-            // 杯口圆盘（水平）——使用 FMatrix 重载，明确指定为 world XY 平面
-            const FMatrix DiskTM = FTranslationMatrix(MouthWS);
+            // 杯口圆盘（绿色）——用 PourTargetPoint 的世界 Transform 作矩阵，
+            // 让圆盘贴在杯口平面上、跟着杯口姿态一起转。
+            const FMatrix DiskTM = MouthTM.ToMatrixNoScale();
             DrawDebugCircle(World,
                 DiskTM,
                 Cand->PourTargetRadius,
                 32, FColor::Green, false, 0.f, 0, 0.5f,
                 /*bDrawAxis=*/false);
 
-            // 进入锥形罩（浅蓝）：以锚点为顶点，沿世界 +Z 向上张开 PourTargetConeAngle
+            // 进入锥形罩（浅蓝）：以锚点为顶点，沿杯口局部 +Z（GetUpVector）张开。
+            const FVector ConeAxis = MouthTM.GetUnitAxis(EAxis::Z);
             const float ConeHeight = FMath::Max(Cand->PourTargetRadius * 4.f, 20.f);
             const float ConeHalfAngleRad = FMath::DegreesToRadians(Cand->PourTargetConeAngle);
             DrawDebugCone(World,
                 MouthWS,
-                FVector::UpVector,
+                ConeAxis,
                 ConeHeight,
                 ConeHalfAngleRad,
                 ConeHalfAngleRad,
@@ -757,35 +765,37 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
                 false, 0.f, 0, 0.3f);
         }
 
-        // 2. 每颗粒子 + 到最近锚点的连线（绿=锥角通过, 红=锥角淘汰）
+        // 2. 每颗粒子 + 到最近锚点的连线（绿=锥角通过, 红=锥角淘汰）——
+        //    与真实判定完全一致，均基于 PourTargetPoint 的局部坐标系。
         for (const FBasicParticleData& Particle : Data)
         {
             const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
             DrawDebugSphere(World, ParticleWS, 1.5f, 8, FColor::Yellow, false, 0.f, 0, 0.2f);
 
-            // 找到 XY 上最近的候选杯子做可视化
+            // 找到局部 XY 上最近的候选杯子做可视化
             ALiquidContainerActor* NearestCand = nullptr;
             float NearestXYSq = TNumericLimits<float>::Max();
+            FVector NearestDeltaLS = FVector::ZeroVector;
             for (ALiquidContainerActor* Cand : Candidates)
             {
-                const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
-                const FVector Delta   = ParticleWS - MouthWS;
-                const float DSq = Delta.X * Delta.X + Delta.Y * Delta.Y;
+                const FTransform& MouthTM = Cand->PourTargetPoint->GetComponentTransform();
+                const FVector DeltaLS = MouthTM.InverseTransformPositionNoScale(ParticleWS);
+                const float DSq = DeltaLS.X * DeltaLS.X + DeltaLS.Y * DeltaLS.Y;
                 if (DSq < NearestXYSq)
                 {
                     NearestXYSq = DSq;
                     NearestCand = Cand;
+                    NearestDeltaLS = DeltaLS;
                 }
             }
             if (NearestCand)
             {
                 const FVector MouthWS = NearestCand->PourTargetPoint->GetComponentLocation();
-                const FVector Delta   = ParticleWS - MouthWS;
-                const float DeltaLenSq = Delta.SizeSquared();
+                const float DeltaLenSq = NearestDeltaLS.SizeSquared();
                 bool bConePass = true;
                 if (DeltaLenSq > KINDA_SMALL_NUMBER)
                 {
-                    const float CosAngle     = Delta.Z / FMath::Sqrt(DeltaLenSq);
+                    const float CosAngle     = NearestDeltaLS.Z / FMath::Sqrt(DeltaLenSq);
                     const float CosThreshold = FMath::Cos(FMath::DegreesToRadians(NearestCand->PourTargetConeAngle));
                     bConePass = CosAngle >= CosThreshold;
                 }
