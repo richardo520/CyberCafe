@@ -650,6 +650,9 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
     // 触发 SetLiquidMaterialAsset/ReinitializeSystem"，做一个"已处理集合"。
     TSet<ALiquidContainerActor*> HitTargets;
 
+    // 粒子刚穿过入口平面时的 Z 容差（cm）——判定循环与调试可视化共用
+    constexpr float EntryZTolerance = 1.f;
+
     for (const FBasicParticleData& Particle : Data)
     {
         const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
@@ -662,7 +665,6 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
         // 杯身外壁掠过的粒子——局部 XY 超出杯口半径 → 直接淘汰。
         ALiquidContainerActor* Best = nullptr;
         float BestDistSq = TNumericLimits<float>::Max();
-        constexpr float EntryZTolerance = 1.f; // cm，粒子刚穿过入口平面时的容差
         for (ALiquidContainerActor* Cand : Candidates)
         {
             const FTransform& EntryTM = Cand->PourEntryPoint->GetComponentTransform();
