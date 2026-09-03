@@ -716,34 +716,83 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
 #if ENABLE_DRAW_DEBUG
     if (bDebugDrawTrace)
     {
-        // 可视化：把本帧所有粒子的落点绘制成小球（黄），
-        // 命中的目标 PourTargetPoint 绘制成绿色圆盘 + 上方蓝色锥形罩（表示"允许的进入区域"）。
-        for (const FBasicParticleData& Particle : Data)
-        {
-            const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
-            DrawDebugSphere(World, ParticleWS, 1.5f, 8, FColor::Yellow, false, 0.f, 0, 0.2f);
-        }
-        for (ALiquidContainerActor* Hit : HitTargets)
-        {
-            const FVector MouthWS = Hit->PourTargetPoint->GetComponentLocation();
-            // 杯口圆盘（绿色）
-            DrawDebugCircle(World,
-                MouthWS,
-                Hit->PourTargetRadius,
-                32, FColor::Green, false, 0.f, 0, 0.5f,
-                FVector(1, 0, 0), FVector(0, 1, 0), false);
+        // ======================================================================
+        // 调试可视化（三层信息）
+        //   1. 洋红大球 = 每个候选杯子的 PourTargetPoint 世界位置
+        //      —— 帮助排查"锚点是否跑到了杯身外"
+        //   2. 水平绿色圆盘 + 上方浅蓝锥形罩 = 允许的进入区域
+        //      —— 使用 FMatrix 重载明确构造"世界水平"的圆盘，避免默认 YZ 平面朝向问题
+        //   3. 每颗粒子 = 黄色小球 + 一条连线到最近的锚点
+        //      —— 连线绿色 = 通过锥角判定；红色 = 被锥角淘汰
+        //      让你直接看到"侧面粒子的连线是不是绿的"，一眼定位问题
+        // ======================================================================
 
-            // 进入锥形罩（浅蓝）：从杯口向上张开 PourTargetConeAngle 角度
-            const float ConeHeight = FMath::Max(Hit->PourTargetRadius * 4.f, 20.f);
+        // 1. 画出所有候选杯子的锚点、圆盘、锥形罩（不管本帧是否命中）
+        for (ALiquidContainerActor* Cand : Candidates)
+        {
+            const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
+
+            // 锚点位置——洋红大球
+            DrawDebugSphere(World, MouthWS, 2.5f, 12, FColor::Magenta, false, 0.f, 0, 0.4f);
+
+            // 杯口圆盘（水平）——使用 FMatrix 重载，明确指定为 world XY 平面
+            const FMatrix DiskTM = FTranslationMatrix(MouthWS);
+            DrawDebugCircle(World,
+                DiskTM,
+                Cand->PourTargetRadius,
+                32, FColor::Green, false, 0.f, 0, 0.5f,
+                /*bDrawAxis=*/false);
+
+            // 进入锥形罩（浅蓝）：以锚点为顶点，沿世界 +Z 向上张开 PourTargetConeAngle
+            const float ConeHeight = FMath::Max(Cand->PourTargetRadius * 4.f, 20.f);
+            const float ConeHalfAngleRad = FMath::DegreesToRadians(Cand->PourTargetConeAngle);
             DrawDebugCone(World,
                 MouthWS,
                 FVector::UpVector,
                 ConeHeight,
-                FMath::DegreesToRadians(Hit->PourTargetConeAngle),
-                FMath::DegreesToRadians(Hit->PourTargetConeAngle),
+                ConeHalfAngleRad,
+                ConeHalfAngleRad,
                 16,
                 FColor(80, 160, 255),
                 false, 0.f, 0, 0.3f);
+        }
+
+        // 2. 每颗粒子 + 到最近锚点的连线（绿=锥角通过, 红=锥角淘汰）
+        for (const FBasicParticleData& Particle : Data)
+        {
+            const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
+            DrawDebugSphere(World, ParticleWS, 1.5f, 8, FColor::Yellow, false, 0.f, 0, 0.2f);
+
+            // 找到 XY 上最近的候选杯子做可视化
+            ALiquidContainerActor* NearestCand = nullptr;
+            float NearestXYSq = TNumericLimits<float>::Max();
+            for (ALiquidContainerActor* Cand : Candidates)
+            {
+                const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
+                const FVector Delta   = ParticleWS - MouthWS;
+                const float DSq = Delta.X * Delta.X + Delta.Y * Delta.Y;
+                if (DSq < NearestXYSq)
+                {
+                    NearestXYSq = DSq;
+                    NearestCand = Cand;
+                }
+            }
+            if (NearestCand)
+            {
+                const FVector MouthWS = NearestCand->PourTargetPoint->GetComponentLocation();
+                const FVector Delta   = ParticleWS - MouthWS;
+                const float DeltaLenSq = Delta.SizeSquared();
+                bool bConePass = true;
+                if (DeltaLenSq > KINDA_SMALL_NUMBER)
+                {
+                    const float CosAngle     = Delta.Z / FMath::Sqrt(DeltaLenSq);
+                    const float CosThreshold = FMath::Cos(FMath::DegreesToRadians(NearestCand->PourTargetConeAngle));
+                    bConePass = CosAngle >= CosThreshold;
+                }
+                DrawDebugLine(World, ParticleWS, MouthWS,
+                    bConePass ? FColor::Green : FColor::Red,
+                    false, 0.f, 0, 0.3f);
+            }
         }
     }
 #endif
