@@ -221,6 +221,21 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
     float PourTargetRadius;
 
+    /**
+     * 杯口“进入锥角”（度）：粒子落点必须落在以 PourTargetPoint 为顶点、
+     * 沿世界 +Z 张开的锥形区域内，才被视为“从杯口上方倒入”。
+     *
+     * 几何含义：粒子相对杯口锚点的方向向量 与 世界 +Z 之间的夹角 ≤ 本值 时命中。
+     *   - 0°   ⇒ 只有粒子恰好在正上方才算命中（几乎不可能，等同关闭接液）
+     *   - 75°  ⇒ 默认值，允许略有倾斜；能过滤掉几乎所有从杯身侧面掠过的粒子
+     *   - 90°  ⇒ 只要粒子高度 ≥ 杯口高度就算命中（等价于纯高度约束）
+     *   - 180° ⇒ 完全关闭锥角判定，回退到只用 XY 半径
+     *
+     * 仅在 bAcceptLiquidFromOthers = true 且 PourTargetRadius > 0 时生效。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+    float PourTargetConeAngle;
+
     //=====================================================================
     // 倒液（Pour）—— Niagara 资产 & FX 开关
     //=====================================================================

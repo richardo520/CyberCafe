@@ -95,6 +95,9 @@ ALiquidContainerActor::ALiquidContainerActor()
     // 杯口判定默认关闭（对瓶子无影响）；
     // 杯子子类或蓝图中将其设成大于 0 的值即可启用。
     PourTargetRadius        = 0.f;
+    // 杯口进入锥角默认 75°：允许玩家略有倾斜地倒入，同时能过滤掉几乎所有
+    // 从杯身侧面掠过的粒子。若发现太严接不到液可调大到 90°，若发现从侧面还是能倒入可调小到 60°。
+    PourTargetConeAngle     = 75.f;
 
     SplashEffectTemplate    = nullptr;
     bEnableSplash           = true;
@@ -648,12 +651,33 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
         const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
 
         // 找出这颗粒子落点属于哪个杯子（水平 XY 距离最近且在半径内的一个）
+        //
+        // ★ 判定采用“XY 半径圆盘 + Z 上方锥形罩”双约束：
+        //   - 圆盘约束（XY）：粒子的水平落点必须在杯口圆内。
+        //   - 锥角约束（Z）：粒子相对杯口锚点的方向向量与世界 +Z 的夹角必须
+        //     ≤ PourTargetConeAngle，即粒子必须“从杯口上方进入”。
+        //   杯身侧面掠过的粒子（相对锚点方向接近水平 90°）会被锥角判定过滤掉。
         ALiquidContainerActor* Best = nullptr;
         float BestDistSq = TNumericLimits<float>::Max();
         for (ALiquidContainerActor* Cand : Candidates)
         {
             const FVector MouthWS = Cand->PourTargetPoint->GetComponentLocation();
             const FVector Delta   = ParticleWS - MouthWS;
+
+            // 1) 锥角约束：Delta 方向与 +Z 夹角需 ≤ PourTargetConeAngle。
+            //    等价判定：Delta 单位向量 · +Z ≥ cos(角度)。
+            //    使用 SizeSquared 提前剔除退化情形（粒子恰好在锚点位置）。
+            const float DeltaLenSq = Delta.SizeSquared();
+            if (DeltaLenSq > KINDA_SMALL_NUMBER)
+            {
+                // Delta.Z / |Delta| 就是 Dir · UpVector，无需真的 normalize
+                const float CosAngle    = Delta.Z / FMath::Sqrt(DeltaLenSq);
+                const float CosThreshold = FMath::Cos(FMath::DegreesToRadians(Cand->PourTargetConeAngle));
+                if (CosAngle < CosThreshold) continue;
+            }
+            // else：粒子几乎和锚点重合，视为命中，落到下面 XY 判定处理
+
+            // 2) 水平（XY）约束：粒子落点必须在杯口圆盘内
             const float DistSqXY  = Delta.X * Delta.X + Delta.Y * Delta.Y;
             const float RSq       = Cand->PourTargetRadius * Cand->PourTargetRadius;
             if (DistSqXY <= RSq && DistSqXY < BestDistSq)
@@ -693,7 +717,7 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
     if (bDebugDrawTrace)
     {
         // 可视化：把本帧所有粒子的落点绘制成小球（黄），
-        // 命中的目标 PourTargetPoint 绘制成绿色圆盘。
+        // 命中的目标 PourTargetPoint 绘制成绿色圆盘 + 上方蓝色锥形罩（表示"允许的进入区域"）。
         for (const FBasicParticleData& Particle : Data)
         {
             const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
@@ -701,11 +725,25 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
         }
         for (ALiquidContainerActor* Hit : HitTargets)
         {
+            const FVector MouthWS = Hit->PourTargetPoint->GetComponentLocation();
+            // 杯口圆盘（绿色）
             DrawDebugCircle(World,
-                Hit->PourTargetPoint->GetComponentLocation(),
+                MouthWS,
                 Hit->PourTargetRadius,
                 32, FColor::Green, false, 0.f, 0, 0.5f,
                 FVector(1, 0, 0), FVector(0, 1, 0), false);
+
+            // 进入锥形罩（浅蓝）：从杯口向上张开 PourTargetConeAngle 角度
+            const float ConeHeight = FMath::Max(Hit->PourTargetRadius * 4.f, 20.f);
+            DrawDebugCone(World,
+                MouthWS,
+                FVector::UpVector,
+                ConeHeight,
+                FMath::DegreesToRadians(Hit->PourTargetConeAngle),
+                FMath::DegreesToRadians(Hit->PourTargetConeAngle),
+                16,
+                FColor(80, 160, 255),
+                false, 0.f, 0, 0.3f);
         }
     }
 #endif
