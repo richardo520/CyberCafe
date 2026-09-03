@@ -119,17 +119,28 @@ public:
     TObjectPtr<UNiagaraComponent> PourFX;
 
     /**
-     * “杯口/接液口”锚点组件。
+     * “杯底锚点”组件。
      *
-     * ★ 用法：美术在蓝图里将其位置拖到杯子/瓶子开口的中心上，
-     *   搭配 PourTargetRadius 定义开口内的接液判定区域。
-     *
-     * 当本容器作为“接液方”时（bAcceptLiquidFromOthers = true）：
-     *   导液命中本 Actor 后，命中点到此锚点的“水平距离”必须 ≤ PourTargetRadius，
-     *   否则视为“没倒进杯口”（直接洒掉）。
+     * ★ 用法：美术在蓝图里将其位置拖到杯子内腽底部中心。
+     *   在“双锚点接液判定”方案下，此锚点仅作视觉/调试参考用；
+     *   真正的接液判定完全由 PourEntryPoint + PourEntryRadius 定义的
+     *   “杯口入口圆柱”负责。
      */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
     TObjectPtr<USceneComponent> PourTargetPoint;
+
+    /**
+     * “杯口入口”锚点组件——接液判定的核心。
+     *
+     * ★ 用法：美术在蓝图里将其位置拖到杯子真实开口平面的中心，
+     *   局部 +Z 朝杯口外（默认向上即可），并配合 PourEntryRadius 指定杯口内径。
+     *
+     * 判定逻辑：粒子必须处于以本锚点为中心、半径 = PourEntryRadius、
+     *   沿其局部 -Z 方向延伸的圆柱内，才视为“已进入杯子内腽”。
+     *   —— 与 PourTargetPoint（杯底）无关，仅看粒子相对本锚点的局部坐标。
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Components")
+    TObjectPtr<USceneComponent> PourEntryPoint;
 
     //=====================================================================
     // Niagara 模板 & 资产（LiquidMaterials_VFXPack）
@@ -212,29 +223,21 @@ public:
     bool bDebugDrawTrace;
 
     /**
-     * 杯口/接液口判定半径（cm，以杯子局部 XY 平面为准）。
+     * 杯口入口圆盘半径（cm）——接液判定的核心参数，同时也是“启用接液”的开关。
      *
-     * 仅在本容器 bAcceptLiquidFromOthers = true 且 PourTargetRadius > 0 时生效：
-     *   - 倒液命中本 Actor 后，命中点到 PourTargetPoint 世界位置的 XY 平面距离需 ≤ 此值。
-     *   - 设为 0 或负数 ⇒ 关闭“杯口判定”，回到旧行为（命中任意部位都接液）。
+     * 语义：粒子必须处于以 PourEntryPoint 为中心、半径 = 本值、沿其局部 -Z 延伸
+     *      的圆柱体内，才视为“已进入杯子内腽”并触发接液。
+     *   — 局部 XY 距离 ≤ PourEntryRadius（粒子在杯口圆盘正下方）
+     *   — 局部 Z ≤ SmallTolerance（粒子已处于杯口平面及以下）
+     * 杯身外壁掠过的粒子——局部 XY 超出杯口半径 → 直接淘汰 ✅
+     *
+     * 取值示例：红酒杯 ≈ 3cm；啤酒杯 ≈ 5cm。
+     * 设为 0 或负数 → 该容器不参与接液（等同于关闭 bAcceptLiquidFromOthers）。
+     *
+     * 仅在 bAcceptLiquidFromOthers = true 时生效。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
-    float PourTargetRadius;
-
-    /**
-     * 杯口“进入锥角”（度）：粒子落点必须落在以 PourTargetPoint 为顶点、
-     * 沿世界 +Z 张开的锥形区域内，才被视为“从杯口上方倒入”。
-     *
-     * 几何含义：粒子相对杯口锚点的方向向量 与 世界 +Z 之间的夹角 ≤ 本值 时命中。
-     *   - 0°   ⇒ 只有粒子恰好在正上方才算命中（几乎不可能，等同关闭接液）
-     *   - 75°  ⇒ 默认值，允许略有倾斜；能过滤掉几乎所有从杯身侧面掠过的粒子
-     *   - 90°  ⇒ 只要粒子高度 ≥ 杯口高度就算命中（等价于纯高度约束）
-     *   - 180° ⇒ 完全关闭锥角判定，回退到只用 XY 半径
-     *
-     * 仅在 bAcceptLiquidFromOthers = true 且 PourTargetRadius > 0 时生效。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0", ClampMax = "180.0"))
-    float PourTargetConeAngle;
+    float PourEntryRadius;
 
     //=====================================================================
     // 倒液（Pour）—— Niagara 资产 & FX 开关
