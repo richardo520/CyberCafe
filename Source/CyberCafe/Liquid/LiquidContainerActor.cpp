@@ -740,7 +740,17 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
             }
 
             // 杯口圆盘（绿色，贴在 PourEntryPoint 平面上）
-            const FMatrix DiskTM = EntryTM.ToMatrixNoScale();
+            //
+            // 注意：DrawDebugCircle(FMatrix) 内部在传入矩阵的 "YZ 平面" 画圆
+            // （法线 = 矩阵的 X 轴）。我们希望圆盘贴在 PourEntryPoint 的 XY 平面
+            // 上（法线 = 杯口局部 +Z），因此需要"轴换位"：
+            //   矩阵 X 轴 ← 杯口 +Z（作为法线）
+            //   矩阵 Y 轴 ← 杯口 +X（作为圆盘平面基向量）
+            //   矩阵 Z 轴 ← 杯口 +Y（作为圆盘平面基向量）
+            const FVector EntryX = EntryTM.GetUnitAxis(EAxis::X);
+            const FVector EntryY = EntryTM.GetUnitAxis(EAxis::Y);
+            const FVector EntryZ = EntryTM.GetUnitAxis(EAxis::Z);
+            const FMatrix DiskTM(EntryZ, EntryX, EntryY, EntryWS);
             DrawDebugCircle(World,
                 DiskTM,
                 Cand->PourEntryRadius,
@@ -748,12 +758,12 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
                 /*bDrawAxis=*/false);
 
             // 入口圆柱（浅蓝，沿杯口局部 -Z 向内延伸）
-            const FVector EntryDown = -EntryTM.GetUnitAxis(EAxis::Z);
+            const FVector EntryDown = -EntryZ;
             const float CylHeight = FMath::Max(Cand->PourEntryRadius * 4.f, 15.f);
             const FVector CylBottomWS = EntryWS + EntryDown * CylHeight;
 
-            // 圆柱底盘（下方）
-            const FMatrix CylBottomTM = FTransform(EntryTM.GetRotation(), CylBottomWS).ToMatrixNoScale();
+            // 圆柱底盘（下方）——同样按上文"轴换位"规则构造矩阵
+            const FMatrix CylBottomTM(EntryZ, EntryX, EntryY, CylBottomWS);
             DrawDebugCircle(World,
                 CylBottomTM,
                 Cand->PourEntryRadius,
@@ -761,8 +771,8 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
                 /*bDrawAxis=*/false);
 
             // 圆柱侧壁 4 条连线
-            const FVector AxisX = EntryTM.GetUnitAxis(EAxis::X) * Cand->PourEntryRadius;
-            const FVector AxisY = EntryTM.GetUnitAxis(EAxis::Y) * Cand->PourEntryRadius;
+            const FVector AxisX = EntryX * Cand->PourEntryRadius;
+            const FVector AxisY = EntryY * Cand->PourEntryRadius;
             for (int32 i = 0; i < 4; ++i)
             {
                 const float Ang = i * PI * 0.5f;
