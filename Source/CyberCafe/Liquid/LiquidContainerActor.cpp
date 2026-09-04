@@ -6,6 +6,7 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "MaterialTypes.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
@@ -122,6 +123,10 @@ void ALiquidContainerActor::BeginPlay()
     // 启动时尝试从材质里读出液体颜色（覆盖蓝图里默认的 LiquidColor），
     // 这样 PourFX/Splash 拿到的颜色和瓶内液体自然一致。
     TryReadColorFromMaterial();
+
+    // 派生 MID 并绑定到 LiquidFX.User.Material。之后所有"改颜色"都走 MID 参数写入，
+    // 让杯子在被倒入不同颜色液体时颜色是平滑渐变，而不是整块材质突变。
+    EnsureLiquidMID(/*bForceRecreate=*/false);
 
     InitLiquidFX();
     RefreshLiquidFX();
@@ -270,12 +275,17 @@ void ALiquidContainerActor::RefreshLiquidFX()
     }
 
     // 只写入 P_Liquid 定义的 User 参数。
-    // 颜色在1行内由 Material 决定（模式 A），因此不在此处写。
+    // 颜色不再通过 Niagara 参数或整块材质替换来切，而是通过 LiquidMID 的
+    // Liquid_Color01 向量参数实时写入——这样 AddLiquid 的加权混色结果会自然
+    // 反映在杯子液体上，避免"整帧突变"造成的僵硬感。
     LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"),       FillAmount);
     LiquidFX->SetNiagaraVariableFloat(TEXT("User.Opacity"),    LiquidOpacity);
     LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"),   AddWaves);
     LiquidFX->SetNiagaraVariableFloat(TEXT("User.WavesScale"), WavesScale);
     LiquidFX->SetNiagaraVariableFloat(TEXT("User.Viscosity"),  Viscosity);
+
+    // 把当前混色结果同步到 MID，驱动液体材质颜色平滑过渡。
+    ApplyLiquidColorToMID();
 }
 
 bool ALiquidContainerActor::IsHeld() const
@@ -624,33 +634,98 @@ void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMateri
         return;
     }
 
-    LiquidMaterialAsset = NewMaterial;
+    // ==============================================================
+    // 平滑过渡策略（方案 A：MID + 颜色参数插值）
+    //
+    // 现在杯子液体的外观由 LiquidMID + 其 Liquid_Color01 参数共同决定。
+    // 大部分"倒酒进杯"场景下，我们不再整块替换材质，只依靠 AddLiquid 的
+    // 体积加权混色更新 LiquidColor，然后由 RefreshLiquidFX → ApplyLiquidColorToMID
+    // 把颜色平滑写进 MID，避免"第一颗粒子命中就整杯变色"的僵硬感。
+    //
+    // 两种情形分别处理：
+    //   1) 目标杯子几乎为空（FillAmount ≈ 0）——这是"换酒"场景，允许整体切换：
+    //      - 更新 LiquidMaterialAsset
+    //      - 用新材质派生一个新 MID 并绑到 LiquidFX.User.Material
+    //      - 从材质读色一次（bReadColor）
+    //      - 由 RefreshLiquidFX 走一遍参数刷新（不做 Reinitialize，Fill=0 时它会
+    //        DeactivateImmediate，等下一颗粒子加液再 Activate 自然重启）
+    //   2) 目标杯子已经有液体——保持当前 MID 不动，只做"目标色引导"：
+    //      - 从新材质读一次目标颜色，但只用来作为"下一次混色的另一头"，不覆盖当前混色
+    //        （颜色实际过渡完全由 AddLiquid 的加权公式驱动）
+    //      - 不替换 User.Material、不 Reinitialize，Niagara 不会闪一下
+    //
+    // 注：本函数依然可以被蓝图强行调用来"硬切材质"（例如清空杯子/道具重置），
+    //     调用前把 FillAmount 置 0 即可走情形 1。
+    // ==============================================================
 
-    // 顺便读取颜色，让 PourFX/Splash 保持一致
-    if (bReadColor)
+    const bool bTargetEmpty = (FillAmount <= KINDA_SMALL_NUMBER);
+
+    if (bTargetEmpty)
     {
-        TryReadColorFromMaterial();
+        // 情形 1：空杯换酒——允许整体切换材质
+        LiquidMaterialAsset = NewMaterial;
+
+        if (bReadColor)
+        {
+            TryReadColorFromMaterial();
+        }
+
+        // 用新材质派生 MID 并绑定到 LiquidFX.User.Material
+        EnsureLiquidMID(/*bForceRecreate=*/true);
+    }
+    else
+    {
+        // 情形 2：杯里已经有液体——只更新"数据源材质"的引用（用于 PourFX/Splash 读色引导），
+        //         不动 LiquidMID、不动 User.Material，颜色由 AddLiquid 混色 + RefreshLiquidFX 写 MID 自然过渡。
+        LiquidMaterialAsset = NewMaterial;
+        // 注意：这里刻意不再调用 TryReadColorFromMaterial()——那会把当前混色结果冲掉，
+        //       导致杯子颜色"瞬跳到源色"，正是我们要避免的僵硬感来源。
     }
 
-    // 同步到 P_Liquid：
-    // 必须使用 SetVariableMaterial（专为 Niagara Mesh Renderer 材质 Override 设计的 API），
-    // 它做了几件通用 API 做不到的事：
-    //   1) 使用精确的 GetUMaterialDef() 类型，能正确匹配 P_Liquid 里 User.Material 的类型声明；
-    //   2) SystemInstanceController->SetVariable_Deferred 让运行中的 Niagara 实例即时感知；
-    //   3) bRecachePSOs = true 触发材质切换后的 PSO 重编译，避免渲染管线延后一帧或不刷新；
-    //   4) #if WITH_EDITOR 分支里内部会调用 SetParameterOverride，同步 InstanceParameterOverrides，
-    //      让编辑器里美术后续再改材质时行为一致。
-    // 之前用 SetNiagaraVariableObject / SetParameterOverride 都无法生效，是因为它们要么绕过
-    // 了 PSO 重建，要么类型匹配不上，导致 Mesh Renderer 实际用的还是杯子蓝图里美术手填的旧材质。
-    if (LiquidFX)
-    {
-        LiquidFX->SetVariableMaterial(FName(TEXT("User.Material")), LiquidMaterialAsset);
-        // 保险起见重启一次 Niagara，让 Mesh Renderer 立刻用新材质渲染
-        LiquidFX->ReinitializeSystem();
-    }
-
-    // 混色权威变了，广播一次事件，便于蓝图侧联动
+    // 广播一次事件，便于蓝图侧联动（例如刷新 3D UI 上的酒名）
     OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
+}
+
+void ALiquidContainerActor::EnsureLiquidMID(bool bForceRecreate)
+{
+    if (!LiquidFX || !LiquidMaterialAsset)
+    {
+        return;
+    }
+
+    // 已有 MID 且父级仍是当前 LiquidMaterialAsset —— 直接复用
+    if (!bForceRecreate && LiquidMID && LiquidMID->Parent == LiquidMaterialAsset)
+    {
+        return;
+    }
+
+    // 用当前 LiquidMaterialAsset 派生一个新 MID
+    LiquidMID = UMaterialInstanceDynamic::Create(LiquidMaterialAsset, this);
+    if (!LiquidMID)
+    {
+        return;
+    }
+
+    // 立即把当前 LiquidColor 写进 MID，防止第一帧出现"MID 用父级默认色"的闪烁
+    LiquidMID->SetVectorParameterValue(LiquidColorParamName, LiquidColor);
+
+    // 绑定到 P_Liquid.User.Material —— 使用与旧 SetLiquidMaterialAsset 一致的 SetVariableMaterial 路径，
+    // 它会正确匹配 Niagara 里 User.Material 的类型声明，并触发 PSO 重编译。
+    LiquidFX->SetVariableMaterial(FName(TEXT("User.Material")), LiquidMID);
+
+    // 材质换了根，Niagara 需要重启一次让 Mesh Renderer 立刻用新 MID 渲染。
+    // 只有在"派生了新 MID"这条路径上才需要重启——常规颜色渐变不再走这里。
+    LiquidFX->ReinitializeSystem();
+}
+
+void ALiquidContainerActor::ApplyLiquidColorToMID()
+{
+    if (!LiquidMID || LiquidColorParamName.IsNone())
+    {
+        return;
+    }
+
+    LiquidMID->SetVectorParameterValue(LiquidColorParamName, LiquidColor);
 }
 
 void ALiquidContainerActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const

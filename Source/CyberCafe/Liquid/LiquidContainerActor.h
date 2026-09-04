@@ -14,6 +14,7 @@ class UGrabComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
 class USceneComponent;
+class UMaterialInstanceDynamic;
 
 /**
  * 液体变化事件
@@ -165,6 +166,16 @@ public:
      */
     UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Assets")
     TObjectPtr<UMaterialInterface> LiquidMaterialAsset;
+
+    /**
+     * 运行时创建的液体材质动态实例（MID）。
+     *
+     * 由 EnsureLiquidMID() 从 LiquidMaterialAsset 派生并绑定到 LiquidFX.User.Material，
+     * 后续所有"改颜色"的操作都走这个 MID（SetVectorParameterValue），
+     * 让杯子液体的颜色可以随 AddLiquid 的加权混色平滑过渡，避免一帧内整块材质替换的僵硬感。
+     */
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Assets")
+    TObjectPtr<UMaterialInstanceDynamic> LiquidMID;
 
     /**
      * 材质里"液体颜色"参数的名字（Vector Parameter）。
@@ -450,6 +461,23 @@ protected:
      * 在 BeginPlay 中调用一次，作为后续倒液传材质 / 读颜色 的数据源。
      */
     void ResolveLiquidMaterialFromFX();
+
+    /**
+     * 确保 LiquidMID 存在并绑定到 LiquidFX.User.Material。
+     *
+     * 从 LiquidMaterialAsset 派生一个 UMaterialInstanceDynamic，
+     * 让运行时可以通过 SetVectorParameterValue 平滑改颜色而不整块替换材质。
+     *
+     * @param bForceRecreate 传 true 时无论已有的 MID 的父级是否一致都会重建
+     *                      （用于"空杯首次接液换酒"这种真正需要切换材质的场景）。
+     */
+    void EnsureLiquidMID(bool bForceRecreate = false);
+
+    /**
+     * 把当前 LiquidColor 写入 LiquidMID 的颜色参数（LiquidColorParamName，默认 "Liquid_Color01"）。
+     * 由 RefreshLiquidFX() 每次调用——AddLiquid 之后液体颜色的平滑过渡就靠这一步。
+     */
+    void ApplyLiquidColorToMID();
 
     /** 初始化 PourFX：写入 P_Ribbon 的 User.* 参数并默认关闭 */
     void InitPourFX();
