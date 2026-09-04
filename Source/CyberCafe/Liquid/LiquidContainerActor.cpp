@@ -444,13 +444,76 @@ void ALiquidContainerActor::InitPourFX()
 
 FTransform ALiquidContainerActor::GetPourWorldTransform() const
 {
-    // 直接使用 PourFX 的世界 Transform——美术在蓝图里拖动的位置就是出液口。
-    // 保证水流发射点与 SphereTrace 起点一致，避免两者不同步。
+    // ============================================================
+    // 动态出液环：在 PourEntryPoint 的口沿圆环上，找世界 Z 最低点
+    // ============================================================
+    //
+    // 【问题】：如果直接返回 PourFX 组件自身的 Transform，出液起点会固定在
+    //   美术在蓝图里配置的那个局部坐标上。这样容器无论倾斜角度多大、往哪个
+    //   方向倾斜，水柱都从同一个局部点喷出——看起来像凭空喷水而不是"顺着
+    //   杯口/瓶口最低边沿自然流下"。
+    //
+    // 【方案】：把 PourEntryPoint（+PourEntryRadius）视为一个"口沿圆环"，
+    //   每帧在这个圆环上找世界 Z 最低的一点 P，作为水柱起点：
+    //     ① 取世界 -Z 方向在 PourEntryPoint 局部 XY 平面上的投影方向 D
+    //        （D 就是"沿口沿哪个方向重力最先把液面拉下去"的方向）
+    //     ② P = C + D * PourEntryRadius，其中 C 是 PourEntryPoint 世界位置
+    //     ③ 输出 Transform 的 +X 轴对齐 D，让水柱粒子的初速度方向、以及
+    //        UpdatePouring 里基于 PourTraceForwardOffset 的向前偏移都自动
+    //        指向"液体应该抛出的方向"。
+    //
+    // 【回退】：当 PourEntryPoint 未设置 / 半径 <= 0 / 容器几乎正立或倒置
+    //   （投影方向长度趋近于 0，无法定义唯一最低点）时，退回旧行为，使用
+    //   PourFX 组件自身的 Transform。
+    // ============================================================
+
+    if (PourEntryPoint && PourEntryRadius > KINDA_SMALL_NUMBER)
+    {
+        const FTransform EntryTM = PourEntryPoint->GetComponentTransform();
+        const FVector C = EntryTM.GetLocation();
+        // 口沿平面法线（PourEntryPoint 局部 +Z 的世界方向）
+        const FVector N = EntryTM.GetUnitAxis(EAxis::Z).GetSafeNormal();
+
+        // 世界 -Z 在口沿平面上的投影：D = (-Up) - dot(-Up, N) * N
+        const FVector Down = -FVector::UpVector;
+        FVector D = Down - FVector::DotProduct(Down, N) * N;
+
+        const float DLen = D.Size();
+        // 阈值 0.05 ≈ 容器口沿与水平面夹角约 3°，太小则最低点不稳定，回退旧逻辑
+        if (DLen > 0.05f)
+        {
+            D /= DLen; // 单位化"水平流出方向"
+
+            // 圆环上世界 Z 最低点
+            const FVector Lowest = C + D * PourEntryRadius;
+
+            // 构造出液 Transform：+X 沿 D（流出方向），+Z 沿口沿法线 N，
+            // +Y = Z × X 保持右手系。这样 PourFX 粒子的初速度、以及
+            // PourTraceForwardOffset 沿 +X 前推，都会指向水该抛的方向。
+            const FVector AxisX = D;
+            FVector AxisZ = N;
+            // 保证 Z 与 X 正交（当 N 与 D 已经天然正交时此步为恒等）
+            AxisZ = (AxisZ - FVector::DotProduct(AxisZ, AxisX) * AxisX).GetSafeNormal();
+            if (AxisZ.IsNearlyZero())
+            {
+                // 极端退化情况兜底
+                AxisZ = FVector::UpVector;
+            }
+            const FVector AxisY = FVector::CrossProduct(AxisZ, AxisX).GetSafeNormal();
+
+            const FMatrix RotMat(AxisX, AxisY, AxisZ, FVector::ZeroVector);
+            const FQuat Rot(RotMat);
+
+            return FTransform(Rot, Lowest, FVector::OneVector);
+        }
+    }
+
+    // 回退：直接使用 PourFX 的世界 Transform——美术在蓝图里拖动的位置就是出液口。
     if (PourFX)
     {
         return PourFX->GetComponentTransform();
     }
-    // fallback：PourFX 意外不存在时退回 Root
+    // 二级 fallback：PourFX 意外不存在时退回 Root
     if (ContainerMesh)
     {
         return ContainerMesh->GetComponentTransform();
@@ -481,6 +544,17 @@ void ALiquidContainerActor::StartPouring()
 
     if (PourFX)
     {
+        // 【重要】把 PourFX 组件放到动态出液口位置。
+        // 由于 GetPourWorldTransform() 现在会在 PourEntryPoint 的圆环上算出
+        // 世界 Z 最低点，我们需要在启动瞬间就把 PourFX 摆过去，避免第一帧闪现
+        // 在旧的固定 Transform 位置上（尤其在容器已经倾斜时视觉突兀）。
+        //
+        // 使用 SetWorldLocationAndRotation：只覆盖位置和朝向、保留美术在组件上
+        // 配置的相对缩放；同时 PourFX 仍然 attach 在 ContainerMesh 上，运动跟随
+        // 容器整体走。
+        const FTransform PourTM = GetPourWorldTransform();
+        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation());
+
         // 重新同步一次颜色/强度/开关，防止编辑器运行时改变后未生效
         PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
         PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
@@ -514,6 +588,14 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
     if (!ContainerMesh)
     {
         return;
+    }
+
+    // 每帧把 PourFX 跟随到当前"口沿最低点"——这样倾斜姿态改变时，
+    // 水柱起点会沿着杯口/瓶口边沿平滑滑动，视觉上就是从最低处流下。
+    if (PourFX)
+    {
+        const FTransform PourTM = GetPourWorldTransform();
+        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation());
     }
 
     // 更新 Niagara 的实时颜色(液体颜色会因混色变化)

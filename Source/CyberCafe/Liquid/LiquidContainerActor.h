@@ -130,12 +130,16 @@ public:
     TObjectPtr<USceneComponent> PourTargetPoint;
 
     /**
-     * “杯口入口”锚点组件——接液判定的核心。
+     * “杯口入口 / 出液口”锚点组件——同时承担两件事：
+     *   1) 【接液方】接液判定的核心锚点（配合 PourEntryRadius 构成入口圆柱）。
+     *   2) 【倒出方】动态出液口：倒液时会在“以本锚点为中心、半径 = PourEntryRadius、
+     *      位于本锚点局部 XY 平面上”的圆环上，寻找世界 Z 最低的一点作为出液起点，
+     *      让水柱看起来是顺着杯口 / 瓶口最低边沿流出，符合物理直觉。
      *
-     * ★ 用法：美术在蓝图里将其位置拖到杯子真实开口平面的中心，
-     *   局部 +Z 朝杯口外（默认向上即可），并配合 PourEntryRadius 指定杯口内径。
+     * ★ 用法：美术在蓝图里将其位置拖到杯口/瓶口真实开口平面的中心，
+     *   局部 +Z 朝开口外（默认向上即可），并配合 PourEntryRadius 指定开口内径。
      *
-     * 判定逻辑：粒子必须处于以本锚点为中心、半径 = PourEntryRadius、
+     * 接液判定逻辑：粒子必须处于以本锚点为中心、半径 = PourEntryRadius、
      *   沿其局部 -Z 方向延伸的圆柱内，才视为“已进入杯子内腽”。
      *   —— 与 PourTargetPoint（杯底）无关，仅看粒子相对本锚点的局部坐标。
      */
@@ -223,18 +227,22 @@ public:
     bool bDebugDrawTrace;
 
     /**
-     * 杯口入口圆盘半径（cm）——接液判定的核心参数，同时也是“启用接液”的开关。
+     * “开口环”半径（cm）——同时承担两件事：
+     *   1) 【接液方】接液判定的核心参数，同时也是“启用接液”的开关。
+     *   2) 【倒出方】动态出液口的口沿半径：倒液时会在此半径的圆环上取世界 Z 最低点作为出液起点。
      *
-     * 语义：粒子必须处于以 PourEntryPoint 为中心、半径 = 本值、沿其局部 -Z 延伸
+     * 语义（接液判定）：粒子必须处于以 PourEntryPoint 为中心、半径 = 本值、沿其局部 -Z 延伸
      *      的圆柱体内，才视为“已进入杯子内腽”并触发接液。
      *   — 局部 XY 距离 ≤ PourEntryRadius（粒子在杯口圆盘正下方）
      *   — 局部 Z ≤ SmallTolerance（粒子已处于杯口平面及以下）
      * 杯身外壁掠过的粒子——局部 XY 超出杯口半径 → 直接淘汰 ✅
      *
-     * 取值示例：红酒杯 ≈ 3cm；啤酒杯 ≈ 5cm。
-     * 设为 0 或负数 → 该容器不参与接液（等同于关闭 bAcceptLiquidFromOthers）。
+     * 取值示例：红酒杯 ≈ 3cm；啤酒杯 ≈ 5cm；红酒瓶口 ≈ 1.2cm。
+     * 设为 0 或负数 → 该容器不参与接液（等同于关闭 bAcceptLiquidFromOthers）；
+     *                 出液口也会退化为使用 PourFX 的固定 Transform。
      *
-     * 仅在 bAcceptLiquidFromOthers = true 时生效。
+     * 接液部分仅在 bAcceptLiquidFromOthers = true 时生效；
+     * 出液部分只要 bCanPour = true 且本值 > 0 就会启用（推荐所有可倒出容器都摆好 PourEntryPoint）。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
     float PourEntryRadius;
@@ -446,7 +454,18 @@ protected:
     /** 初始化 PourFX：写入 P_Ribbon 的 User.* 参数并默认关闭 */
     void InitPourFX();
 
-    /** 获取出液口的世界变换 — 直接使用 PourFX 的当前 Transform（由美术在蓝图里配置） */
+    /**
+     * 获取出液口的世界变换。
+     *
+     * 【动态出液环模式】当容器摆好了 PourEntryPoint 且 PourEntryRadius > 0 时：
+     *   在以 PourEntryPoint 为圆心、位于其局部 XY 平面上、半径 = PourEntryRadius 的
+     *   圆环上，取世界 Z 最低的一点作为出液起点——这样水柱看起来是顺着杯口/瓶口
+     *   最低边沿流下去，符合物理直觉。返回 Transform 的 +X 轴指向水应该抛出的方向
+     *   （圆心 → 最低点的水平投影），配合 PourTraceForwardOffset 一致工作。
+     *
+     * 【回退固定模式】未摆 PourEntryPoint 或 PourEntryRadius <= 0 或容器接近正立/倒置
+     *   （口沿环退化，找不到唯一最低点）时，退回使用 PourFX 组件自身的 Transform。
+     */
     UFUNCTION(BlueprintPure, Category = "Liquid|Pour")
     FTransform GetPourWorldTransform() const;
 
