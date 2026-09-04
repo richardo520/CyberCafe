@@ -468,8 +468,9 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
     //     ① 取世界 -Z 方向在 PourEntryPoint 局部 XY 平面上的投影方向 D
     //        （D 就是"沿口沿哪个方向重力最先把液面拉下去"的方向）
     //     ② P = C + D * PourEntryRadius，其中 C 是 PourEntryPoint 世界位置
-    //     ③ 输出 Transform 的 +X 轴对齐 -N（杯身反方向），让水柱粒子沿
-    //        组件 +X 发射时，视觉上"与杯壁保持平行 / 沿杯身轴反向抛出"。
+    //     ③ 输出 Transform 的 +X 轴对齐 +N（杯身正方向）。P_Ribbon 内部
+    //        粒子实际沿组件 -X 发射，所以组件 +X = +N 时，粒子最终沿 -N
+    //        方向飞出，视觉上"与杯壁保持平行 / 沿杯身轴反向抛出"。
     //        用 D 与 N 的叉积构造 +Y，保证正交系稳定。
     //
     // 【回退】：当 PourEntryPoint 未设置 / 半径 <= 0 / 容器几乎正立或倒置
@@ -501,33 +502,40 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
             const FVector Lowest = C + D * PourEntryRadius;
 
             // ============================================================
-            // 出液 Transform 的朝向构造 —— 方案 A：+X = -N（沿杯身反方向）
+            // 出液 Transform 的朝向构造 —— 方案 A：+X = +N（沿杯身正方向）
             // ============================================================
             // 【设计目标】水柱应"贴着杯壁 / 平行于杯壁"从杯口最低点抛出，
             //   而不是"垂直于杯壁"顶出来。
             //
             // 【几何观察】
-            //   - 杯身轴向 = 口沿平面法线 N（PourEntryPoint 局部 +Z 的世界方向）
-            //   - "沿杯壁朝外"的方向 = -N（从杯底指向杯口的延伸方向）
-            //   - 于是让 PourFX 的 +X = -N，粒子沿组件 +X 发射时就会看起来
-            //     "从杯口沿杯身轴方向平行抛出"，与杯壁保持平行 —— 这就是
-            //     用户想要的"水平于杯壁向外流"的视觉效果。
+            //   - 杯身轴向 = 口沿平面法线 N（PourEntryPoint 局部 +Z 的世界方向，
+            //     从杯底指向杯口）
+            //   - "沿杯壁朝外"的方向 = -N（从杯口沿杯身反向继续延伸出去）
             //
-            // 【正交系构造（严格保证 AxisX = -N）】
-            //   AxisX = -N                     —— 水柱发射方向（沿杯身反向）
+            // 【为什么 AxisX = +N 而不是 -N】
+            //   经实测，P_Ribbon 内部粒子的发射朝向是沿组件 +X 的【反向】
+            //   （粒子朝 -X 方向飞）。因此为了让粒子最终朝 -N 方向抛出（沿
+            //   杯壁往外流），组件的 +X 需要设为 +N，这样组件 -X（粒子实际
+            //   飞行方向）= -N，正好指向"从杯口往外沿杯身反向"。
+            //
+            //   ⚠️ 如果将来更换 P_Ribbon 资产、粒子改为沿组件 +X 发射，只需
+            //   把这里的 AxisX 换回 -N 即可。
+            //
+            // 【正交系构造】
+            //   AxisX = +N                     —— 组件 +X（粒子实际朝 -X = -N 飞）
             //   AxisY = normalize(N × D)       —— 与 AxisX 正交的横切向
             //                                    （D 与 N 严格正交，故 |N×D|=1）
-            //   AxisZ = AxisX × AxisY          —— 落在 (N, D) 平面内、朝向 D 侧
+            //   AxisZ = AxisX × AxisY          —— 落在 (N, D) 平面内、朝向 -D 侧
             //   此 3 轴构成合法右手系。
             //
             // 【失效场景与回退】
             //   - 当容器几乎正立/倒置时，D 长度 < 0.05 已被外层挡掉，走
             //     PourFX 固定 Transform 的回退分支，本段代码不会执行。
             //   - 当 |N × D| 意外过小（理论上不会发生，因为 D ⊥ N 是构造出来
-            //     的），保底取世界 +Y 作为 AxisY。
+            //     的），保底取一个与 N 正交的向量作为 AxisY。
             // ============================================================
 
-            const FVector AxisX = -N;
+            const FVector AxisX = N;
             FVector AxisY = FVector::CrossProduct(N, D);
             if (!AxisY.Normalize())
             {
