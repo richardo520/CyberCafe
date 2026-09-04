@@ -468,9 +468,9 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
     //     ① 取世界 -Z 方向在 PourEntryPoint 局部 XY 平面上的投影方向 D
     //        （D 就是"沿口沿哪个方向重力最先把液面拉下去"的方向）
     //     ② P = C + D * PourEntryRadius，其中 C 是 PourEntryPoint 世界位置
-    //     ③ 输出 Transform 的 +X 轴对齐 D，让水柱粒子的初速度方向、以及
-    //        UpdatePouring 里基于 PourTraceForwardOffset 的向前偏移都自动
-    //        指向"液体应该抛出的方向"。
+    //     ③ 输出 Transform 的 +X 轴对齐 -N（杯身反方向），让水柱粒子沿
+    //        组件 +X 发射时，视觉上"与杯壁保持平行 / 沿杯身轴反向抛出"。
+    //        用 D 与 N 的叉积构造 +Y，保证正交系稳定。
     //
     // 【回退】：当 PourEntryPoint 未设置 / 半径 <= 0 / 容器几乎正立或倒置
     //   （投影方向长度趋近于 0，无法定义唯一最低点）时，退回旧行为，使用
@@ -501,40 +501,44 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
             const FVector Lowest = C + D * PourEntryRadius;
 
             // ============================================================
-            // 出液 Transform 的朝向构造 —— 关键设计
+            // 出液 Transform 的朝向构造 —— 方案 A：+X = -N（沿杯身反方向）
             // ============================================================
-            // 【错误做法 A】+X = D，+Z = N（口沿法线 = 杯身轴向）
-            //   问题：粒子若沿组件 +Z 或 +Y 发射，会沿杯身轴向抛出，视觉上
-            //   水柱像被"垂直于杯壁"顶出来。
+            // 【设计目标】水柱应"贴着杯壁 / 平行于杯壁"从杯口最低点抛出，
+            //   而不是"垂直于杯壁"顶出来。
             //
-            // 【错误做法 B】+X = D 投影到水平面（丢掉 Z 分量），+Z = 世界 +Z
-            //   问题：当杯子倾斜超过 90°（杯口朝下）时，D 会有向下的 Z 分量，
-            //   同时它的水平分量方向会翻转到"杯身反方向"。把 Z 拍掉后剩下的
-            //   水平分量与真实流出方向相反 → 水柱"忽然反向"。
+            // 【几何观察】
+            //   - 杯身轴向 = 口沿平面法线 N（PourEntryPoint 局部 +Z 的世界方向）
+            //   - "沿杯壁朝外"的方向 = -N（从杯底指向杯口的延伸方向）
+            //   - 于是让 PourFX 的 +X = -N，粒子沿组件 +X 发射时就会看起来
+            //     "从杯口沿杯身轴方向平行抛出"，与杯壁保持平行 —— 这就是
+            //     用户想要的"水平于杯壁向外流"的视觉效果。
             //
-            // 【正确做法】+X 直接使用 D（不做水平化），+Z 保持世界 +Z：
-            //   ① +X = D：D 在口沿平面上，本身就是"重力把液体拉向最低点"的
-            //      方向。倾斜角度 90° 时是水平的，>90° 时开始朝下——这正是
-            //      我们想要的"顺口沿自然流出"的向量。
-            //   ② +Z = 世界 +Z：让 PourFX 组件的 -Z 始终对齐重力。P_Ribbon
-            //      内部若沿组件 -Z 让粒子下落、或用 Gravity 影响粒子，都能
-            //      拿到正确的世界向下方向。
-            //   ③ 用 Gram-Schmidt 让 X/Z 保持正交（D 与世界 +Z 一般已经近似
-            //      正交，但保险起见还是正交化一次）。
+            // 【正交系构造（严格保证 AxisX = -N）】
+            //   AxisX = -N                     —— 水柱发射方向（沿杯身反向）
+            //   AxisY = normalize(N × D)       —— 与 AxisX 正交的横切向
+            //                                    （D 与 N 严格正交，故 |N×D|=1）
+            //   AxisZ = AxisX × AxisY          —— 落在 (N, D) 平面内、朝向 D 侧
+            //   此 3 轴构成合法右手系。
+            //
+            // 【失效场景与回退】
+            //   - 当容器几乎正立/倒置时，D 长度 < 0.05 已被外层挡掉，走
+            //     PourFX 固定 Transform 的回退分支，本段代码不会执行。
+            //   - 当 |N × D| 意外过小（理论上不会发生，因为 D ⊥ N 是构造出来
+            //     的），保底取世界 +Y 作为 AxisY。
             // ============================================================
 
-            FVector AxisX = D;
-            FVector AxisZ = FVector::UpVector;
-            // 正交化：从 AxisZ 中减去它在 AxisX 上的投影分量
-            AxisZ = AxisZ - FVector::DotProduct(AxisZ, AxisX) * AxisX;
-            if (!AxisZ.Normalize())
+            const FVector AxisX = -N;
+            FVector AxisY = FVector::CrossProduct(N, D);
+            if (!AxisY.Normalize())
             {
-                // 极端退化：D 恰好与世界 +Z 平行（口沿完全朝上下），
-                // 通常已被外层 DLen > 0.05 挡掉，这里只是兜底
-                AxisZ = FVector::UpVector;
+                // 理论不可达：D 与 N 由构造保证正交，此处仅兜底
+                AxisY = FVector::CrossProduct(N, FVector::ForwardVector).GetSafeNormal();
+                if (AxisY.IsNearlyZero())
+                {
+                    AxisY = FVector::RightVector;
+                }
             }
-            // +Y = Z × X 保持右手系
-            const FVector AxisY = FVector::CrossProduct(AxisZ, AxisX).GetSafeNormal();
+            const FVector AxisZ = FVector::CrossProduct(AxisX, AxisY).GetSafeNormal();
 
             const FMatrix RotMat(AxisX, AxisY, AxisZ, FVector::ZeroVector);
             const FQuat Rot(RotMat);
