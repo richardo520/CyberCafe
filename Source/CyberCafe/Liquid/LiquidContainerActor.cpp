@@ -481,10 +481,13 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
     {
         const FTransform EntryTM = PourEntryPoint->GetComponentTransform();
         const FVector C = EntryTM.GetLocation();
-        // 口沿平面法线（PourEntryPoint 局部 +Z 的世界方向）
+        // 口沿平面法线（PourEntryPoint 局部 +Z 的世界方向）—— 用于计算最低点方向 D，
+        // 【不再】作为 PourFX 的 +Z 轴（那样会让水柱沿杯身轴方向斜射出，见下方注释）。
         const FVector N = EntryTM.GetUnitAxis(EAxis::Z).GetSafeNormal();
 
         // 世界 -Z 在口沿平面上的投影：D = (-Up) - dot(-Up, N) * N
+        //   D 表示"沿口沿哪个方向重力最先把液面拉下去"，
+        //   将 D 单位化后放大 PourEntryRadius，就是圆环上世界 Z 最低点相对圆心的位移。
         const FVector Down = -FVector::UpVector;
         FVector D = Down - FVector::DotProduct(Down, N) * N;
 
@@ -494,22 +497,42 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
         {
             D /= DLen; // 单位化"水平流出方向"
 
-            // 圆环上世界 Z 最低点
+            // 圆环上世界 Z 最低点——水柱的起点
             const FVector Lowest = C + D * PourEntryRadius;
 
-            // 构造出液 Transform：+X 沿 D（流出方向），+Z 沿口沿法线 N，
-            // +Y = Z × X 保持右手系。这样 PourFX 粒子的初速度、以及
-            // PourTraceForwardOffset 沿 +X 前推，都会指向水该抛的方向。
-            const FVector AxisX = D;
-            FVector AxisZ = N;
-            // 保证 Z 与 X 正交（当 N 与 D 已经天然正交时此步为恒等）
-            AxisZ = (AxisZ - FVector::DotProduct(AxisZ, AxisX) * AxisX).GetSafeNormal();
-            if (AxisZ.IsNearlyZero())
+            // ============================================================
+            // 出液 Transform 的朝向构造 —— 关键设计
+            // ============================================================
+            // 【旧做法】+X = D（水平流出方向），+Z = N（口沿法线 = 杯身轴向）
+            //   问题：P_Ribbon 内部粒子若沿组件 +Z 或 +Y 发射，粒子就会沿杯身
+            //   轴方向抛出——杯子倾斜倒水时，这个方向是"斜着上方偏向前"，视觉
+            //   上水柱像是【垂直于杯壁】被顶出来，不符合物理直觉。
+            //
+            // 【新做法】让 PourFX 组件的 +Z 对齐【世界 +Z】，即 -Z 对齐重力向下：
+            //   ① +X 仍沿 D（水平流出方向的水平分量）——让美术在 P_Ribbon 里
+            //      沿 +X 给粒子初速度时，水柱会带上一点水平抛出的速度；
+            //      同时 PourTraceForwardOffset 沿 +X 也仍指向"水该抛去的方向"。
+            //   ② +Z 强制指向世界 +Z，这样组件 -Z 就是重力方向；
+            //      P_Ribbon 内如果用组件 -Z 作为"水柱下落方向"，水就会顺重力落。
+            //   ③ 对 X 做水平化处理（去掉 D 里的极小 Z 分量），让水柱起始朝向
+            //      始终【水平于水面 / 平行于地面】，符合"水杯口沿的水平线，水
+            //      顺着这条线倒下来"的现实观感。
+            // ============================================================
+
+            // 把 D 投影到水平面上，得到"完全水平的流出方向"
+            FVector AxisX = FVector(D.X, D.Y, 0.f);
+            if (!AxisX.Normalize())
             {
-                // 极端退化情况兜底
-                AxisZ = FVector::UpVector;
+                // 极端情况下（口沿几乎正对上下），退化用 D 原始方向
+                AxisX = D;
             }
-            const FVector AxisY = FVector::CrossProduct(AxisZ, AxisX).GetSafeNormal();
+            const FVector AxisZ = FVector::UpVector;
+            // +Y = Z × X 保持右手系
+            FVector AxisY = FVector::CrossProduct(AxisZ, AxisX);
+            if (!AxisY.Normalize())
+            {
+                AxisY = FVector::CrossProduct(FVector::UpVector, FVector::ForwardVector).GetSafeNormal();
+            }
 
             const FMatrix RotMat(AxisX, AxisY, AxisZ, FVector::ZeroVector);
             const FQuat Rot(RotMat);
@@ -562,8 +585,12 @@ void ALiquidContainerActor::StartPouring()
         // 使用 SetWorldLocationAndRotation：只覆盖位置和朝向、保留美术在组件上
         // 配置的相对缩放；同时 PourFX 仍然 attach 在 ContainerMesh 上，运动跟随
         // 容器整体走。
+        //   bSweep = false ：不做碰撞扫描，避免"扫到杯壁"被卡回原地。
+        //   Teleport = TeleportPhysics ：让 Niagara 的运动插值把 Previous/Current
+        //     Transform 都对齐到新位置，防止粒子在旧位置继续被 spawn 出来。
         const FTransform PourTM = GetPourWorldTransform();
-        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation());
+        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation(),
+            /*bSweep=*/false, /*OutHit=*/nullptr, ETeleportType::TeleportPhysics);
 
         // 重新同步一次颜色/强度/开关，防止编辑器运行时改变后未生效
         PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
@@ -605,7 +632,41 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
     if (PourFX)
     {
         const FTransform PourTM = GetPourWorldTransform();
-        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation());
+        // 见 StartPouring() 中的说明：bSweep=false + TeleportPhysics，
+        // 避免碰撞卡回原位、且让 Niagara 的运动插值同步到新位置。
+        PourFX->SetWorldLocationAndRotation(PourTM.GetLocation(), PourTM.GetRotation(),
+            /*bSweep=*/false, /*OutHit=*/nullptr, ETeleportType::TeleportPhysics);
+
+#if ENABLE_DRAW_DEBUG
+        if (bDebugDrawTrace)
+        {
+            // ============================================================
+            // 出液口可视化（用于排查"起点在中心 / 方向不对"两类问题）
+            //   — 青色大球 : GetPourWorldTransform() 计算出来的目标位置（口沿最低点）
+            //   — 白色小球 : PourFX 组件的实际世界位置（若两者重合说明 SetWorldLocation 生效）
+            //   — 红/绿/蓝短线 : PourFX 组件的世界 +X / +Y / +Z 轴（RGB 惯例）
+            //     水柱视觉方向若发现"顺着蓝线飞出"，说明 P_Ribbon 沿组件 +Z 发射；
+            //     若"顺着红线飞出"，则是沿组件 +X 发射——据此可以反推 GetPourWorldTransform
+            //     里到底哪根轴需要指向重力向下。
+            // ============================================================
+            if (UWorld* W = GetWorld())
+            {
+                const FVector TargetLoc = PourTM.GetLocation();
+                const FVector ActualLoc = PourFX->GetComponentLocation();
+                DrawDebugSphere(W, TargetLoc, 1.6f, 12, FColor::Cyan,   false, 0.f, 0, 0.4f);
+                DrawDebugSphere(W, ActualLoc, 1.0f, 8,  FColor::White,  false, 0.f, 0, 0.4f);
+
+                const FTransform ActualTM = PourFX->GetComponentTransform();
+                const FVector AxX = ActualTM.GetUnitAxis(EAxis::X);
+                const FVector AxY = ActualTM.GetUnitAxis(EAxis::Y);
+                const FVector AxZ = ActualTM.GetUnitAxis(EAxis::Z);
+                const float L = 6.f;
+                DrawDebugLine(W, ActualLoc, ActualLoc + AxX * L, FColor::Red,   false, 0.f, 0, 0.4f);
+                DrawDebugLine(W, ActualLoc, ActualLoc + AxY * L, FColor::Green, false, 0.f, 0, 0.4f);
+                DrawDebugLine(W, ActualLoc, ActualLoc + AxZ * L, FColor::Blue,  false, 0.f, 0, 0.4f);
+            }
+        }
+#endif
     }
 
     // 更新 Niagara 的实时颜色(液体颜色会因混色变化)
