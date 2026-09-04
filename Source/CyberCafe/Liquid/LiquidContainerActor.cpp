@@ -495,7 +495,7 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
         // 阈值 0.05 ≈ 容器口沿与水平面夹角约 3°，太小则最低点不稳定，回退旧逻辑
         if (DLen > 0.05f)
         {
-            D /= DLen; // 单位化"水平流出方向"
+            D /= DLen; // 单位化 —— D 本身就是"水沿口沿自然流出"的方向向量
 
             // 圆环上世界 Z 最低点——水柱的起点
             const FVector Lowest = C + D * PourEntryRadius;
@@ -503,36 +503,38 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
             // ============================================================
             // 出液 Transform 的朝向构造 —— 关键设计
             // ============================================================
-            // 【旧做法】+X = D（水平流出方向），+Z = N（口沿法线 = 杯身轴向）
-            //   问题：P_Ribbon 内部粒子若沿组件 +Z 或 +Y 发射，粒子就会沿杯身
-            //   轴方向抛出——杯子倾斜倒水时，这个方向是"斜着上方偏向前"，视觉
-            //   上水柱像是【垂直于杯壁】被顶出来，不符合物理直觉。
+            // 【错误做法 A】+X = D，+Z = N（口沿法线 = 杯身轴向）
+            //   问题：粒子若沿组件 +Z 或 +Y 发射，会沿杯身轴向抛出，视觉上
+            //   水柱像被"垂直于杯壁"顶出来。
             //
-            // 【新做法】让 PourFX 组件的 +Z 对齐【世界 +Z】，即 -Z 对齐重力向下：
-            //   ① +X 仍沿 D（水平流出方向的水平分量）——让美术在 P_Ribbon 里
-            //      沿 +X 给粒子初速度时，水柱会带上一点水平抛出的速度；
-            //      同时 PourTraceForwardOffset 沿 +X 也仍指向"水该抛去的方向"。
-            //   ② +Z 强制指向世界 +Z，这样组件 -Z 就是重力方向；
-            //      P_Ribbon 内如果用组件 -Z 作为"水柱下落方向"，水就会顺重力落。
-            //   ③ 对 X 做水平化处理（去掉 D 里的极小 Z 分量），让水柱起始朝向
-            //      始终【水平于水面 / 平行于地面】，符合"水杯口沿的水平线，水
-            //      顺着这条线倒下来"的现实观感。
+            // 【错误做法 B】+X = D 投影到水平面（丢掉 Z 分量），+Z = 世界 +Z
+            //   问题：当杯子倾斜超过 90°（杯口朝下）时，D 会有向下的 Z 分量，
+            //   同时它的水平分量方向会翻转到"杯身反方向"。把 Z 拍掉后剩下的
+            //   水平分量与真实流出方向相反 → 水柱"忽然反向"。
+            //
+            // 【正确做法】+X 直接使用 D（不做水平化），+Z 保持世界 +Z：
+            //   ① +X = D：D 在口沿平面上，本身就是"重力把液体拉向最低点"的
+            //      方向。倾斜角度 90° 时是水平的，>90° 时开始朝下——这正是
+            //      我们想要的"顺口沿自然流出"的向量。
+            //   ② +Z = 世界 +Z：让 PourFX 组件的 -Z 始终对齐重力。P_Ribbon
+            //      内部若沿组件 -Z 让粒子下落、或用 Gravity 影响粒子，都能
+            //      拿到正确的世界向下方向。
+            //   ③ 用 Gram-Schmidt 让 X/Z 保持正交（D 与世界 +Z 一般已经近似
+            //      正交，但保险起见还是正交化一次）。
             // ============================================================
 
-            // 把 D 投影到水平面上，得到"完全水平的流出方向"
-            FVector AxisX = FVector(D.X, D.Y, 0.f);
-            if (!AxisX.Normalize())
+            FVector AxisX = D;
+            FVector AxisZ = FVector::UpVector;
+            // 正交化：从 AxisZ 中减去它在 AxisX 上的投影分量
+            AxisZ = AxisZ - FVector::DotProduct(AxisZ, AxisX) * AxisX;
+            if (!AxisZ.Normalize())
             {
-                // 极端情况下（口沿几乎正对上下），退化用 D 原始方向
-                AxisX = D;
+                // 极端退化：D 恰好与世界 +Z 平行（口沿完全朝上下），
+                // 通常已被外层 DLen > 0.05 挡掉，这里只是兜底
+                AxisZ = FVector::UpVector;
             }
-            const FVector AxisZ = FVector::UpVector;
             // +Y = Z × X 保持右手系
-            FVector AxisY = FVector::CrossProduct(AxisZ, AxisX);
-            if (!AxisY.Normalize())
-            {
-                AxisY = FVector::CrossProduct(FVector::UpVector, FVector::ForwardVector).GetSafeNormal();
-            }
+            const FVector AxisY = FVector::CrossProduct(AxisZ, AxisX).GetSafeNormal();
 
             const FMatrix RotMat(AxisX, AxisY, AxisZ, FVector::ZeroVector);
             const FQuat Rot(RotMat);
