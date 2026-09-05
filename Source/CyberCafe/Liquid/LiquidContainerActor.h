@@ -201,11 +201,29 @@ public:
     bool bAcceptLiquidFromOthers;
 
     /**
-     * 触发倒液的倾斜角度阈值(度)。
-     * 容器局部 +Z 与世界 +Z 的夹角超过此值即出液。
+     * 触发倒液的“临界角容差”（度）——配合动态临界角一起工作。
+     *
+     * ★ 新版倒液判定采用物理临界角公式（液面几何模型），不再使用固定阈值：
+     *
+     *      θ_critical = atan( LiquidColumnHeight * (1 - FillAmount) / PourEntryRadius )
+     *
+     *   其中 LiquidColumnHeight（液柱内腔高度）由 PourEntryPoint 到 PourTargetPoint
+     *   沿容器局部 +Z 的距离自动计算——美术只需摆好两个锚点即可。
+     *
+     *   直觉解读：
+     *     - 满杯（FillAmount = 1）  → θ_critical = 0°  ，稍微一斜就洒
+     *     - 半杯（FillAmount = 0.5）→ θ_critical ≈ 59° （H=10,R=3）
+     *     - 空瓶（FillAmount = 0）  → θ_critical ≈ 73° ，需要接近倒扣才能倒出最后一滴
+     *
+     * 实际触发条件：TiltAngle ≥ (θ_critical - PourAngleTolerance)
+     *   —— 提前 PourAngleTolerance 度触发，避免"临界闪烁"，并补偿椭圆口沿等实际情况。
+     *   默认 5°：满杯稍晃就洒（θ_critical = 0 - 5 = -5 → 任何倾斜都触发）。
+     *
+     * 如果需要“更宽松”让玩家更容易倒出液体，调大此值（如 10°）；
+     * 如果发现“杯子还没斜到位就漏水”，调小此值（如 2°）。
      */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0", ClampMax = "180.0"))
-    float PourAngleThreshold;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0", ClampMax = "45.0"))
+    float PourAngleTolerance;
 
     /** 出液速率(mL/秒) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
@@ -500,6 +518,23 @@ protected:
     /** 计算当前容器与世界+Z的夹角(度)：0=直立，180=完全倒置 */
     UFUNCTION(BlueprintPure, Category = "Liquid|Pour")
     float GetTiltAngleDegrees() const;
+
+    /**
+     * 计算“液体开始溢出”的临界倾斜角(度)——基于液面几何物理模型。
+     *
+     * 公式：θ_critical = atan( LiquidColumnHeight * (1 - FillAmount) / PourEntryRadius )
+     *
+     *   - LiquidColumnHeight = PourEntryPoint 到 PourTargetPoint 沿容器局部 +Z 的距离，
+     *     由这两个锚点自动算出，无需美术手填。
+     *   - 满杯（FillAmount=1）→ 临界角 = 0°（碰一下就洒）
+     *   - 空杯（FillAmount=0）→ 临界角 ≈ atan(H/R)（需要倒扣接近水平才能出液）
+     *
+     * 边界情形：
+     *   - 两锚点重合或缺失 → 返回 0（视为"满杯语义"，任何倾斜都触发倒液）
+     *   - PourEntryRadius <= 0 → 返回 90°（无法计算，保守拒绝倒液）
+     */
+    UFUNCTION(BlueprintPure, Category = "Liquid|Pour")
+    float ComputeCriticalTiltAngleDegrees() const;
 
     /** 启动倒液 VFX / 状态 */
     virtual void StartPouring();

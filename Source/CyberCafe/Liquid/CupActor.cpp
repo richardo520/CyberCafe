@@ -22,7 +22,6 @@ ACupActor::ACupActor()
     MaxVolumeML             = 200.f;
     FillAmount              = 0.f;
 
-    PourAngleThreshold      = 80.f;
     PourRatePerSecond       = 30.f;
     FlowStrength            = 0.5f;
     PourTraceDistance       = 40.f;   // 杯子较矮，检测距离短一些

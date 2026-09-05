@@ -19,7 +19,6 @@ ABottleActor::ABottleActor()
     MaxVolumeML             = 750.f;
     FillAmount              = 1.0f;
 
-    PourAngleThreshold      = 60.f;
     PourRatePerSecond       = 60.f;
     FlowStrength            = 1.f;
     PourTraceDistance       = 60.f;

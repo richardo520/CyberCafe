@@ -91,7 +91,10 @@ ALiquidContainerActor::ALiquidContainerActor()
     // 倒液（Pour）默认值——瓶子/杯子子类构造里可各自覆盖
     bCanPour                = true;
     bAcceptLiquidFromOthers = false;   // 基类默认不接液，杯子子类构造里改为 true
-    PourAngleThreshold      = 60.f;
+    // 新版不再使用固定阈值，临界角由 ComputeCriticalTiltAngleDegrees() 基于物理公式自动算出：
+    //   满杯  → 0°就洒，空杯  → 约 atan(H/R) 才会倒出。
+    // PourAngleTolerance 提前触发的容差，默认 5°。子类/蓝图可覆盖。
+    PourAngleTolerance      = 5.f;
     PourRatePerSecond       = 60.f;    // 每秒 60mL
     FlowStrength            = 1.f;
     PourTraceDistance       = 60.f;    // 60cm，足够从桌面高度倒到杯子
@@ -148,12 +151,13 @@ void ALiquidContainerActor::Tick(float DeltaTime)
     // 1) 根据容器运动状态实时调节液面波动
     UpdateDynamicWaves(DeltaTime);
 
-    // 2) 倒液流程：允许倒液 + 有液体 + 超阈值 → StartPouring；否则 StopPouring
+    // 2) 倒液流程：允许倒液 + 有液体 + 超过“液面物理临界角” → StartPouring；否则 StopPouring
     if (bCanPour)
     {
+        const float CriticalAngle = ComputeCriticalTiltAngleDegrees();
         const bool bShouldPour =
             (FillAmount > KINDA_SMALL_NUMBER) &&
-            (GetTiltAngleDegrees() >= PourAngleThreshold);
+            (GetTiltAngleDegrees() >= CriticalAngle - PourAngleTolerance);
 
         if (bShouldPour && !bIsPouring)
         {
@@ -578,6 +582,40 @@ float ALiquidContainerActor::GetTiltAngleDegrees() const
     const FVector UpWS = ContainerMesh->GetUpVector();
     const float Dot = FVector::DotProduct(UpWS.GetSafeNormal(), FVector::UpVector);
     const float AngleRad = FMath::Acos(FMath::Clamp(Dot, -1.f, 1.f));
+    return FMath::RadiansToDegrees(AngleRad);
+}
+
+float ALiquidContainerActor::ComputeCriticalTiltAngleDegrees() const
+{
+    // PourEntryRadius 未启用 → 无法建立液面几何模型，保守拒绝倒液（返回 90°）
+    if (PourEntryRadius <= KINDA_SMALL_NUMBER)
+    {
+        return 90.f;
+    }
+
+    // 通过 PourEntryPoint 与 PourTargetPoint 的相对位置，自动算出“液柱内腔高度”：
+    //   把杯底点转到杯口锚点的局部空间，取其 |Z| 作为沿容器主轴方向的距离。
+    //   —— 这样即便美术给 PourEntryPoint 加了一点旋转，也能正确沿"杯口朝外方向"度量。
+    float LiquidColumnHeight = 0.f;
+    if (PourEntryPoint && PourTargetPoint)
+    {
+        const FVector TargetWS = PourTargetPoint->GetComponentLocation();
+        const FVector TargetInEntryLS =
+            PourEntryPoint->GetComponentTransform().InverseTransformPositionNoScale(TargetWS);
+        LiquidColumnHeight = FMath::Abs(TargetInEntryLS.Z);
+    }
+
+    // 两锚点重合或缺失 → 内腔高度为 0，视为"满杯语义"（任何倾斜都会溢出，返回 0°）
+    if (LiquidColumnHeight <= KINDA_SMALL_NUMBER)
+    {
+        return 0.f;
+    }
+
+    // 液面开始溢出的临界角度（正圆柱几何模型）：
+    //   tan(θ) = 剩余高度 / 杯口半径
+    //   剩余高度 = LiquidColumnHeight * (1 - FillAmount)
+    const float RemainingHeight = LiquidColumnHeight * FMath::Max(1.f - FillAmount, 0.f);
+    const float AngleRad = FMath::Atan2(RemainingHeight, PourEntryRadius);
     return FMath::RadiansToDegrees(AngleRad);
 }
 
