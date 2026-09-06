@@ -44,7 +44,7 @@ public:
     /**
      * 是否在编辑器 Viewport 中预览 3D UI（不影响运行时行为）。
      * 打开后：在关卡编辑器/蓝图预览里，UI 会强制显示，并按 EditorPreviewCurrentML / EditorPreviewMaxML 填一个假的数值，
-     * 方便调整 VolumeWidgetOffset / VolumeWidgetDrawSize / 相对旋转等。
+     * 方便调整 VolumeWidgetComp 的相对 Transform / VolumeWidgetDrawSize 等。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI|EditorPreview")
     bool bEditorPreviewWidget = true;
@@ -71,10 +71,6 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")
     TSubclassOf<ULiquidVolumeWidget> VolumeWidgetClass;
-
-    /** Widget 相对杯子 Root 的挂载偏移（默认往上抬一点，避免挡住杯口） */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")
-    FVector VolumeWidgetOffset = FVector(0.f, 0.f, 15.f);
 
     /** Widget 面板在 World Space 下的绘制尺寸（像素） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI")

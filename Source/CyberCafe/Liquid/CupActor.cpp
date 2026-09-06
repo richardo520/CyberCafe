@@ -38,7 +38,7 @@ ACupActor::ACupActor()
     // ------------------------------------------------------------------
     VolumeWidgetComp = CreateDefaultSubobject<UWidgetComponent>(TEXT("VolumeWidgetComp"));
     VolumeWidgetComp->SetupAttachment(GetRootComponent());
-    VolumeWidgetComp->SetRelativeLocation(VolumeWidgetOffset);
+    // 位置与旋转统一交给蓝图 SCS／组件 Transform 保存，美术在蓝图 Viewport 里拖动即为最终位置
     VolumeWidgetComp->SetRelativeScale3D(FVector(0.05f)); // 默认缩放：DrawSize 400×80 → 世界里约 20cm×4cm
     VolumeWidgetComp->SetWidgetSpace(EWidgetSpace::World);
     VolumeWidgetComp->SetDrawSize(VolumeWidgetDrawSize);
@@ -56,10 +56,9 @@ void ACupActor::BeginPlay()
     // 1) 绑定基类的液体变化事件（AddLiquid / ConsumeLiquid / SetLiquidMaterialAsset 都会广播）
     OnLiquidChanged.AddDynamic(this, &ACupActor::HandleLiquidChanged);
 
-    // 2) 应用蓝图配置的 Widget 类 & 尺寸 & 偏移（这些字段是编辑器可改的，构造函数里读到的是默认值）
+    // 2) 应用蓝图配置的 Widget 类 & 尺寸（位置/旋转由蓝图 SCS 直接保存，无需 C++ 覆盖）
     if (VolumeWidgetComp)
     {
-        VolumeWidgetComp->SetRelativeLocation(VolumeWidgetOffset);
         VolumeWidgetComp->SetDrawSize(VolumeWidgetDrawSize);
 
         if (VolumeWidgetClass)
@@ -75,7 +74,7 @@ void ACupActor::BeginPlay()
 
 //---------------------------------------------------------------------
 // 编辑器预览：让 3D UI 在关卡编辑器 Viewport / 蓝图预览窗口里就能看见，
-//              方便调整 VolumeWidgetOffset / DrawSize / 相对旋转等，
+//              方便调整 VolumeWidgetComp 的相对 Transform / DrawSize / 旋转等，
 //              不用戴头显 + 进 PIE。
 // 仅在非游戏世界 (!IsGameWorld()) 下生效——PIE 与打包版本走 BeginPlay。
 //---------------------------------------------------------------------
@@ -95,8 +94,7 @@ void ACupActor::OnConstruction(const FTransform& Transform)
         return;
     }
 
-    // 同步位置 / 尺寸 / Widget 类，让美术在 Details 里调参数能立刻在 Viewport 里看到效果
-    VolumeWidgetComp->SetRelativeLocation(VolumeWidgetOffset);
+    // 同步 DrawSize / Widget 类（位置与旋转由蓝图 SCS 直接保存，C++ 不再覆盖）
     VolumeWidgetComp->SetDrawSize(VolumeWidgetDrawSize);
     if (VolumeWidgetClass && VolumeWidgetComp->GetWidgetClass() != VolumeWidgetClass)
     {
