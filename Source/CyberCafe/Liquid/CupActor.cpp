@@ -73,6 +73,53 @@ void ACupActor::BeginPlay()
     RefreshVolumeUIVisibility();
 }
 
+//---------------------------------------------------------------------
+// 编辑器预览：让 3D UI 在关卡编辑器 Viewport / 蓝图预览窗口里就能看见，
+//              方便调整 VolumeWidgetOffset / DrawSize / 相对旋转等，
+//              不用戴头显 + 进 PIE。
+// 仅在非游戏世界 (!IsGameWorld()) 下生效——PIE 与打包版本走 BeginPlay。
+//---------------------------------------------------------------------
+void ACupActor::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    UWorld* World = GetWorld();
+    const bool bIsGameLikeWorld = World && World->IsGameWorld();
+    if (bIsGameLikeWorld)
+    {
+        return;
+    }
+
+    if (!VolumeWidgetComp)
+    {
+        return;
+    }
+
+    // 同步位置 / 尺寸 / Widget 类，让美术在 Details 里调参数能立刻在 Viewport 里看到效果
+    VolumeWidgetComp->SetRelativeLocation(VolumeWidgetOffset);
+    VolumeWidgetComp->SetDrawSize(VolumeWidgetDrawSize);
+    if (VolumeWidgetClass && VolumeWidgetComp->GetWidgetClass() != VolumeWidgetClass)
+    {
+        VolumeWidgetComp->SetWidgetClass(VolumeWidgetClass);
+    }
+
+    // 根据配置开关决定预览显示还是隐藏（默认隐藏，与 Runtime 空杯保持一致）
+    VolumeWidgetComp->SetVisibility(bEditorPreviewWidget);
+
+    if (!bEditorPreviewWidget)
+    {
+        return;
+    }
+
+    // 让 WidgetComponent 立刻构造出内部 UserWidget 实例（编辑器预览下不会自动 tick 更新）
+    VolumeWidgetComp->InitWidget();
+
+    if (ULiquidVolumeWidget* W = Cast<ULiquidVolumeWidget>(VolumeWidgetComp->GetUserWidgetObject()))
+    {
+        W->UpdateVolume(EditorPreviewCurrentML, EditorPreviewMaxML);
+    }
+}
+
 void ACupActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);

@@ -30,6 +30,33 @@ public:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaTime) override;
 
+    /**
+     * 编辑器内的构造脚本：
+     * 用于在编辑器 Viewport 里直接预览 3D UI（不用进 PIE / 戴头显）。
+     * 只在非游戏世界（编辑器场景 / 蓝图预览）中生效，PIE 与打包版本完全走 BeginPlay 那条路径。
+     */
+    virtual void OnConstruction(const FTransform& Transform) override;
+
+    //=====================================================================
+    // 编辑器预览
+    //=====================================================================
+
+    /**
+     * 是否在编辑器 Viewport 中预览 3D UI（不影响运行时行为）。
+     * 打开后：在关卡编辑器/蓝图预览里，UI 会强制显示，并按 EditorPreviewCurrentML / EditorPreviewMaxML 填一个假的数值，
+     * 方便调整 VolumeWidgetOffset / VolumeWidgetDrawSize / 相对旋转等。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI|EditorPreview")
+    bool bEditorPreviewWidget = true;
+
+    /** 编辑器预览时假装的当前液量（mL），只影响 Viewport 显示 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI|EditorPreview", meta = (EditCondition = "bEditorPreviewWidget"))
+    float EditorPreviewCurrentML = 120.f;
+
+    /** 编辑器预览时假装的最大容量（mL），只影响 Viewport 显示 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|UI|EditorPreview", meta = (EditCondition = "bEditorPreviewWidget"))
+    float EditorPreviewMaxML = 200.f;
+
     //=====================================================================
     // 容量 UI
     //=====================================================================
