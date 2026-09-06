@@ -31,6 +31,10 @@
 #include "Blueprint/UserWidget.h"
 #include "GrabComponent.h"
 #include "VRFunctionLibrary.h"
+#include "Haptics/HapticFeedbackEffect_Base.h"
+#include "Components/MeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 
 //=====================================================================
 // 构造函数：搭建蓝图 SimpleConstructionScript 中的组件层级
@@ -111,6 +115,16 @@ AVRPawn::AVRPawn()
     ProjectedTeleportLocation = FVector::ZeroVector;
     bActiveMenuHandRight = false;
     bTurnConsumed = false;
+
+    // 远程抓取激活默认关闭
+    bRemoteGrabActiveLeft = false;
+    bRemoteGrabActiveRight = false;
+
+    // 高亮与悬停震动默认参数
+    HighlightParamName = FName(TEXT("Highlight"));
+    HighlightOnValue = 1.f;
+    HoverHapticScale = 0.5f;
+    HoverHapticEffect = nullptr;
 }
 
 //=====================================================================
@@ -159,9 +173,24 @@ void AVRPawn::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // 更新左右手可抓取目标
-    UpdatePotentialTarget(MotionControllerLeftAim,TargetGrabComponentLeft);
-    UpdatePotentialTarget(MotionControllerRightAim,TargetGrabComponentRight);
+    // 远程抓取激活时，才更新对应手的 Aim 目标高亮；未激活时确保已清除高亮
+    if (bRemoteGrabActiveLeft)
+    {
+        UpdatePotentialTarget(MotionControllerLeftAim, TargetGrabComponentLeft);
+    }
+    else if (TargetGrabComponentLeft)
+    {
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentLeft);
+    }
+
+    if (bRemoteGrabActiveRight)
+    {
+        UpdatePotentialTarget(MotionControllerRightAim, TargetGrabComponentRight);
+    }
+    else if (TargetGrabComponentRight)
+    {
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentRight);
+    }
 
     // 更新拉拽状态
     if (UpdatePulledObject(PulledGrabComponentLeft, MotionControllerLeftGrip, DeltaTime))
@@ -215,6 +244,20 @@ void AVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
     // 菜单
     if (IA_Menu_Toggle_Left)  EIC->BindAction(IA_Menu_Toggle_Left,  ETriggerEvent::Triggered, this, &AVRPawn::OnMenuToggleLeft);
     if (IA_Menu_Toggle_Right) EIC->BindAction(IA_Menu_Toggle_Right, ETriggerEvent::Triggered, this, &AVRPawn::OnMenuToggleRight);
+
+    // 远程抓取激活（按下开启 Aim 高亮，松开取消）
+    if (IA_RemoteGrab_Left)
+    {
+        EIC->BindAction(IA_RemoteGrab_Left, ETriggerEvent::Started,   this, &AVRPawn::OnRemoteGrabLeftStarted);
+        EIC->BindAction(IA_RemoteGrab_Left, ETriggerEvent::Completed, this, &AVRPawn::OnRemoteGrabLeftCompleted);
+        EIC->BindAction(IA_RemoteGrab_Left, ETriggerEvent::Canceled,  this, &AVRPawn::OnRemoteGrabLeftCompleted);
+    }
+    if (IA_RemoteGrab_Right)
+    {
+        EIC->BindAction(IA_RemoteGrab_Right, ETriggerEvent::Started,   this, &AVRPawn::OnRemoteGrabRightStarted);
+        EIC->BindAction(IA_RemoteGrab_Right, ETriggerEvent::Completed, this, &AVRPawn::OnRemoteGrabRightCompleted);
+        EIC->BindAction(IA_RemoteGrab_Right, ETriggerEvent::Canceled,  this, &AVRPawn::OnRemoteGrabRightCompleted);
+    }
 }
 
 //=====================================================================
@@ -346,6 +389,54 @@ void AVRPawn::OnGrabRightReleased(const FInputActionValue& Value)
 
 void AVRPawn::OnMenuToggleLeft(const FInputActionValue& Value)   { ToggleMenu(false); }
 void AVRPawn::OnMenuToggleRight(const FInputActionValue& Value)  { ToggleMenu(true);  }
+
+//---------------------------------------------------------------------
+// 远程抓取激活：A/X 面键 Started / Completed
+//---------------------------------------------------------------------
+
+void AVRPawn::OnRemoteGrabLeftStarted(const FInputActionValue& /*Value*/)
+{
+    bRemoteGrabActiveLeft = true;
+}
+
+void AVRPawn::OnRemoteGrabLeftCompleted(const FInputActionValue& /*Value*/)
+{
+    bRemoteGrabActiveLeft = false;
+    // 立即清除左手高亮（同时会自动将 HighlightMID 参数写回 0）
+    if (TargetGrabComponentLeft)
+    {
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentLeft);
+    }
+}
+
+void AVRPawn::OnRemoteGrabRightStarted(const FInputActionValue& /*Value*/)
+{
+    bRemoteGrabActiveRight = true;
+}
+
+void AVRPawn::OnRemoteGrabRightCompleted(const FInputActionValue& /*Value*/)
+{
+    bRemoteGrabActiveRight = false;
+    if (TargetGrabComponentRight)
+    {
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentRight);
+    }
+}
+
+void AVRPawn::PlayHoverHaptic(bool bRightHand)
+{
+    if (HoverHapticEffect == nullptr)
+    {
+        return;
+    }
+    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+    {
+        PC->PlayHapticEffect(HoverHapticEffect,
+            bRightHand ? EControllerHand::Right : EControllerHand::Left,
+            HoverHapticScale, /*bLoop=*/false);
+    }
+}
+
 //=====================================================================
 // 抓取
 //=====================================================================
@@ -538,6 +629,10 @@ void AVRPawn::UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGr
         {
             TargetGrabComponent = NewTarget;
             MarkForGrab(NewTarget, true);
+
+            // 首次锁定到可抓取目标：播一下悬停震动（判断是左手还是右手）
+            const bool bRightHand = (&TargetGrabComponent == &TargetGrabComponentRight);
+            PlayHoverHaptic(bRightHand);
         }
     }
 }
@@ -563,12 +658,69 @@ void AVRPawn::MarkForGrab(UGrabComponent* InGrabComponent, bool bCanBeGrab)
         return;
     }
 
-    // 默认通过CustomDepth描边高亮所属Actor的Root Primitive
-    if (AActor* OwnerActor = InGrabComponent->GetOwner())
+    AActor* OwnerActor = InGrabComponent->GetOwner();
+    if (OwnerActor == nullptr)
     {
-        if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(OwnerActor->GetRootComponent()))
+        return;
+    }
+
+    // 1) 材质内 Fresnel 高亮（主途径，支持半透明玻璃杯等）
+    ApplyHighlightToActor(OwnerActor, bCanBeGrab);
+
+    // 2) 同时保留 CustomDepth Stencil 描边（兼容不透明物体的后处理描边管线）
+    if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(OwnerActor->GetRootComponent()))
+    {
+        Prim->SetRenderCustomDepth(bCanBeGrab);
+    }
+}
+
+void AVRPawn::ApplyHighlightToActor(AActor* TargetActor, bool bHighlight)
+{
+    if (TargetActor == nullptr || HighlightParamName.IsNone())
+    {
+        return;
+    }
+
+    // 遍历 Actor 上所有 MeshComponent（包含Static / Skeletal）
+    TArray<UMeshComponent*> Meshes;
+    TargetActor->GetComponents<UMeshComponent>(Meshes);
+
+    for (UMeshComponent* Mesh : Meshes)
+    {
+        if (Mesh == nullptr)
         {
-            Prim->SetRenderCustomDepth(bCanBeGrab);
+            continue;
+        }
+
+        // 本 Mesh 的 MID 缓存（首次高亮时建立）
+        FMIDArray& CachedMIDs = HighlightMIDs.FindOrAdd(Mesh);
+
+        const int32 SlotNum = Mesh->GetNumMaterials();
+        if (CachedMIDs.MIDs.Num() < SlotNum)
+        {
+            CachedMIDs.MIDs.SetNum(SlotNum);
+        }
+
+        for (int32 Slot = 0; Slot < SlotNum; ++Slot)
+        {
+            UMaterialInstanceDynamic* MID = CachedMIDs.MIDs[Slot];
+            if (MID == nullptr)
+            {
+                // 仅在首次开启高亮时创建 MID；关闭时若从未创建直接跳过（无任何副作用）
+                if (!bHighlight)
+                {
+                    continue;
+                }
+                MID = Mesh->CreateAndSetMaterialInstanceDynamic(Slot);
+                if (MID == nullptr)
+                {
+                    continue;
+                }
+                CachedMIDs.MIDs[Slot] = MID;
+            }
+
+            // 若材质里没有 Highlight 参数，Set 会默默失败但不会报错 → 安全
+            MID->SetScalarParameterValue(HighlightParamName, bHighlight ? HighlightOnValue : 0.f);
         }
     }
 }

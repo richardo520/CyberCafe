@@ -20,6 +20,19 @@ class UInputAction;
 class UGrabComponent;
 class UUserWidget;
 class AActor;
+class UHapticFeedbackEffect_Base;
+class UMaterialInstanceDynamic;
+class UMeshComponent;
+
+/** 高亮 MID 缓存：一个 Mesh 上可能有多个材质 Slot，各自需要一个 MID */
+USTRUCT()
+struct FMIDArray
+{
+    GENERATED_BODY()
+
+    UPROPERTY(Transient)
+    TArray<TObjectPtr<UMaterialInstanceDynamic>> MIDs;
+};
 
 /**
  * AVRPawn
@@ -126,6 +139,11 @@ public:
     // 菜单 / 射击
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Menu_Toggle_Left;
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_Menu_Toggle_Right;
+
+    // 远程抓取激活（Quest 3：左手 X 键 / 右手 A 键）
+    // 按下开启 Aim 高亮 + 悬停震动，松开取消。真正的抓/拉仍由 Grip 键 IA_Grab_* 完成。
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_RemoteGrab_Left;
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_RemoteGrab_Right;
     
     //=====================================================================
     // 蓝图暴露的配置属性
@@ -138,6 +156,22 @@ public:
     /** 抓取半径：以Grip位置为球心的球体检测半径 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab")
     float GrabRadiusFromGripPosition;
+
+    /** 悬停到可抓取物体上时播放的触觉反馈（短促脉冲） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Haptics")
+    TObjectPtr<UHapticFeedbackEffect_Base> HoverHapticEffect;
+
+    /** 悬停震动强度（0~1） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Haptics", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float HoverHapticScale;
+
+    /** 材质中"高亮开关"标量参数名（Master Material 里加一个 Highlight 参数即可支持半透物体） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Highlight")
+    FName HighlightParamName;
+
+    /** 高亮打开时写入 HighlightParamName 的目标值 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Highlight")
+    float HighlightOnValue;
 
     /** 传送投射的初速度 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Teleport")
@@ -190,6 +224,14 @@ public:
     /** 右手当前"目标"抓取组件 */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "VR|Runtime")
     TObjectPtr<UGrabComponent> TargetGrabComponentRight;
+
+    /** 左手远程抓取是否处于激活（按住 X 键）状态 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "VR|Runtime")
+    bool bRemoteGrabActiveLeft;
+
+    /** 右手远程抓取是否处于激活（按住 A 键）状态 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "VR|Runtime")
+    bool bRemoteGrabActiveRight;
 
     /** 传送轨迹是否处于激活状态 */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "VR|Runtime")
@@ -331,7 +373,27 @@ protected:
     void OnMenuToggleLeft(const FInputActionValue& Value);
     void OnMenuToggleRight(const FInputActionValue& Value);
 
+    // 远程抓取激活/取消（Quest 3 A/X 面键按下、松开）
+    void OnRemoteGrabLeftStarted(const FInputActionValue& Value);
+    void OnRemoteGrabLeftCompleted(const FInputActionValue& Value);
+    void OnRemoteGrabRightStarted(const FInputActionValue& Value);
+    void OnRemoteGrabRightCompleted(const FInputActionValue& Value);
+
+    /** 播放悬停触觉反馈（新目标首次锁定时调用） */
+    void PlayHoverHaptic(bool bRightHand);
+
+    /** 应用/取消一个 Actor 的所有 MeshComponent 的材质高亮参数 */
+    void ApplyHighlightToActor(AActor* TargetActor, bool bHighlight);
+
 private:
     /** 快速转向的Y轴累计，用于避免摇杆持续推动重复触发 */
     bool bTurnConsumed;
+
+    /**
+     * 已被高亮过的 Mesh -> MID 缓存。
+     * 避免每次高亮切换都创建新 MID；同时在关闭高亮时把参数写回 0。
+     * key: MeshComponent；value: 该 Mesh 每个 Slot 的 MID 数组
+     */
+    UPROPERTY(Transient)
+    TMap<TObjectPtr<UMeshComponent>, FMIDArray> HighlightMIDs;
 };
