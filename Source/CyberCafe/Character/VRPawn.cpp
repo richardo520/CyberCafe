@@ -174,24 +174,54 @@ void AVRPawn::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // 远程抓取激活时，才更新对应手的 Aim 目标高亮；未激活时确保已清除高亮
-    if (bRemoteGrabActiveLeft)
+    // 目标高亮扫描：近距离 Grip 优先，其次远程 Aim（仅在按住 A/X 时）。
+    // 已被抓取/拉拽中的手不做扫描，避免"抓着物体时手边其他物体又亮起来"。
+    auto UpdateHandTarget = [this](
+        UMotionControllerComponent* Grip,
+        UMotionControllerComponent* Aim,
+        bool bRemoteActive,
+        UGrabComponent* HeldOrPulled,
+        TObjectPtr<UGrabComponent>& Target)
     {
-        UpdatePotentialTarget(MotionControllerLeftAim, TargetGrabComponentLeft);
-    }
-    else if (TargetGrabComponentLeft)
-    {
-        UpdateTargetGrabComponent(nullptr, TargetGrabComponentLeft);
-    }
+        if (HeldOrPulled != nullptr)
+        {
+            if (Target)
+            {
+                UpdateTargetGrabComponent(nullptr, Target);
+            }
+            return;
+        }
 
-    if (bRemoteGrabActiveRight)
-    {
-        UpdatePotentialTarget(MotionControllerRightAim, TargetGrabComponentRight);
-    }
-    else if (TargetGrabComponentRight)
-    {
-        UpdateTargetGrabComponent(nullptr, TargetGrabComponentRight);
-    }
+        // 1) 近距离 Grip 扫描（不需要按 A/X，一伸手就能感知）
+        if (UGrabComponent* NearGrab = GetGrabComponentNearMotionController(Grip, Target))
+        {
+            UpdateTargetGrabComponent(NearGrab, Target);
+            return;
+        }
+
+        // 2) 远程 Aim 扫描（仅按住 A/X 时）
+        if (bRemoteActive)
+        {
+            UpdatePotentialTarget(Aim, Target);
+            return;
+        }
+
+        // 3) 近处没有、远程也未激活 → 清高亮
+        if (Target)
+        {
+            UpdateTargetGrabComponent(nullptr, Target);
+        }
+    };
+
+    UpdateHandTarget(MotionControllerLeftGrip,  MotionControllerLeftAim,
+                     bRemoteGrabActiveLeft,
+                     HeldComponentLeft  ? HeldComponentLeft.Get()  : PulledGrabComponentLeft.Get(),
+                     TargetGrabComponentLeft);
+
+    UpdateHandTarget(MotionControllerRightGrip, MotionControllerRightAim,
+                     bRemoteGrabActiveRight,
+                     HeldComponentRight ? HeldComponentRight.Get() : PulledGrabComponentRight.Get(),
+                     TargetGrabComponentRight);
 
     // 更新拉拽状态
     if (UpdatePulledObject(PulledGrabComponentLeft, MotionControllerLeftGrip, DeltaTime))
