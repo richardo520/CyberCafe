@@ -33,6 +33,7 @@
 #include "VRFunctionLibrary.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Components/MeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -737,6 +738,14 @@ void AVRPawn::ApplyHighlightToActor(AActor* TargetActor, bool bHighlight)
     for (UMeshComponent* Mesh : Meshes)
     {
         if (Mesh == nullptr)
+        {
+            continue;
+        }
+
+        // 跳过 UWidgetComponent：它虽然继承自 UMeshComponent，但用的是内部生成的 UMG 材质
+        // + RenderTarget，如果我们对它 CreateAndSetMaterialInstanceDynamic 会替换掉那份特殊
+        // 材质，导致 3D UI 显示成马赛克。3D UI 也不应该参与"可抓取高亮"。
+        if (Mesh->IsA<UWidgetComponent>())
         {
             continue;
         }
