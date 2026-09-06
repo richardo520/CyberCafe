@@ -165,6 +165,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Haptics", meta = (ClampMin = "0.0", ClampMax = "1.0"))
     float HoverHapticScale;
 
+    /**
+     * 悬停震动是否循环播放：
+     *   - true ：Aim 锁定可抓物期间持续震动（推荐搭配一段短促的循环 Curve 使用）
+     *   - false：只在锁定新目标那一刻播一次
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Haptics")
+    bool bLoopHoverHaptic;
+
     /** 材质中"高亮开关"标量参数名（Master Material 里加一个 Highlight 参数即可支持半透物体） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR|Grab|Highlight")
     FName HighlightParamName;
@@ -381,6 +389,9 @@ protected:
 
     /** 播放悬停触觉反馈（新目标首次锁定时调用） */
     void PlayHoverHaptic(bool bRightHand);
+
+    /** 停止悬停触觉反馈（丢失目标或松开激活键时调用） */
+    void StopHoverHaptic(bool bRightHand);
 
     /** 应用/取消一个 Actor 的所有 MeshComponent 的材质高亮参数 */
     void ApplyHighlightToActor(AActor* TargetActor, bool bHighlight);

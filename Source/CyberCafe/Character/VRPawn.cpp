@@ -125,6 +125,7 @@ AVRPawn::AVRPawn()
     HighlightOnValue = 1.f;
     HoverHapticScale = 0.5f;
     HoverHapticEffect = nullptr;
+    bLoopHoverHaptic = true;
 }
 
 //=====================================================================
@@ -407,6 +408,8 @@ void AVRPawn::OnRemoteGrabLeftCompleted(const FInputActionValue& /*Value*/)
     {
         UpdateTargetGrabComponent(nullptr, TargetGrabComponentLeft);
     }
+    // 保险丝：无论是否有目标，都确保左手循环震动停下
+    StopHoverHaptic(false);
 }
 
 void AVRPawn::OnRemoteGrabRightStarted(const FInputActionValue& /*Value*/)
@@ -421,6 +424,8 @@ void AVRPawn::OnRemoteGrabRightCompleted(const FInputActionValue& /*Value*/)
     {
         UpdateTargetGrabComponent(nullptr, TargetGrabComponentRight);
     }
+    // 保险丝：确保右手循环震动停下
+    StopHoverHaptic(true);
 }
 
 void AVRPawn::PlayHoverHaptic(bool bRightHand)
@@ -433,7 +438,20 @@ void AVRPawn::PlayHoverHaptic(bool bRightHand)
     {
         PC->PlayHapticEffect(HoverHapticEffect,
             bRightHand ? EControllerHand::Right : EControllerHand::Left,
-            HoverHapticScale, /*bLoop=*/false);
+            HoverHapticScale, /*bLoop=*/bLoopHoverHaptic);
+    }
+}
+
+void AVRPawn::StopHoverHaptic(bool bRightHand)
+{
+    // 循环震动时才需要主动停；一次性震动自然衰减到 0，无需处理
+    if (!bLoopHoverHaptic)
+    {
+        return;
+    }
+    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+    {
+        PC->StopHapticEffect(bRightHand ? EControllerHand::Right : EControllerHand::Left);
     }
 }
 
@@ -615,23 +633,24 @@ void AVRPawn::UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGr
     {
         return;
     }
-    
-    // 取消旧目标高亮
+
+    // 判断当前操作的是哪只手（一旦确定，后面震动开/关都能路由到正确手柄）
+    const bool bRightHand = (&TargetGrabComponent == &TargetGrabComponentRight);
+
+    // 取消旧目标高亮 + 停掉旧目标的循环震动
     if (TargetGrabComponent)
     {
         MarkForGrab(TargetGrabComponent, false);
         TargetGrabComponent = nullptr;
+        StopHoverHaptic(bRightHand);
     }
-    // 高亮新目标
+    // 高亮新目标 + 开启悬停震动
     if (NewTarget)
     {
         if (UVRFunctionLibrary::CanBePotentialTarget(NewTarget->GetOwner()))
         {
             TargetGrabComponent = NewTarget;
             MarkForGrab(NewTarget, true);
-
-            // 首次锁定到可抓取目标：播一下悬停震动（判断是左手还是右手）
-            const bool bRightHand = (&TargetGrabComponent == &TargetGrabComponentRight);
             PlayHoverHaptic(bRightHand);
         }
     }
