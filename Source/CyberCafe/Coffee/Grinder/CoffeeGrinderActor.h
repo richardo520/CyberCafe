@@ -44,6 +44,7 @@ public:
     ACoffeeGrinderActor();
 
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaTime) override;
 
     //=====================================================================
     // 组件
@@ -98,6 +99,65 @@ public:
     TSubclassOf<AGrinderDrawerActor> DrawerClass;
 
     //=====================================================================
+    // 研磨音效配置
+    //=====================================================================
+
+    /**
+     * 研磨音效淡入时间 (秒)。把手刚开始转动时，GrindSFX 用 FadeIn 起播，避免"啪"的突然起音。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0"))
+    float GrindSFXFadeInTime;
+
+    /**
+     * 研磨音效淡出时间 (秒)。把手停下后，GrindSFX 用 FadeOut 停止，避免突然掐掉。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0"))
+    float GrindSFXFadeOutTime;
+
+    /**
+     * "多久没有再收到转动上报就认为停下了" 的判定时间 (秒)。
+     * 超过本值且当前音效还在播 → 触发 FadeOut。建议 0.15 ~ 0.3。
+     * 太小：玩家手稍慢一点音效就断续；太大：真的停了还要拖很久才静音。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.01"))
+    float GrindStopDelay;
+
+    /**
+     * 是否根据当前角速度调制音量。
+     * 开启后：Tick 里估算最近的 |角速度|，映射到 [MinVolume, MaxVolume]。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio")
+    bool bModulateVolumeBySpeed;
+
+    /**
+     * 音量调制曲线的角速度下限 (度/秒)。<= 本值时音量取 MinVolume。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0", EditCondition = "bModulateVolumeBySpeed"))
+    float MinSpeedDegPerSec;
+
+    /**
+     * 音量调制曲线的角速度上限 (度/秒)。>= 本值时音量取 MaxVolume。
+     * 常见把手手摇速度 200~600 度/秒之间，建议先按此范围调。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0", EditCondition = "bModulateVolumeBySpeed"))
+    float MaxSpeedDegPerSec;
+
+    /** 音量调制下限（角速度 <= MinSpeedDegPerSec 时使用） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0", ClampMax = "5.0", EditCondition = "bModulateVolumeBySpeed"))
+    float MinVolumeMultiplier;
+
+    /** 音量调制上限（角速度 >= MaxSpeedDegPerSec 时使用） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.0", ClampMax = "5.0", EditCondition = "bModulateVolumeBySpeed"))
+    float MaxVolumeMultiplier;
+
+    /**
+     * 瞬时角速度的平滑系数 (1/秒)。越大越跟手，越小越"惯性"。
+     * 建议 8~20。用于抑制手抖导致的音量抖动。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Audio", meta = (ClampMin = "0.1", EditCondition = "bModulateVolumeBySpeed"))
+    float SpeedSmoothing;
+
+    //=====================================================================
     // 运行时引用
     //=====================================================================
 
@@ -112,6 +172,18 @@ public:
     /** 累计把手转过的角度（有符号累加，仅调试展示 / 事件参数用） */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
     float AccumulatedHandleAngleDeg;
+
+    /** 上一次收到把手转动上报的游戏时间（秒），用于判定"停下"触发 FadeOut */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    float LastTurnGameTime;
+
+    /** 平滑后的瞬时角速度绝对值 (度/秒)，Tick 里用于音量调制 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    float SmoothedAngularSpeedDeg;
+
+    /** GrindSFX 当前是否处于"研磨中"状态（我们主动 FadeIn 后置 true，FadeOut 后置 false） */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    bool bGrindSFXActive;
 
     //=====================================================================
     // 事件
@@ -150,5 +222,11 @@ public:
 protected:
     /** 在 BeginPlay 中 Spawn 子部件并把它们 Attach 到对应挂点上 */
     virtual void SpawnChildParts();
+
+    /** 起播/淡入研磨音效（幂等：已在播放中会跳过） */
+    void StartGrindSFX();
+
+    /** 淡出研磨音效（幂等：未在播放中会跳过） */
+    void StopGrindSFX();
 };
 
