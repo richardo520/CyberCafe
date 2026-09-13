@@ -676,14 +676,16 @@ void AVRPawn::UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGr
         StopHoverHaptic(bRightHand);
     }
     // 高亮新目标 + 开启悬停震动
+    // 注意：不再用 CanBePotentialTarget 过滤"已被持有"的物体——
+    // 上游 GetGrabComponentNearMotionController / UpdatePotentialTarget 已经完成候选筛选，
+    // 且项目支持"换手抓取"（GrabComponent::TryGrab 内部会先 TryRelease 再 PerformGrab），
+    // 因此另一只手正拿着的物体，对本空手来说依然是有效的悬停目标。
+    // 本手已经拿着东西时不需要担心自己高亮自己，Tick 里 HeldOrPulled 非空会直接跳过扫描。
     if (NewTarget)
     {
-        if (UVRFunctionLibrary::CanBePotentialTarget(NewTarget->GetOwner()))
-        {
-            TargetGrabComponent = NewTarget;
-            MarkForGrab(NewTarget, true);
-            PlayHoverHaptic(bRightHand);
-        }
+        TargetGrabComponent = NewTarget;
+        MarkForGrab(NewTarget, true);
+        PlayHoverHaptic(bRightHand);
     }
 }
 
