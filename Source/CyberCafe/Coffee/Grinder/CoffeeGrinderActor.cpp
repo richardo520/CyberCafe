@@ -1,7 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
-#include "Coffee/Grinder/GrinderCrankActor.h"
+#include "Coffee/Grinder/GrinderHandleActor.h"
 #include "Coffee/Grinder/GrinderDrawerActor.h"
 #include "GrabComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -26,8 +26,8 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     GrabComp->GrabPriority = 0;
 
     // 挂点：把手在顶端，抽屉在底部前侧，豆入口在顶端（Bean）
-    CrankMountPoint = CreateDefaultSubobject<USceneComponent>(TEXT("CrankMountPoint"));
-    CrankMountPoint->SetupAttachment(BodyMesh);
+    HandleMountPoint = CreateDefaultSubobject<USceneComponent>(TEXT("HandleMountPoint"));
+    HandleMountPoint->SetupAttachment(BodyMesh);
 
     DrawerMountPoint = CreateDefaultSubobject<USceneComponent>(TEXT("DrawerMountPoint"));
     DrawerMountPoint->SetupAttachment(BodyMesh);
@@ -44,8 +44,8 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     GrindSFX->SetupAttachment(BodyMesh);
     GrindSFX->bAutoActivate = false;
 
-    AccumulatedCrankAngleDeg = 0.f;
-    CrankRef = nullptr;
+    AccumulatedHandleAngleDeg = 0.f;
+    HandleRef = nullptr;
     DrawerRef = nullptr;
 }
 
@@ -69,15 +69,15 @@ void ACoffeeGrinderActor::SpawnChildParts()
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
     // ---- 把手 ----
-    if (CrankClass && CrankMountPoint)
+    if (HandleClass && HandleMountPoint)
     {
-        const FTransform MountXform = CrankMountPoint->GetComponentTransform();
-        AGrinderCrankActor* Crank = World->SpawnActor<AGrinderCrankActor>(
-            CrankClass, MountXform, SpawnParams);
-        if (Crank)
+        const FTransform MountXform = HandleMountPoint->GetComponentTransform();
+        AGrinderHandleActor* Handle = World->SpawnActor<AGrinderHandleActor>(
+            HandleClass, MountXform, SpawnParams);
+        if (Handle)
         {
-            Crank->AttachToGrinder(this, CrankMountPoint);
-            CrankRef = Crank;
+            Handle->AttachToGrinder(this, HandleMountPoint);
+            HandleRef = Handle;
         }
     }
 
@@ -95,22 +95,22 @@ void ACoffeeGrinderActor::SpawnChildParts()
     }
 }
 
-void ACoffeeGrinderActor::OnCrankRotated(float DeltaAngleDeg)
+void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
 {
     if (FMath::IsNearlyZero(DeltaAngleDeg))
     {
         return;
     }
 
-    AccumulatedCrankAngleDeg += DeltaAngleDeg;
+    AccumulatedHandleAngleDeg += DeltaAngleDeg;
 
     // 豆 → 粉 转换等实际研磨逻辑：后续再接。这里先只广播事件方便蓝图 / 调试对接。
-    OnCrankTurned.Broadcast(DeltaAngleDeg, AccumulatedCrankAngleDeg);
+    OnHandleTurned.Broadcast(DeltaAngleDeg, AccumulatedHandleAngleDeg);
 }
 
-FTransform ACoffeeGrinderActor::GetCrankMountWorldTransform() const
+FTransform ACoffeeGrinderActor::GetHandleMountWorldTransform() const
 {
-    return CrankMountPoint ? CrankMountPoint->GetComponentTransform() : GetActorTransform();
+    return HandleMountPoint ? HandleMountPoint->GetComponentTransform() : GetActorTransform();
 }
 
 FTransform ACoffeeGrinderActor::GetDrawerMountWorldTransform() const

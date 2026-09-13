@@ -1,6 +1,6 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-#include "Coffee/Grinder/GrinderCrankActor.h"
+#include "Coffee/Grinder/GrinderHandleActor.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
 #include "GrabComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -10,27 +10,27 @@
 #include "Kismet/GameplayStatics.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 
-AGrinderCrankActor::AGrinderCrankActor()
+AGrinderHandleActor::AGrinderHandleActor()
 {
     PrimaryActorTick.bCanEverTick = true;
 
     // 把手 Mesh 作为 Root，不模拟物理——它一直挂在主体挂点上
-    CrankMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CrankMesh"));
-    SetRootComponent(CrankMesh);
-    CrankMesh->SetSimulatePhysics(false);
+    HandleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HandleMesh"));
+    SetRootComponent(HandleMesh);
+    HandleMesh->SetSimulatePhysics(false);
     // 与瓶盖同样的策略：QueryOnly + AllChannels Overlap，能被抓取射线命中但不推动主体
-    CrankMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-    CrankMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
+    HandleMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    HandleMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
 
     // Custom 抓取：不由 GrabComponent 自动 Attach，纯手动维护约束旋转
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
-    GrabComp->SetupAttachment(CrankMesh);
+    GrabComp->SetupAttachment(HandleMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;   // 高于主体抓取，避免误抓到 Body
 
     // 默认参数
     MaxHandOffset = 15.f;
-    CrankArmRadius = 5.f;
+    HandleArmRadius = 5.f;
     bOneWayEffective = false;
     EffectiveDirectionSign = 1;
     TurnHaptic = nullptr;
@@ -44,27 +44,27 @@ AGrinderCrankActor::AGrinderCrankActor()
     MountRef = nullptr;
 }
 
-void AGrinderCrankActor::BeginPlay()
+void AGrinderHandleActor::BeginPlay()
 {
     Super::BeginPlay();
 
     // 与瓶盖同样的原因：UGrabComponent::BeginPlay 会把父组件 CollisionProfile 强制改成 PhysicsActor，
     // 我们需要再刷回 QueryOnly + Overlap（不参与刚体，只能被 SphereTrace 命中）
-    if (CrankMesh)
+    if (HandleMesh)
     {
-        CrankMesh->SetSimulatePhysics(false);
-        CrankMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-        CrankMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
+        HandleMesh->SetSimulatePhysics(false);
+        HandleMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        HandleMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
     }
 
     if (GrabComp)
     {
-        GrabComp->OnGrabbed.AddDynamic(this, &AGrinderCrankActor::HandleGrabbed);
-        GrabComp->OnDropped.AddDynamic(this, &AGrinderCrankActor::HandleDropped);
+        GrabComp->OnGrabbed.AddDynamic(this, &AGrinderHandleActor::HandleGrabbed);
+        GrabComp->OnDropped.AddDynamic(this, &AGrinderHandleActor::HandleDropped);
     }
 }
 
-void AGrinderCrankActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp)
+void AGrinderHandleActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp)
 {
     if (!InOwner || !MountComp)
     {
@@ -83,7 +83,7 @@ void AGrinderCrankActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCom
     SetActorRelativeRotation(FRotator::ZeroRotator);
 }
 
-void AGrinderCrankActor::HandleGrabbed()
+void AGrinderHandleActor::HandleGrabbed()
 {
     // Custom 抓取时不改物理 / 不 Attach，本函数只负责重置差分状态；
     // 真正的旋转在 Tick 里驱动。
@@ -91,13 +91,13 @@ void AGrinderCrankActor::HandleGrabbed()
     LastHapticAngleDeg = CurrentAngleDeg;
 }
 
-void AGrinderCrankActor::HandleDropped()
+void AGrinderHandleActor::HandleDropped()
 {
     // 松手：把手就地保持当前角度，不做任何脱离。清除差分状态即可。
     bHasValidLastHandAngle = false;
 }
 
-void AGrinderCrankActor::Tick(float DeltaTime)
+void AGrinderHandleActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
@@ -119,10 +119,10 @@ void AGrinderCrankActor::Tick(float DeltaTime)
     const FVector2D HandXY(HandLocal.X, HandLocal.Y);
 
     // ---- 2. 距离检测：手偏出旋转半径太多 → 自动松手 ----
-    if (MaxHandOffset > 0.f && CrankArmRadius > 0.f)
+    if (MaxHandOffset > 0.f && HandleArmRadius > 0.f)
     {
         const float RadialDist = HandXY.Size();
-        if (FMath::Abs(RadialDist - CrankArmRadius) > MaxHandOffset)
+        if (FMath::Abs(RadialDist - HandleArmRadius) > MaxHandOffset)
         {
             GrabComp->TryRelease();
             return;
@@ -156,7 +156,7 @@ void AGrinderCrankActor::Tick(float DeltaTime)
 
     // ---- 4. 更新把手自身相对旋转（绕挂点局部 +Z） ----
     CurrentAngleDeg += DeltaAngleDeg;
-    // Yaw 就是绕局部 Z 的旋转，符合"CrankMountPoint 局部 +Z 为旋转轴"的约定
+    // Yaw 就是绕局部 Z 的旋转，符合"HandleMountPoint 局部 +Z 为旋转轴"的约定
     SetActorRelativeRotation(FRotator(0.f, CurrentAngleDeg, 0.f));
 
     // ---- 5. 上报给主体（考虑单向有效开关） ----
@@ -169,7 +169,7 @@ void AGrinderCrankActor::Tick(float DeltaTime)
             ReportedDelta = 0.f;   // 反向不计入研磨
         }
     }
-    OwnerGrinder->OnCrankRotated(ReportedDelta);
+    OwnerGrinder->OnHandleRotated(ReportedDelta);
 
     // ---- 6. 触觉：按 HapticIntervalDeg 触发 ----
     if (TurnHaptic && HapticIntervalDeg > 0.f)

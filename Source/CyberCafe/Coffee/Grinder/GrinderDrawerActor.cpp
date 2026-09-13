@@ -177,7 +177,7 @@ void AGrinderDrawerActor::HandleGrabbed()
             const FTransform MountXform = MountRef->GetComponentTransform();
             const FVector HandLocal = MountXform.InverseTransformPosition(MC->GetComponentLocation());
             // 基准 = 手抓瞬间"应该对应"的 CurrentOffset 位置；这样抓抽屉的时候不会瞬间跳动
-            GrabHandOffsetLocal = HandLocal - FVector(CurrentOffset, 0.f, 0.f);
+            GrabHandOffsetLocal = HandLocal - FVector(0.f, CurrentOffset, 0.f);
         }
     }
     else
@@ -266,16 +266,16 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
     // ---- 2. 侧向偏出容差检测 ----
     if (MaxSideOffset > 0.f)
     {
-        if (FMath::Abs(RelativeHand.Y) > MaxSideOffset || FMath::Abs(RelativeHand.Z) > MaxSideOffset)
+        if (FMath::Abs(RelativeHand.X) > MaxSideOffset || FMath::Abs(RelativeHand.Z) > MaxSideOffset)
         {
             GrabComp->TryRelease();
             return;
         }
     }
 
-    // ---- 3. 目标偏移（沿 +X 分量，允许拉超过 PullOutDistance 以便触发 Detach） ----
+    // ---- 3. 目标偏移（沿 +Y 分量，允许拉超过 PullOutDistance 以便触发 Detach） ----
     //       禁止负方向（推入到主体内部）
-    const float RawTarget = RelativeHand.X;
+    const float RawTarget = RelativeHand.Y;
     const float ClampedTarget = FMath::Max(0.f, RawTarget);
 
     // ---- 4. 平滑插值 ----
@@ -289,7 +289,7 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
     }
 
     // ---- 6. 应用滑动位移 ----
-    SetActorRelativeLocation(FVector(CurrentOffset, 0.f, 0.f));
+    SetActorRelativeLocation(FVector(0.f, CurrentOffset, 0.f));
     SetActorRelativeRotation(FRotator::ZeroRotator);
 }
 

@@ -29,7 +29,7 @@ class ACoffeeGrinderActor;
  * 交互约定（对应 ABottleCapActor 的模式，但语义相反）：
  *   - GrabComp 使用 EGrabType::Custom。
  *   - Attached 状态下每帧：把手柄位置转到 DrawerMountPoint 的局部空间，
- *     沿 +X 分量作为目标偏移；平滑插值后 SetActorRelativeLocation。
+ *     沿 +Y 分量作为目标偏移；平滑插值后 SetActorRelativeLocation。
  *   - 当 CurrentOffset >= PullOutDistance 时：DetachFromGrinder()——切成 Detached，
  *     开物理并 Attach 到手柄。
  *   - Detached / Free 状态松手时：若离 DrawerMountPoint 世界距离 <= ReattachSnapDistance
@@ -63,7 +63,7 @@ public:
     //=====================================================================
 
     /**
-     * 抽屉最大滑动距离 (cm)：沿挂点局部 +X 从 0 到本值内属于"合法滑动"，
+     * 抽屉最大滑动距离 (cm)：沿挂点局部 +Y 从 0 到本值内属于"合法滑动"，
      * 超过本值就触发"拔出"（Detach 到手）。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Slide", meta = (ClampMin = "0.0"))
@@ -78,7 +78,7 @@ public:
 
     /**
      * 手偏离滑轨的最大侧向容差 (cm)：把手柄位置转到挂点局部空间后，
-     * 计算 |Local.Y|、|Local.Z| 的大小，超过本值视为"玩家的手已经跑掉"，自动松手。
+     * 计算 |Local.X|、|Local.Z| 的大小，超过本值视为"玩家的手已经跑掉"，自动松手。
      * <= 0 表示不检查。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Slide", meta = (ClampMin = "0.0"))
@@ -123,7 +123,7 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     TObjectPtr<ACoffeeGrinderActor> OwnerGrinder;
 
-    /** Attached 状态下沿 +X 的滑动偏移（0 = 合上，PullOutDistance = 即将拔出） */
+    /** Attached 状态下沿 +Y 的滑动偏移（0 = 合上，PullOutDistance = 即将拔出） */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     float CurrentOffset;
 
