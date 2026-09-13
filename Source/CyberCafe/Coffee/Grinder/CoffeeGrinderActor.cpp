@@ -205,14 +205,18 @@ void ACoffeeGrinderActor::StartGrindSFX()
         return;
     }
 
+    // 决定"目标音量"：调制开启时目标 = MaxVolumeMultiplier（Tick 会再按转速拉低）；
+    // 未开启调制时目标 = MaxVolumeMultiplier（等价于一个可在蓝图调的固定音量）。
+    const float TargetVol = MaxVolumeMultiplier;
+
     // 起播前先把音量置到最小档，避免"最大响度突然出现"再被调制拉下来
-    const float StartVol = bModulateVolumeBySpeed ? MinVolumeMultiplier : 1.f;
+    const float StartVol = bModulateVolumeBySpeed ? MinVolumeMultiplier : TargetVol;
     GrindSFX->SetVolumeMultiplier(StartVol);
 
     if (GrindSFXFadeInTime > 0.f)
     {
         // FadeIn 内部会 Play 并把音量从 0 升到 FadeVolumeLevel
-        GrindSFX->FadeIn(GrindSFXFadeInTime, 1.f);
+        GrindSFX->FadeIn(GrindSFXFadeInTime, TargetVol);
     }
     else
     {
