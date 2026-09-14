@@ -57,7 +57,7 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     bModulateVolumeBySpeed = true;
     MinSpeedDegPerSec = 60.f;
     MaxSpeedDegPerSec = 480.f;
-    MinVolumeMultiplier = 0.35f;
+    MinVolumeMultiplier = 0.7f;    // 最慢转也能明显听到；0.35 太小容易听不见
     MaxVolumeMultiplier = 1.f;
     SpeedSmoothing = 12.f;
 
@@ -66,6 +66,7 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     LastTurnGameTime = -1000.f;   // 一个"很早以前"，确保初始不会误判成刚转过
     SmoothedAngularSpeedDeg = 0.f;
     bGrindSFXActive = false;
+    GrindSFXStartTime = -1000.f;
     HandleRef = nullptr;
     DrawerRef = nullptr;
 }
@@ -147,14 +148,19 @@ void ACoffeeGrinderActor::Tick(float DeltaTime)
     }
 
     // 3) 未空闲：根据当前平滑角速度更新音量
+    // ⚠ 起播后给 FadeIn 一段小时间窗口不要接管音量，否则 SetVolumeMultiplier 会打断 FadeIn 的插值
     if (bModulateVolumeBySpeed && GrindSFX && bGrindSFXActive)
     {
-        const float SpeedAlpha = FMath::GetMappedRangeValueClamped(
-            FVector2D(MinSpeedDegPerSec, MaxSpeedDegPerSec),
-            FVector2D(0.f, 1.f),
-            SmoothedAngularSpeedDeg);
-        const float Vol = FMath::Lerp(MinVolumeMultiplier, MaxVolumeMultiplier, SpeedAlpha);
-        GrindSFX->SetVolumeMultiplier(Vol);
+        const bool bInFadeInWindow = (Now - GrindSFXStartTime) < GrindSFXFadeInTime;
+        if (!bInFadeInWindow)
+        {
+            const float SpeedAlpha = FMath::GetMappedRangeValueClamped(
+                FVector2D(MinSpeedDegPerSec, MaxSpeedDegPerSec),
+                FVector2D(0.f, 1.f),
+                SmoothedAngularSpeedDeg);
+            const float Vol = FMath::Lerp(MinVolumeMultiplier, MaxVolumeMultiplier, SpeedAlpha);
+            GrindSFX->SetVolumeMultiplier(Vol);
+        }
     }
 }
 
@@ -194,6 +200,7 @@ void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
             UE_LOG(LogTemp, Warning, TEXT("[Grinder] OnHandleRotated Delta=%.2f  StartGrindSFX  GrindSFX=%d Sound=%d"),
                 DeltaAngleDeg, GrindSFX ? 1 : 0, bHasSound ? 1 : 0);
             StartGrindSFX();
+            GrindSFXStartTime = Now;
         }
     }
 

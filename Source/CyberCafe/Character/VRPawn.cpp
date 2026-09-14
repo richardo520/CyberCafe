@@ -630,7 +630,13 @@ UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* Mo
     }
     if (AActor* HitActor = Hit.GetActor())
     {
-        return  UVRFunctionLibrary::FindTopPrioGrabComponent(HitActor);
+        UGrabComponent* Grab = UVRFunctionLibrary::FindTopPrioGrabComponent(HitActor);
+        // 远程筛选：若组件禁止远程抓取，连高亮/候选者也不归入
+        if (Grab && !Grab->bAllowRemoteGrab)
+        {
+            return nullptr;
+        }
+        return Grab;
     }
     return nullptr;
 }
@@ -695,6 +701,11 @@ void AVRPawn::UpdatePotentialTarget(UMotionControllerComponent* MotionController
     if (TraceAim(MotionControllerAim, Hit))
     {
         UGrabComponent* GrabComponent = UVRFunctionLibrary::FindTopPrioGrabComponent(Hit.GetActor());
+        // 远程筛选：若组件禁止远程抓取，则不作为悬停高亮候选
+        if (GrabComponent && !GrabComponent->bAllowRemoteGrab)
+        {
+            GrabComponent = nullptr;
+        }
         UpdateTargetGrabComponent(GrabComponent,TargetGrabComponent);
     }
     else

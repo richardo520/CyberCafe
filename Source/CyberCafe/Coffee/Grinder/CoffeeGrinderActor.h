@@ -185,6 +185,10 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
     bool bGrindSFXActive;
 
+    /** GrindSFX 最近一次起播的游戏时间（秒），用于保护 FadeIn 窗口不被 Tick 覆盖 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    float GrindSFXStartTime;
+
     //=====================================================================
     // 事件
     //=====================================================================
