@@ -190,6 +190,9 @@ void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
 
         if (!bGrindSFXActive)
         {
+            const bool bHasSound = (GrindSFX && GrindSFX->Sound);
+            UE_LOG(LogTemp, Warning, TEXT("[Grinder] OnHandleRotated Delta=%.2f  StartGrindSFX  GrindSFX=%d Sound=%d"),
+                DeltaAngleDeg, GrindSFX ? 1 : 0, bHasSound ? 1 : 0);
             StartGrindSFX();
         }
     }
