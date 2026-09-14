@@ -27,7 +27,8 @@ AGrinderHandleActor::AGrinderHandleActor()
     GrabComp->SetupAttachment(HandleMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;   // 高于主体抓取，避免误抓到 Body
-    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
+    // 不在构造函数里禁远程抓取；改由 AttachToGrinder 时关闭。
+    // 这样即使未来把手脱离主体（例如维护模式），也能保留远程抓取能力。
 
     // 默认参数
     MaxHandOffset = 15.f;
@@ -82,6 +83,12 @@ void AGrinderHandleActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     // 复位角度
     CurrentAngleDeg = 0.f;
     SetActorRelativeRotation(FRotator::ZeroRotator);
+
+    // 挂在主体上时禁止远程抓取/高亮：只能贴身抓，避免被远程召唤把把手从旋转轴上撕走
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = false;
+    }
 }
 
 void AGrinderHandleActor::HandleGrabbed()

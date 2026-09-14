@@ -32,7 +32,7 @@ ABottleCapActor::ABottleCapActor()
     GrabComp->GrabType = EGrabType::Custom;
     // 抓盖子优先于抓瓶身（避免玩家想抓盖子时抓到了瓶子）
     GrabComp->GrabPriority = 1;
-    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
+    // 不在构造函数里禁远程抓取；盖在瓶口时由 AttachToBottle 关闭，拧下后（DetachFromBottle）恢复。
 
     // 默认参数
     DetachPullDistance   = 3.f;    // 抓住后拉 3cm 即拔出
@@ -130,6 +130,12 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
 
     bIsAttached            = true;
     bGrabbedButNotDetached = false;
+
+    // 盖在瓶口上时禁止远程抓取/高亮（仅支持贴身抓，避免远程召唤弄乱拧盖交互）
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = false;
+    }
 }
 
 void ABottleCapActor::ReattachToBottle()
@@ -159,6 +165,12 @@ void ABottleCapActor::ReattachToBottle()
 
     bIsAttached            = true;
     bGrabbedButNotDetached = false;
+
+    // 重新盖回瓶口：同样关闭远程抓取/高亮（盖在瓶口时只支持贴身拧）
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = false;
+    }
 
     // 通知瓶子上锁
     OwnerBottle->OnCapAttached();
@@ -199,6 +211,12 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
 
     bIsAttached            = false;
     bGrabbedButNotDetached = false;
+
+    // 拧下后恢复为普通可交互物体：允许远程抓取/高亮
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = true;
+    }
 
     // 2) 触觉 + 音效
     if (DetachHaptic)

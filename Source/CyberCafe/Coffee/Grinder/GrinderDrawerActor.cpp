@@ -27,7 +27,8 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     GrabComp->SetupAttachment(DrawerMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;
-    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
+    // 不在构造函数里禁远程抓取；挂在主体上时由 AttachToGrinder / ReattachToGrinder 关闭，
+    // 拔出后（DetachFromGrinder）恢复为 true，自由抽屉就能像普通物体一样被远程抓。
 
     // 默认参数
     PullOutDistance = 8.f;
@@ -89,6 +90,12 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     CurrentOffset = 0.f;
     SetActorRelativeLocation(FVector::ZeroVector);
     SetActorRelativeRotation(FRotator::ZeroRotator);
+
+    // 挂在主体上时禁止远程抓取/高亮（DetachFromGrinder 会重新开启）
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = false;
+    }
 }
 
 void AGrinderDrawerActor::ReattachToGrinder()
@@ -118,6 +125,12 @@ void AGrinderDrawerActor::ReattachToGrinder()
     {
         UGameplayStatics::PlaySoundAtLocation(this, ReattachSound, GetActorLocation());
     }
+
+    // 自动吸回主体：同样关闭远程抓取/高亮
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = false;
+    }
 }
 
 void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionController)
@@ -142,6 +155,12 @@ void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionCo
     }
 
     State = EDrawerState::Detached;
+
+    // 拔出后恢复为普通可交互物体：允许远程抓取/高亮
+    if (GrabComp)
+    {
+        GrabComp->bAllowRemoteGrab = true;
+    }
 
     // 反馈
     if (DetachHaptic)
