@@ -101,6 +101,20 @@ void AGrinderHandleActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
+    // ---- 调试：每 0.5 秒打印一次当前状态，快速定位"转不动"卡在哪一步 ----
+    static float DbgAccum = 0.f;
+    DbgAccum += DeltaTime;
+    const bool bDbgLogThisFrame = (DbgAccum >= 0.5f);
+    if (bDbgLogThisFrame)
+    {
+        DbgAccum = 0.f;
+        UE_LOG(LogTemp, Warning, TEXT("[Handle] Tick GrabComp=%d IsHeld=%d MountRef=%d Owner=%d"),
+            GrabComp ? 1 : 0,
+            (GrabComp && GrabComp->IsHeld()) ? 1 : 0,
+            MountRef ? 1 : 0,
+            OwnerGrinder ? 1 : 0);
+    }
+
     if (!GrabComp || !GrabComp->IsHeld() || !MountRef || !OwnerGrinder)
     {
         return;
@@ -109,6 +123,7 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     UMotionControllerComponent* MC = GrabComp->GetHoldingController();
     if (!MC)
     {
+        if (bDbgLogThisFrame) UE_LOG(LogTemp, Warning, TEXT("[Handle] MC is null"));
         return;
     }
 
@@ -118,12 +133,23 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     const FVector HandLocal = MountXform.InverseTransformPosition(HandWS);
     const FVector2D HandXY(HandLocal.X, HandLocal.Y);
 
+    if (bDbgLogThisFrame)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Handle] HandLocal=(%.2f,%.2f,%.2f) HandXYLen=%.2f Radius=%.2f MaxOff=%.2f"),
+            HandLocal.X, HandLocal.Y, HandLocal.Z, HandXY.Size(), HandleArmRadius, MaxHandOffset);
+    }
+
     // ---- 2. 距离检测：手偏出旋转半径太多 → 自动松手 ----
     if (MaxHandOffset > 0.f && HandleArmRadius > 0.f)
     {
         const float RadialDist = HandXY.Size();
         if (FMath::Abs(RadialDist - HandleArmRadius) > MaxHandOffset)
         {
+            if (bDbgLogThisFrame)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("[Handle] Auto-release: RadialDist=%.2f out of Radius=%.2f +/- %.2f"),
+                    RadialDist, HandleArmRadius, MaxHandOffset);
+            }
             GrabComp->TryRelease();
             return;
         }
@@ -132,6 +158,7 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     // XY 长度太小（手正好在旋转轴上）时极角不稳定，跳过本帧
     if (HandXY.SquaredLength() < KINDA_SMALL_NUMBER)
     {
+        if (bDbgLogThisFrame) UE_LOG(LogTemp, Warning, TEXT("[Handle] HandXY too small, skip"));
         return;
     }
 
@@ -149,6 +176,12 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     const float DeltaAngleDeg = FMath::FindDeltaAngleDegrees(LastHandAngleDeg, HandAngleDeg);
     LastHandAngleDeg = HandAngleDeg;
 
+    if (bDbgLogThisFrame)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Handle] HandAngle=%.2f Delta=%.2f Cur=%.2f"),
+            HandAngleDeg, DeltaAngleDeg, CurrentAngleDeg);
+    }
+
     if (FMath::IsNearlyZero(DeltaAngleDeg))
     {
         return;
@@ -156,8 +189,12 @@ void AGrinderHandleActor::Tick(float DeltaTime)
 
     // ---- 4. 更新把手自身相对旋转（绕挂点局部 +Z） ----
     CurrentAngleDeg += DeltaAngleDeg;
-    // Yaw 就是绕局部 Z 的旋转，符合"HandleMountPoint 局部 +Z 为旋转轴"的约定
-    SetActorRelativeRotation(FRotator(0.f, CurrentAngleDeg, 0.f));
+    // 显式构造"绕挂点局部 +Z 轴"的四元数：
+    // 由于本 Actor Attach 到 MountRef 上，相对旋转的参考系正是 MountRef 的局部空间，
+    // 所以绕本地 Z 用 FQuat(FVector::UpVector, ...) 即可，等价于挂点局部 +Z。
+    // 这样即使挂点在蓝图里被旋转过，或 Mesh 的 pivot 有偏差，转轴仍严格锁定在挂点 +Z。
+    const FQuat RotQuat(FVector::UpVector, FMath::DegreesToRadians(CurrentAngleDeg));
+    SetActorRelativeRotation(RotQuat);
 
     // ---- 5. 上报给主体（考虑单向有效开关） ----
     float ReportedDelta = DeltaAngleDeg;
