@@ -96,6 +96,9 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     {
         GrabComp->bAllowRemoteGrab = false;
     }
+
+    // 恢复与主体的正常碰撞（初始挂上时保险起见清一次）
+    SetIgnoreCollisionWithGrinder(false);
 }
 
 void AGrinderDrawerActor::ReattachToGrinder()
@@ -131,6 +134,9 @@ void AGrinderDrawerActor::ReattachToGrinder()
     {
         GrabComp->bAllowRemoteGrab = false;
     }
+
+    // 恢复与主体之间的正常碰撞（拔出期间通过 SetIgnoreCollisionWithGrinder(true) 忽略过）
+    SetIgnoreCollisionWithGrinder(false);
 }
 
 void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionController)
@@ -161,6 +167,13 @@ void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionCo
     {
         GrabComp->bAllowRemoteGrab = true;
     }
+
+    // ★ 让抽屉与主体之间互相忽略碰撞：
+    //   - 目的：主体在 PhysicsHandle 抓取模式下仍保持实体碰撞档案（PhysicsActor），
+    //     若不忽略，抽屉的 PhysicsActor 会被主体外壳挡在外面，无法"塞回去"到 ReattachSnapDistance 内。
+    //   - 忽略仅限"抽屉 ↔ 主体"，抽屉与桌面、地面、其他 Actor 的碰撞保持正常。
+    //   - ReattachToGrinder / AttachToGrinder 里会恢复。
+    SetIgnoreCollisionWithGrinder(true);
 
     // 反馈
     if (DetachHaptic)
@@ -224,6 +237,20 @@ void AGrinderDrawerActor::HandleDropped()
         return;
     }
 
+    // 记录松手瞬间手柄位置（用于"手离挂点足够近就吸回"的兜底判定）——
+    // 必须在 DetachFromActor 之前拿，因为 Detach 后 GetHoldingController 仍可用，
+    // 但为了防御性，先取值再断开。
+    FVector HandWS = FVector::ZeroVector;
+    bool bHasHand = false;
+    if (GrabComp)
+    {
+        if (UMotionControllerComponent* MC = GrabComp->GetHoldingController())
+        {
+            HandWS = MC->GetComponentLocation();
+            bHasHand = true;
+        }
+    }
+
     // Detached / Free 松手：先脱离手柄，再判断是否吸回挂点
     DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
@@ -239,11 +266,18 @@ void AGrinderDrawerActor::HandleDropped()
     }
 
     const FVector MountWS = MountRef->GetComponentLocation();
-    const float Dist = FVector::Dist(GetActorLocation(), MountWS);
+    const float DrawerDist = FVector::Dist(GetActorLocation(), MountWS);
+    const float HandDist   = bHasHand ? FVector::Dist(HandWS, MountWS) : TNumericLimits<float>::Max();
 
-    if (Dist <= ReattachSnapDistance)
+    // 双阈值判定：抽屉本体靠近 或 玩家的手靠近，任一命中即吸回。
+    // 这样即使主体处于 PhysicsHandle 模式导致抽屉被外壳弹开、无法真正贴到挂点，
+    // 只要玩家的意图是"把抽屉放回去"（手已经伸到抽屉槽内），一样能触发 Reattach。
+    const bool bShouldReattach =
+        (DrawerDist <= ReattachSnapDistance) ||
+        (HandDist   <= ReattachSnapDistance);
+
+    if (bShouldReattach)
     {
-        // 靠近挂点 → 自动吸回
         ReattachToGrinder();
     }
     else
@@ -256,6 +290,25 @@ void AGrinderDrawerActor::HandleDropped()
         }
         State = EDrawerState::Free;
     }
+}
+
+void AGrinderDrawerActor::SetIgnoreCollisionWithGrinder(bool bIgnore)
+{
+    if (!OwnerGrinder)
+    {
+        return;
+    }
+
+    UPrimitiveComponent* DrawerPrim = DrawerMesh;
+    UPrimitiveComponent* BodyPrim = Cast<UPrimitiveComponent>(OwnerGrinder->GetRootComponent());
+    if (!DrawerPrim || !BodyPrim)
+    {
+        return;
+    }
+
+    // 双向登记：让抽屉/主体的物理与 Sweep 解算都跳过对方
+    DrawerPrim->IgnoreActorWhenMoving(OwnerGrinder, bIgnore);
+    BodyPrim->IgnoreActorWhenMoving(this, bIgnore);
 }
 
 void AGrinderDrawerActor::Tick(float DeltaTime)

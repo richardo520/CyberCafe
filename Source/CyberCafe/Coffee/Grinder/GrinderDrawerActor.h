@@ -161,6 +161,17 @@ protected:
     UFUNCTION()
     void HandleDropped();
 
+    /**
+     * 抽屉与主体（BodyMesh）之间的相互碰撞忽略开关。
+     * 拔出（Detached）期间设为 true，让抽屉能自由穿过主体外壳"塞回去"；
+     * 吸回（Attached）或抽屉重新挂上时设为 false，恢复正常物理碰撞。
+     *
+     * 目的：当主体处于 PhysicsHandle 抓取模式时，主体保持物理碰撞开启，
+     * 抽屉的 PhysicsActor 档案会被主体外壳挡住无法进入挂点判定范围，
+     * 通过双向 IgnoreActorWhenMoving 解决。
+     */
+    void SetIgnoreCollisionWithGrinder(bool bIgnore);
+
     /** 挂点组件（缓存用） */
     UPROPERTY(Transient)
     TObjectPtr<USceneComponent> MountRef;
