@@ -338,6 +338,13 @@ bool UGrabComponent::TryRelease()
 
 bool UGrabComponent::TryPull()
 {
+    // 若本组件配置为"不允许远程抓取"，则直接拒绝拉拽。
+    // 用于 Spawn 出来的子部件（瓶盖、研磨器把手/抽屉等），避免被远程召唤到手上导致异常表现。
+    if (!bAllowRemoteGrab)
+    {
+        return false;
+    }
+
     if (GetOwner())
     {
         TArray<UGrabComponent*> GrabComponents;

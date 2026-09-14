@@ -27,6 +27,7 @@ AGrinderHandleActor::AGrinderHandleActor()
     GrabComp->SetupAttachment(HandleMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;   // 高于主体抓取，避免误抓到 Body
+    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
 
     // 默认参数
     MaxHandOffset = 15.f;
@@ -101,20 +102,6 @@ void AGrinderHandleActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // ---- 调试：每 0.5 秒打印一次当前状态，快速定位"转不动"卡在哪一步 ----
-    static float DbgAccum = 0.f;
-    DbgAccum += DeltaTime;
-    const bool bDbgLogThisFrame = (DbgAccum >= 0.5f);
-    if (bDbgLogThisFrame)
-    {
-        DbgAccum = 0.f;
-        UE_LOG(LogTemp, Warning, TEXT("[Handle] Tick GrabComp=%d IsHeld=%d MountRef=%d Owner=%d"),
-            GrabComp ? 1 : 0,
-            (GrabComp && GrabComp->IsHeld()) ? 1 : 0,
-            MountRef ? 1 : 0,
-            OwnerGrinder ? 1 : 0);
-    }
-
     if (!GrabComp || !GrabComp->IsHeld() || !MountRef || !OwnerGrinder)
     {
         return;
@@ -123,7 +110,6 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     UMotionControllerComponent* MC = GrabComp->GetHoldingController();
     if (!MC)
     {
-        if (bDbgLogThisFrame) UE_LOG(LogTemp, Warning, TEXT("[Handle] MC is null"));
         return;
     }
 
@@ -133,23 +119,12 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     const FVector HandLocal = MountXform.InverseTransformPosition(HandWS);
     const FVector2D HandXY(HandLocal.X, HandLocal.Y);
 
-    if (bDbgLogThisFrame)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Handle] HandLocal=(%.2f,%.2f,%.2f) HandXYLen=%.2f Radius=%.2f MaxOff=%.2f"),
-            HandLocal.X, HandLocal.Y, HandLocal.Z, HandXY.Size(), HandleArmRadius, MaxHandOffset);
-    }
-
     // ---- 2. 距离检测：手偏出旋转半径太多 → 自动松手 ----
     if (MaxHandOffset > 0.f && HandleArmRadius > 0.f)
     {
         const float RadialDist = HandXY.Size();
         if (FMath::Abs(RadialDist - HandleArmRadius) > MaxHandOffset)
         {
-            if (bDbgLogThisFrame)
-            {
-                UE_LOG(LogTemp, Warning, TEXT("[Handle] Auto-release: RadialDist=%.2f out of Radius=%.2f +/- %.2f"),
-                    RadialDist, HandleArmRadius, MaxHandOffset);
-            }
             GrabComp->TryRelease();
             return;
         }
@@ -158,7 +133,6 @@ void AGrinderHandleActor::Tick(float DeltaTime)
     // XY 长度太小（手正好在旋转轴上）时极角不稳定，跳过本帧
     if (HandXY.SquaredLength() < KINDA_SMALL_NUMBER)
     {
-        if (bDbgLogThisFrame) UE_LOG(LogTemp, Warning, TEXT("[Handle] HandXY too small, skip"));
         return;
     }
 
@@ -175,12 +149,6 @@ void AGrinderHandleActor::Tick(float DeltaTime)
 
     const float DeltaAngleDeg = FMath::FindDeltaAngleDegrees(LastHandAngleDeg, HandAngleDeg);
     LastHandAngleDeg = HandAngleDeg;
-
-    if (bDbgLogThisFrame)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Handle] HandAngle=%.2f Delta=%.2f Cur=%.2f"),
-            HandAngleDeg, DeltaAngleDeg, CurrentAngleDeg);
-    }
 
     if (FMath::IsNearlyZero(DeltaAngleDeg))
     {

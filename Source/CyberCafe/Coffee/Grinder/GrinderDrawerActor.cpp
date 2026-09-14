@@ -27,6 +27,7 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     GrabComp->SetupAttachment(DrawerMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;
+    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
 
     // 默认参数
     PullOutDistance = 8.f;

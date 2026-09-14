@@ -32,6 +32,7 @@ ABottleCapActor::ABottleCapActor()
     GrabComp->GrabType = EGrabType::Custom;
     // 抓盖子优先于抓瓶身（避免玩家想抓盖子时抓到了瓶子）
     GrabComp->GrabPriority = 1;
+    GrabComp->bAllowRemoteGrab = false;   // 子部件仅支持贴身抓取，禁止远程召唤
 
     // 默认参数
     DetachPullDistance   = 3.f;    // 抓住后拉 3cm 即拔出

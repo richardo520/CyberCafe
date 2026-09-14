@@ -288,6 +288,15 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
     int32 GrabPriority;
 
+    /**
+     * 是否允许远程（Pull）抓取。默认 true 保持向后兼容。
+     * 关闭后：TryPull() 会直接返回 false，即使玩家的抓取射线指向本组件也不会把物体吸过来。
+     * 适用场景：被主 Actor Spawn 出来的子部件（例如瓶盖、研磨器把手/抽屉），
+     * 只能在贴身范围内抓，不允许远程召唤，以免与主体分离导致异常。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Pull")
+    bool bAllowRemoteGrab = true;
+
     /** 抓握时手部使用的Socket（HandSocket）名称 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
     FName HandSocket;
