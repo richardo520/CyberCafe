@@ -1,0 +1,65 @@
+{
+  "assets": {
+    "SM_CoffeeGroundsPile": {
+      "vertices": 1970,
+      "triangles": 3676
+    },
+    "SM_MetalCoffeeFilter": {
+      "vertices": 1344,
+      "triangles": 2560
+    },
+    "SM_ConeFilterPaper": {
+      "vertices": 320,
+      "triangles": 512
+    },
+    "SM_GlassCoffeeCup": {
+      "vertices": 1714,
+      "triangles": 3280
+    },
+    "SM_CoffeeGroundsPile_LOD1": {
+      "vertices": 1051,
+      "triangles": 1838
+    },
+    "SM_CoffeeGroundsPile_LOD2": {
+      "vertices": 536,
+      "triangles": 808
+    },
+    "SM_MetalCoffeeFilter_LOD1": {
+      "vertices": 768,
+      "triangles": 1408
+    },
+    "SM_MetalCoffeeFilter_LOD2": {
+      "vertices": 396,
+      "triangles": 716
+    },
+    "SM_ConeFilterPaper_LOD1": {
+      "vertices": 192,
+      "triangles": 256
+    },
+    "SM_ConeFilterPaper_LOD2": {
+      "vertices": 100,
+      "triangles": 128
+    },
+    "SM_GlassCoffeeCup_LOD1": {
+      "vertices": 976,
+      "triangles": 1804
+    },
+    "SM_GlassCoffeeCup_LOD2": {
+      "vertices": 505,
+      "triangles": 918
+    }
+  },
+  "dimensions_cm": {
+    "grounds": "10.8 x 5.0; visible 1.2; skirt 2.5",
+    "metal_filter": "diameter 10.5; height 6.5",
+    "paper": "height 7.1",
+    "glass_cup": "300ml; height 9.5; mouth 8.5"
+  },
+  "pivots": "all at bottom/seating center",
+  "collision": {
+    "metal_filter": 1,
+    "glass_cup": 1,
+    "paper": 0,
+    "grounds": 0
+  }
+}

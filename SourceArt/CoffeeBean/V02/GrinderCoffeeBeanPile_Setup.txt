@@ -1,0 +1,29 @@
+研磨器咖啡豆堆设置
+====================
+
+UE 资产：/Game/coffee_grinder_scene/CoffeeBean/SM_GrinderCoffeeBeanPile
+父级：建议挂到 SM_CoffeeGrinder 所在 Actor / Blueprint 下
+碰撞：无（纯视觉库存）
+
+推荐 Relative Location（cm）
+X = 0.4
+Y = -0.4
+Z Full  = 40.5
+Z Half  = 36.5
+Z Low   = 32.5
+Z Empty = 29.5
+
+建议使用单个 Float：BeanFill01（0~1）
+Relative Z = Lerp(29.5, 40.5, BeanFill01)
+
+设计参数
+- 外径：26.4 cm
+- 中心孔：8.4 cm，可避开研磨器中心轴
+- 可见豆堆丘面：约 2.7 cm
+- 隐藏裙边：向下 13 cm，移动 Z 时不容易露底或悬空
+- LOD0 / LOD1 / LOD2：18576 / 9387 / 5284 顶点
+
+注意
+- 只移动 Z，不要缩放 Z；缩放会把咖啡豆压扁。
+- 豆堆不参与物理模拟。倒豆动画使用 SM_CoffeeBean 的 Niagara Mesh Renderer 或对象池。
+- 如果实际 Blueprint 中研磨器 Mesh 有额外 Relative Transform，以其局部坐标为准微调 X/Y；Z 范围可保持约 11 cm。

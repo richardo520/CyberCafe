@@ -1,0 +1,35 @@
+咖啡粉与金属滤杯套装 / UE5.6 设置
+====================================
+
+Content Browser:
+/Game/coffee_grinder_scene/CoffeeBean/FilterSet
+
+资产
+- SM_CoffeeGroundsPile：10.8 × 5.0 cm，适配 12 × 6 cm 抽屉内胆
+- SM_MetalCoffeeFilter：Ø10.5 × H6.5 cm
+- SM_ConeFilterPaper：独立锥形滤纸，高约 7.1 cm
+- SM_GlassCoffeeCup：300 ml，H9.5 cm，杯口 Ø8.5 cm
+
+推荐组合层级
+BP_CoffeeFilterSet
+└─ SM_GlassCoffeeCup（Root）
+   └─ SM_MetalCoffeeFilter，Relative Location = (0, 0, 9.5 cm)
+      └─ SM_ConeFilterPaper，Relative Location = (0, 0, 0)
+
+咖啡粉量
+- 粉末模型 Pivot 位于粉层中心基准面，向下带 2.5 cm 隐藏裙边。
+- 先在抽屉内校准 FullZ，使可见粉层位于内胆底部上方。
+- EmptyZ = FullZ - 2.5 cm。
+- GroundsZ = Lerp(EmptyZ, FullZ, GroundsAmount01)。
+- 只移动 Z，不缩放 Z，避免粉末外形被压扁。
+
+交互建议
+- 玻璃杯：独立可抓取对象，2 个凸包碰撞。
+- 金属滤器：独立可抓取对象，4 个凸包碰撞。
+- 滤纸：无碰撞；作为滤器子组件，通过插入/取出状态控制可见性。
+- 咖啡粉：无碰撞；作为抽屉内纯视觉库存。
+
+验证
+- 四个 Static Mesh 均包含 LOD0 / LOD1 / LOD2。
+- 玻璃材质为 Thin Translucent、Two Sided、Surface Per-Pixel Lighting。
+- 滤纸材质为 Two Sided Opaque。

@@ -1,0 +1,25 @@
+{
+  "asset": "SM_GrinderCoffeeBeanPile",
+  "outer_diameter_cm": 26.4,
+  "center_clearance_diameter_cm": 8.4,
+  "visible_mound_height_cm": 2.7,
+  "hidden_skirt_depth_cm": 13.0,
+  "recommended_relative_location_cm": {
+    "x": 0.4,
+    "y": -0.4,
+    "z_full": 40.5,
+    "z_half": 36.5,
+    "z_low": 32.5,
+    "z_empty": 29.5
+  },
+  "triangles": {
+    "LOD0": 27072,
+    "LOD1": 14076,
+    "LOD2": 6768
+  },
+  "notes": [
+    "No collision: visual fill only.",
+    "Pivot Z=0 is the fill-level reference. Move downward to reduce visible beans.",
+    "Center hole clears the measured grinder post."
+  ]
+}
