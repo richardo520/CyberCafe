@@ -1,0 +1,95 @@
+{
+  "version": "V02",
+  "units": "meters",
+  "recommended_unreal_import_scale": 1.0,
+  "materials": [
+    "M_Glass_ThinTranslucent",
+    "M_Wood_Walnut",
+    "M_Metal_Blackened",
+    "M_Rubber_Black",
+    "M_CoffeeBean",
+    "M_CoffeeBean_Groove"
+  ],
+  "assets": {
+    "SM_CoffeeJar": {
+      "vertices": 896,
+      "triangles": 1664
+    },
+    "SM_CoffeeLid": {
+      "vertices": 1994,
+      "triangles": 3968
+    },
+    "SM_CoffeeScoop": {
+      "vertices": 1094,
+      "triangles": 2112
+    },
+    "SM_CoffeeBean": {
+      "vertices": 262,
+      "triangles": 504
+    },
+    "SM_CoffeeBeans_Display_Full": {
+      "vertices": 24610,
+      "triangles": 47012
+    },
+    "SM_CoffeeBeans_Display_Half": {
+      "vertices": 13610,
+      "triangles": 26012
+    },
+    "SM_CoffeeBeans_Display_Low": {
+      "vertices": 5360,
+      "triangles": 10262
+    },
+    "SM_CoffeeJar_LOD1": {
+      "vertices": 521,
+      "triangles": 914
+    },
+    "SM_CoffeeJar_LOD2": {
+      "vertices": 268,
+      "triangles": 464
+    },
+    "SM_CoffeeLid_LOD1": {
+      "vertices": 1041,
+      "triangles": 2062
+    },
+    "SM_CoffeeLid_LOD2": {
+      "vertices": 565,
+      "triangles": 1110
+    },
+    "SM_CoffeeScoop_LOD1": {
+      "vertices": 604,
+      "triangles": 1161
+    },
+    "SM_CoffeeScoop_LOD2": {
+      "vertices": 332,
+      "triangles": 632
+    },
+    "SM_CoffeeBean_LOD1": {
+      "vertices": 144,
+      "triangles": 276
+    },
+    "SM_CoffeeBean_LOD2": {
+      "vertices": 80,
+      "triangles": 150
+    },
+    "SM_CoffeeBeans_Display_Full_LOD1": {
+      "vertices": 12386,
+      "triangles": 22564
+    },
+    "SM_CoffeeBeans_Display_Full_LOD2": {
+      "vertices": 6745,
+      "triangles": 11282
+    }
+  },
+  "collision": {
+    "SM_CoffeeJar": 13,
+    "SM_CoffeeLid": 1,
+    "SM_CoffeeScoop": 2,
+    "SM_CoffeeBean": 1,
+    "bean_displays": 0
+  },
+  "notes": [
+    "Parts are independent FBX assets.",
+    "Glass material slot is prepared as M_Glass_ThinTranslucent; rebuild as UE Thin Translucent material after import.",
+    "Bean fill uses Full/Half/Low static variants; use SM_CoffeeBean for pouring particles or pooled rigid bodies."
+  ]
+}
