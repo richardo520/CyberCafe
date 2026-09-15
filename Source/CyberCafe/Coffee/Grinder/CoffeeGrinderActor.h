@@ -22,6 +22,13 @@ class AGrinderDrawerActor;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGrinderHandleTurnedSignature, float, DeltaAngleDeg, float, TotalAngleDeg);
 
 /**
+ * 研磨进度事件：每次 ProcessGrinding 消耗豆 / 产出粉后广播。
+ * @param BeanGramsLeft         当前顶仓剩余豆量（g）
+ * @param GroundGramsInGrinder  当前研磨器内已生成、尚未被抽屉取走的粉量（g）
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGrinderGrindProgressSignature, float, BeanGramsLeft, float, GroundGramsInGrinder);
+
+/**
  * ACoffeeGrinderActor
  * 老式咖啡研磨器主体。作为整套研磨工具（主体 + 手摇把手 + 抽屉）的宿主 Actor：
  *   - 自身可被 VR 手柄抓取（物理模拟，跟 ABottleActor 类似）。
@@ -74,9 +81,17 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grinder|Components")
     TObjectPtr<USceneComponent> DrawerMountPoint;
 
-    /** 豆子入口挂点（预留，暂无逻辑） */
+    /** 豆子入口挂点：勺子倾倒判定用；把它拖到研磨器顶端漏斗中心。 */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grinder|Components")
     TObjectPtr<USceneComponent> BeanEntryPoint;
+
+    /**
+     * 顶仓豆堆可视化 Mesh：随 CurrentBeanGrams / BeanCapacityGrams 的比值线性缩放 Z。
+     * 在蓝图里把它拖到漏斗内部合适高度，并把 StaticMesh 指定为一坨豆。
+     * 无豆时自动隐藏。
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grinder|Components")
+    TObjectPtr<UStaticMeshComponent> BeanPileMesh;
 
     /** 研磨时的粉尘 / 特效（可选，美术在蓝图里指定 NiagaraSystem） */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grinder|Components")
@@ -97,6 +112,28 @@ public:
     /** 抽屉 Actor 类（蓝图里指派为 BP_GrinderDrawer 之类） */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grinder|Children")
     TSubclassOf<AGrinderDrawerActor> DrawerClass;
+
+    //=====================================================================
+    // 豆 / 粉 参数（研磨核心数据）
+    //=====================================================================
+
+    /** 顶仓豆容量上限（g）。TryAddBeans 会 clamp 到该上限。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0"))
+    float BeanCapacityGrams;
+
+    /**
+     * 每转 1 度消耗的豆量 (g/度)。默认 0.02 → 转一整圈 (360°) ≈ 7.2 g。
+     * 顺时针 / 逆时针都算研磨（取 |DeltaAngle|）。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0"))
+    float GramsPerDegree;
+
+    /**
+     * 豆 → 粉 的产出效率（1.0 = 完全等重转换）。
+     * 一般现实中会有极少许损耗，这里保守用 1.0。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0"))
+    float GrindEfficiency;
 
     //=====================================================================
     // 研磨音效配置
@@ -173,6 +210,24 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
     float AccumulatedHandleAngleDeg;
 
+    /** 顶仓当前豆量 (g) */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    float CurrentBeanGrams;
+
+    /**
+     * 研磨器内部已产出、尚未被抽屉取走的粉量 (g)。
+     * 抽屉每次 OnGrinderGrindProgress 会通过 DrainGround 把它抽干。
+     */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    float CurrentGroundGrams;
+
+    /**
+     * BeanPileMesh 在编辑器里配置好的初始 RelativeScale3D。
+     * 运行时按 Ratio 修改 Z 分量，X/Y 保持不变。
+     */
+    UPROPERTY(Transient)
+    FVector BeanPileInitialScale;
+
     /** 上一次收到把手转动上报的游戏时间（秒），用于判定"停下"触发 FadeOut */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
     float LastTurnGameTime;
@@ -196,6 +251,14 @@ public:
     /** 把手每帧转动上报（当把手被抓取并转动时触发） */
     UPROPERTY(BlueprintAssignable, Category = "Grinder|Events")
     FOnGrinderHandleTurnedSignature OnHandleTurned;
+
+    /**
+     * 研磨进度更新：每次 OnHandleRotated 内部实际消耗豆 / 产出粉之后广播。
+     * 抽屉 Actor 订阅它以把粉从研磨器搬到抽屉内并刷新可视化。
+     * 顶仓无豆但把手空转时不会广播。
+     */
+    UPROPERTY(BlueprintAssignable, Category = "Grinder|Events")
+    FOnGrinderGrindProgressSignature OnGrindProgress;
 
     //=====================================================================
     // API
@@ -223,6 +286,34 @@ public:
     UFUNCTION(BlueprintPure, Category = "Grinder")
     bool IsHeld() const;
 
+    //=====================================================================
+    // 豆 / 粉 交互 API
+    //=====================================================================
+
+    /**
+     * 尝试向顶仓加入豆子（勺子倾倒时调用）。
+     * @param Grams      本次意图加入的豆量 (g)。<=0 直接返回 0。
+     * @return 实际加入的豆量 (g)。超过 BeanCapacityGrams 的部分会被拒绝（返回值 < Grams）。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Grinder|Grind")
+    float TryAddBeans(float Grams);
+
+    /**
+     * 从研磨器内部粉仓中取出至多 MaxGrams 的粉。
+     * 抽屉 Actor 每次 OnGrindProgress 后调用它把粉搬到抽屉。
+     * @return 实际取出的粉量 (g)。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Grinder|Grind")
+    float DrainGround(float MaxGrams);
+
+    /** 便捷查询：当前顶仓豆量 */
+    UFUNCTION(BlueprintPure, Category = "Grinder|Grind")
+    float GetCurrentBeanGrams() const { return CurrentBeanGrams; }
+
+    /** 便捷查询：研磨器内尚未被抽屉取走的粉量 */
+    UFUNCTION(BlueprintPure, Category = "Grinder|Grind")
+    float GetCurrentGroundGrams() const { return CurrentGroundGrams; }
+
 protected:
     /** 在 BeginPlay 中 Spawn 子部件并把它们 Attach 到对应挂点上 */
     virtual void SpawnChildParts();
@@ -232,5 +323,15 @@ protected:
 
     /** 淡出研磨音效（幂等：未在播放中会跳过） */
     void StopGrindSFX();
+
+    /**
+     * 将本帧的把手转动量转换为豆消耗 / 粉产出，并广播 OnGrindProgress。
+     * 顶仓无豆时视为"空转"直接返回（音效仍在响，符合真实体验）。
+     * @param AbsDeltaAngleDeg |DeltaAngleDeg| —— 已取绝对值
+     */
+    void ProcessGrinding(float AbsDeltaAngleDeg);
+
+    /** 根据 CurrentBeanGrams / BeanCapacityGrams 的比值刷新 BeanPileMesh 的 Z 缩放与可见性 */
+    void UpdateBeanPileVisual();
 };
 

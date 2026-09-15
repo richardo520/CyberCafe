@@ -22,6 +22,13 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     DrawerMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     DrawerMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
 
+    // 抽屉内部的咖啡粉堆（蓝图里指定 StaticMesh，拖到抽屉内底）
+    GroundPileMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GroundPileMesh"));
+    GroundPileMesh->SetupAttachment(DrawerMesh);
+    GroundPileMesh->SetSimulatePhysics(false);
+    GroundPileMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    GroundPileMesh->SetVisibility(false);
+
     // Custom 抓取：由本类手动维护滑动 / 拔出 / 落地
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
     GrabComp->SetupAttachment(DrawerMesh);
@@ -44,6 +51,10 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     CurrentOffset = 0.f;
     GrabHandOffsetLocal = FVector::ZeroVector;
     MountRef = nullptr;
+
+    DrawerCapacityGrams = 60.f;   // 抽屉能接约 60g 粉，够磨两仓豆
+    CurrentGroundGrams  = 0.f;
+    GroundPileInitialScale = FVector::OneVector;
 }
 
 void AGrinderDrawerActor::BeginPlay()
@@ -63,6 +74,13 @@ void AGrinderDrawerActor::BeginPlay()
         GrabComp->OnGrabbed.AddDynamic(this, &AGrinderDrawerActor::HandleGrabbed);
         GrabComp->OnDropped.AddDynamic(this, &AGrinderDrawerActor::HandleDropped);
     }
+
+    // 缓存粉堆初始缩放，后续只改 Z
+    if (GroundPileMesh)
+    {
+        GroundPileInitialScale = GroundPileMesh->GetRelativeScale3D();
+    }
+    UpdateGroundPileVisual();
 }
 
 void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp)
@@ -73,6 +91,11 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     }
     OwnerGrinder = InOwner;
     MountRef = MountComp;
+
+    // 将本抽屉的 OnGrinderGrindProgress 回调绑定到主体的 OnGrindProgress，
+    // 这样每次主体 ProcessGrinding 产出粉后，抽屉能自动搬粉并刷新可视化。
+    // AddUniqueDynamic 避免重复绑定（包括后续 ReattachToGrinder 的情况）
+    InOwner->OnGrindProgress.AddUniqueDynamic(this, &AGrinderDrawerActor::OnGrinderGrindProgress);
 
     // 挂到挂点，重置为合上状态
     FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
@@ -364,5 +387,52 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
     // ---- 6. 应用滑动位移 ----
     SetActorRelativeLocation(FVector(0.f, CurrentOffset, 0.f));
     SetActorRelativeRotation(FRotator::ZeroRotator);
+}
+
+//=====================================================================
+// 粉 抽取 & 可视化
+//=====================================================================
+
+void AGrinderDrawerActor::OnGrinderGrindProgress(float /*BeanGramsLeft*/, float GroundGramsInGrinder)
+{
+    // 只有 Attached 状态才能接粉：抽屉拔出去了就不再受益，产出会留在研磨器内，
+    // 下次抽屉吸回 (Reattach) 后会因为征月发送的 GroundGramsInGrinder 一直在增而一次性同步。
+    if (State != EDrawerState::Attached || !OwnerGrinder || GroundGramsInGrinder <= KINDA_SMALL_NUMBER)
+    {
+        return;
+    }
+
+    const float Space = FMath::Max(DrawerCapacityGrams - CurrentGroundGrams, 0.f);
+    if (Space <= KINDA_SMALL_NUMBER)
+    {
+        return;
+    }
+
+    const float Drawn = OwnerGrinder->DrainGround(Space);
+    if (Drawn > 0.f)
+    {
+        CurrentGroundGrams = FMath::Min(CurrentGroundGrams + Drawn, DrawerCapacityGrams);
+        UpdateGroundPileVisual();
+    }
+}
+
+void AGrinderDrawerActor::UpdateGroundPileVisual()
+{
+    if (!GroundPileMesh)
+    {
+        return;
+    }
+    const float Ratio = (DrawerCapacityGrams > KINDA_SMALL_NUMBER)
+        ? FMath::Clamp(CurrentGroundGrams / DrawerCapacityGrams, 0.f, 1.f)
+        : 0.f;
+    if (Ratio <= 0.001f)
+    {
+        GroundPileMesh->SetVisibility(false);
+        return;
+    }
+    GroundPileMesh->SetVisibility(true);
+    FVector NewScale = GroundPileInitialScale;
+    NewScale.Z = GroundPileInitialScale.Z * Ratio;
+    GroundPileMesh->SetRelativeScale3D(NewScale);
 }
 

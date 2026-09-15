@@ -37,6 +37,13 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     BeanEntryPoint = CreateDefaultSubobject<USceneComponent>(TEXT("BeanEntryPoint"));
     BeanEntryPoint->SetupAttachment(BodyMesh);
 
+    // 顶仓豆堆可视化：默认无 StaticMesh（蓝图里指定），缩放在运行时改 Z
+    BeanPileMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BeanPileMesh"));
+    BeanPileMesh->SetupAttachment(BeanEntryPoint);
+    BeanPileMesh->SetSimulatePhysics(false);
+    BeanPileMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    BeanPileMesh->SetVisibility(false);
+
     // FX：默认不激活
     GrindFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("GrindFX"));
     GrindFX->SetupAttachment(BodyMesh);
@@ -69,11 +76,28 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     GrindSFXStartTime = -1000.f;
     HandleRef = nullptr;
     DrawerRef = nullptr;
+
+    // ---- 豆 / 粉 默认参数 ----
+    BeanCapacityGrams = 30.f;   // 顶仓总容量 30g（约 6 小勺）
+    GramsPerDegree    = 0.02f;  // 360° ≈ 7.2g，30g 大约四圈磨完
+    GrindEfficiency   = 1.f;
+    CurrentBeanGrams  = 0.f;
+    CurrentGroundGrams = 0.f;
+    BeanPileInitialScale = FVector::OneVector;
 }
 
 void ACoffeeGrinderActor::BeginPlay()
 {
     Super::BeginPlay();
+
+    // 缓存蓝图中配好的 BeanPileMesh 初始缩放，供 UpdateBeanPileVisual 按比例缩 Z
+    if (BeanPileMesh)
+    {
+        BeanPileInitialScale = BeanPileMesh->GetRelativeScale3D();
+    }
+
+    // 研磨器初始无豆：隐藏豆堆
+    UpdateBeanPileVisual();
 
     SpawnChildParts();
 }
@@ -204,6 +228,9 @@ void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
         }
     }
 
+    // 豆 → 粉 转换：先消耗顶仓豆并产出粉（顶仓为空时 = 空转，但仍广播 HandleTurned 以驱动音效）
+    ProcessGrinding(FMath::Abs(DeltaAngleDeg));
+
     // 豆 → 粉 转换等实际研磨逻辑：后续再接。这里先广播事件方便蓝图 / 调试对接。
     OnHandleTurned.Broadcast(DeltaAngleDeg, AccumulatedHandleAngleDeg);
 }
@@ -268,5 +295,84 @@ FTransform ACoffeeGrinderActor::GetDrawerMountWorldTransform() const
 bool ACoffeeGrinderActor::IsHeld() const
 {
     return GrabComp ? GrabComp->IsHeld() : false;
+}
+
+//=====================================================================
+// 豆 / 粉 交互 API
+//=====================================================================
+
+float ACoffeeGrinderActor::TryAddBeans(float Grams)
+{
+    if (Grams <= 0.f)
+    {
+        return 0.f;
+    }
+    const float Space  = FMath::Max(BeanCapacityGrams - CurrentBeanGrams, 0.f);
+    const float Actual = FMath::Min(Grams, Space);
+    if (Actual <= KINDA_SMALL_NUMBER)
+    {
+        return 0.f;
+    }
+    CurrentBeanGrams += Actual;
+    UpdateBeanPileVisual();
+    return Actual;
+}
+
+float ACoffeeGrinderActor::DrainGround(float MaxGrams)
+{
+    if (MaxGrams <= 0.f || CurrentGroundGrams <= KINDA_SMALL_NUMBER)
+    {
+        return 0.f;
+    }
+    const float Actual = FMath::Min(MaxGrams, CurrentGroundGrams);
+    CurrentGroundGrams -= Actual;
+    return Actual;
+}
+
+void ACoffeeGrinderActor::ProcessGrinding(float AbsDeltaAngleDeg)
+{
+    // 顶仓无豆 = 空转：不消耗、不产出，但上层仍会开 SFX（现实里手摇研磨器空转也有声音）
+    if (CurrentBeanGrams <= KINDA_SMALL_NUMBER || AbsDeltaAngleDeg <= 0.f)
+    {
+        return;
+    }
+
+    const float WantConsume = AbsDeltaAngleDeg * GramsPerDegree;
+    const float ActualConsume = FMath::Min(WantConsume, CurrentBeanGrams);
+    if (ActualConsume <= KINDA_SMALL_NUMBER)
+    {
+        return;
+    }
+
+    CurrentBeanGrams -= ActualConsume;
+    CurrentGroundGrams += ActualConsume * FMath::Max(GrindEfficiency, 0.f);
+
+    UpdateBeanPileVisual();
+
+    OnGrindProgress.Broadcast(CurrentBeanGrams, CurrentGroundGrams);
+}
+
+void ACoffeeGrinderActor::UpdateBeanPileVisual()
+{
+    if (!BeanPileMesh)
+    {
+        return;
+    }
+
+    const float Ratio = (BeanCapacityGrams > KINDA_SMALL_NUMBER)
+        ? FMath::Clamp(CurrentBeanGrams / BeanCapacityGrams, 0.f, 1.f)
+        : 0.f;
+
+    // 无豆时直接隐藏，避免 Ratio=0 时缩成一层零厚度的飞盘
+    if (Ratio <= 0.001f)
+    {
+        BeanPileMesh->SetVisibility(false);
+        return;
+    }
+
+    BeanPileMesh->SetVisibility(true);
+    FVector NewScale = BeanPileInitialScale;
+    NewScale.Z = BeanPileInitialScale.Z * Ratio;
+    BeanPileMesh->SetRelativeScale3D(NewScale);
 }
 

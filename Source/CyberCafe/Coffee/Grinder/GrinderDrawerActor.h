@@ -54,6 +54,13 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
     TObjectPtr<UStaticMeshComponent> DrawerMesh;
 
+    /**
+     * 抽屉底部的咖啡粉堆可视化 Mesh（可选，蓝图里指定 StaticMesh）。
+     * 随 CurrentGroundGrams / DrawerCapacityGrams 的比值线性缩放 Z，无粉时隐藏。
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
+    TObjectPtr<UStaticMeshComponent> GroundPileMesh;
+
     /** 抓取组件（EGrabType::Custom） */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
     TObjectPtr<UGrabComponent> GrabComp;
@@ -105,6 +112,14 @@ public:
     TObjectPtr<USoundBase> ReattachSound;
 
     //=====================================================================
+    // 粉仓参数
+    //=====================================================================
+
+    /** 抽屉可容纳的最大粉量 (g)。超过后不再从研磨器抽取。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Grind", meta = (ClampMin = "0.0"))
+    float DrawerCapacityGrams;
+
+    //=====================================================================
     // 运行时
     //=====================================================================
 
@@ -131,6 +146,14 @@ public:
     UPROPERTY(Transient)
     FVector GrabHandOffsetLocal;
 
+    /** 抽屉内当前的咖啡粉量 (g)：每次研磨器广播 OnGrindProgress 时 DrainGround 搬过来 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    float CurrentGroundGrams;
+
+    /** GroundPileMesh 在编辑器里配好的初始 RelativeScale3D，运行时在此基础上缩 Z */
+    UPROPERTY(Transient)
+    FVector GroundPileInitialScale;
+
     //=====================================================================
     // API
     //=====================================================================
@@ -154,6 +177,13 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Drawer")
     void DetachFromGrinder(UMotionControllerComponent* MotionController);
 
+    /**
+     * 从归属研磨器把已经产出的粉抽到抽屉内（内部会调 Grinder->DrainGround），并刷新粉堆可视化。
+     * 在 Detached / Free 状态下已从主体抽出时也允许调用（仅不会实际搬运）。
+     */
+    UFUNCTION()
+    void OnGrinderGrindProgress(float BeanGramsLeft, float GroundGramsInGrinder);
+
 protected:
     UFUNCTION()
     void HandleGrabbed();
@@ -175,5 +205,8 @@ protected:
     /** 挂点组件（缓存用） */
     UPROPERTY(Transient)
     TObjectPtr<USceneComponent> MountRef;
+
+    /** 根据 CurrentGroundGrams / DrawerCapacityGrams 刷新 GroundPileMesh 的 Z 缩放与可见性 */
+    void UpdateGroundPileVisual();
 };
 
