@@ -78,9 +78,14 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     DrawerRef = nullptr;
 
     // ---- 豆 / 粉 默认参数 ----
-    BeanCapacityGrams = 30.f;   // 顶仓总容量 30g（约 6 小勺）
-    GramsPerDegree    = 0.02f;  // 360° ≈ 7.2g，30g 大约四圈磨完
+    // 顶仓 30g，分 6 档（每档 5g，刚好对应一个 5g 的小勺——一勺一档）；
+    // 每圈 360° × 0.01389 g/° ≈ 5g，6 圈 → 30g 磨完（每圈刚好掉一档）。
+    // 如果你想改成"2 圈掉一档、共 12 圈磨完"，把 GramsPerDegree 改成 0.00694 即可。
+    BeanCapacityGrams = 30.f;
+    GramsPerDegree    = 5.f / 360.f;   // ≈ 0.01389
     GrindEfficiency   = 1.f;
+    BeanPileStepCount = 6;             // 6 档（一勺一档 / 一圈一档）
+    bSilentWhenEmpty  = true;          // 磨完后继续转把手 → 不出声
     CurrentBeanGrams  = 0.f;
     CurrentGroundGrams = 0.f;
     BeanPileInitialScale = FVector::OneVector;
@@ -197,9 +202,13 @@ void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
 
     AccumulatedHandleAngleDeg += DeltaAngleDeg;
 
+    // 顶仓已空且启用了"磨完静音"：继续转把手不驱动音效 / 不广播进度
+    // （OnHandleTurned 仍会广播，方便外部蓝图监听"把手在转"事件本身）
+    const bool bEmptyAndSilent = bSilentWhenEmpty && (CurrentBeanGrams <= KINDA_SMALL_NUMBER);
+
     // ---- 音效驱动：起播（若未播）+ 更新最近转动时间 + 注入瞬时角速度 ----
     const UWorld* World = GetWorld();
-    if (World)
+    if (World && !bEmptyAndSilent)
     {
         const float Now = World->GetTimeSeconds();
 
@@ -228,7 +237,7 @@ void ACoffeeGrinderActor::OnHandleRotated(float DeltaAngleDeg)
         }
     }
 
-    // 豆 → 粉 转换：先消耗顶仓豆并产出粉（顶仓为空时 = 空转，但仍广播 HandleTurned 以驱动音效）
+    // 豆 → 粉 转换：先消耗顶仓豆并产出粉（顶仓为空时 = 空转，内部直接 return）
     ProcessGrinding(FMath::Abs(DeltaAngleDeg));
 
     // 豆 → 粉 转换等实际研磨逻辑：后续再接。这里先广播事件方便蓝图 / 调试对接。
@@ -359,20 +368,30 @@ void ACoffeeGrinderActor::UpdateBeanPileVisual()
         return;
     }
 
-    const float Ratio = (BeanCapacityGrams > KINDA_SMALL_NUMBER)
+    const float RawRatio = (BeanCapacityGrams > KINDA_SMALL_NUMBER)
         ? FMath::Clamp(CurrentBeanGrams / BeanCapacityGrams, 0.f, 1.f)
         : 0.f;
 
     // 无豆时直接隐藏，避免 Ratio=0 时缩成一层零厚度的飞盘
-    if (Ratio <= 0.001f)
+    if (RawRatio <= 0.001f)
     {
         BeanPileMesh->SetVisibility(false);
         return;
     }
 
+    // 分档显示：豆堆高度向上取整到最近一档。
+    // 例：Step=6，Ratio=0.51 → SteppedRatio = ceil(0.51*6)/6 = 4/6 ≈ 0.667，展示四档高。
+    // 刚磨一点点（Ratio 略降）不会接发变矮，只有磨完一整档后才"跳"下一级。
+    float DisplayRatio = RawRatio;
+    if (BeanPileStepCount > 0)
+    {
+        DisplayRatio = FMath::CeilToFloat(RawRatio * BeanPileStepCount) / static_cast<float>(BeanPileStepCount);
+        DisplayRatio = FMath::Clamp(DisplayRatio, 0.f, 1.f);
+    }
+
     BeanPileMesh->SetVisibility(true);
     FVector NewScale = BeanPileInitialScale;
-    NewScale.Z = BeanPileInitialScale.Z * Ratio;
+    NewScale.Z = BeanPileInitialScale.Z * DisplayRatio;
     BeanPileMesh->SetRelativeScale3D(NewScale);
 }
 

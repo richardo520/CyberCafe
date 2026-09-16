@@ -135,6 +135,23 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0"))
     float GrindEfficiency;
 
+    /**
+     * 顶仓豆堆可视化分档数量。豆堆不再随豆量连续缩 Z，而是按此档数离散显示。
+     * 例：BeanCapacityGrams=30g、BeanPileStepCount=6 → 每 5g 一档，加入 5g 时豆堆"跳"到 1/6 高度。
+     * 视觉档位 = ceil(Ratio * StepCount) / StepCount，实际豆量继续连续变化不影响研磨。
+     * <=0 时回退为连续缩 Z（旧行为）。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0"))
+    int32 BeanPileStepCount;
+
+    /**
+     * 顶仓被磨空之后，把手空转时是否停止播放研磨音效。
+     * true（默认）：豆磨完 → 继续摇 → 无声音（现实中磨完了确实是嘎嘎响很轻但可视为无效工作）
+     * false：只要转就一直响（老式研磨器手感）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind")
+    bool bSilentWhenEmpty;
+
     //=====================================================================
     // 研磨音效配置
     //=====================================================================
