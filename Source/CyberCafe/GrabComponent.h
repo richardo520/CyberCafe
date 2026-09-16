@@ -175,6 +175,39 @@ public:
 
     //~ End Attach / Physics Helpers
 
+    //~ Begin Grab In Place (工程内新增：原地控制，仅对 Custom 抓取生效)
+
+    /**
+     * 开启"原地控制"模式（对 Custom 抓取的物体生效）。
+     *
+     * 行为：调用瞬间记录"物体相对手柄"的常量变换，之后每帧 Tick 里
+     * 将 Owner Actor 的世界位姿设为 HeldRelativeToController * HandXform，
+     * 物体看起来就像"悬在拔开位置，手开盖也开"。
+     *
+     * 使用时机：由业务代码在完成自己的"从约束态到自由态"过渡后调用，
+     *   - 瓶盖：在 DetachFromBottle 里（代替原本的 AttachToComponent(MC)）
+     *   - 抽屉：在 DetachFromGrinder 里（代替原本的 AttachToComponent(MC)）
+     *   - 罐盖：在 DetachFromJar 里
+     * 调用前需先把 Owner Actor 从所有父物上解除 Attach 并关闭物理（否则会与 Tick 里的 SetActorLocation 冲突）。
+     *
+     * @return 是否成功开启（需 bIsHeld 且 MotionControllerRef 有效）
+     */
+    UFUNCTION(BlueprintCallable, Category = "Grab|InPlace")
+    bool BeginGrabInPlace();
+
+    /**
+     * 关闭"原地控制"模式。默认在 TryRelease 里自动调用，
+     * 业务代码一般不需手动调；仅当需要提前切断原地控制（例如抽屉 Reattach 时）才调。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Grab|InPlace")
+    void EndGrabInPlace();
+
+    /** 当前是否处于原地控制模式 */
+    UFUNCTION(BlueprintPure, Category = "Grab|InPlace")
+    bool IsGrabbingInPlace() const { return bDetachedInPlace; }
+
+    //~ End Grab In Place
+
     //~ Begin Physics Handle (工程内新增：使用引擎 PhysicsHandle 驱动抓取，允许与环境碰撞)
 
     /**
@@ -320,6 +353,21 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
     bool bHideHandWhileHeld = false;
 
+    /**
+     * 是否使用"原地控制"模式（仅对 EGrabType::Custom 生效）。
+     *
+     * false（默认）：业务代码自己控制是否 Attach 到手柄，行为不变。
+     * true ：业务代码在适当时机调用 BeginGrabInPlace() 开启。
+     *          开启后，GrabComponent Tick 里会把 Owner Actor 的世界位姿驱动为
+     *          HeldRelativeToController * HandXform，即物体悬在当初拾起的位置、
+     *          随手柄的位移/旋转增量同步移动（而不是吸附到手上）。
+     *
+     * 配合 bHideHandWhileHeld 可得到"看不到手、物体悬在手柄位置"的观感。
+     * 适用于：拔下后的瓶盖/罐盖、拔出后的抽屉、钥匙等小件。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|InPlace")
+    bool bGrabInPlace = false;
+
     /** 抓取时播放的触觉效果 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Haptics")
     TObjectPtr<UHapticFeedbackEffect_Base> OnGrabHapticEffect;
@@ -401,9 +449,18 @@ private:
 
     /** Snap 模式下，抓取时记录的"物体上的抓握锚点相对手柄"的目标相对变换，
      *  Tick 中每帧用它换算出 PhysicsHandle 的目标世界位姿。
-     *  Free 模式下同样适用（目标 = 抓取瞬间的相对位姿）。 */
+     *  Free 模式下同样适用（目标 = 抓取瞬间的相对位姿）。
+     *  Custom + bGrabInPlace 同样复用本字段作为"物体相对手柄"的常量变换。 */
     UPROPERTY(Transient)
     FTransform HeldRelativeToController = FTransform::Identity;
+
+    /**
+     * Custom + bGrabInPlace 模式下，是否已开启"原地控制"。
+     * 为 true 时 Tick 里驱动 Owner Actor 位姿为 HeldRelativeToController * HandXform。
+     * BeginGrabInPlace() 置 true；EndGrabInPlace() / TryRelease() 自动置 false。
+     */
+    UPROPERTY(Transient)
+    bool bDetachedInPlace = false;
 
     /** 抓取期间使用的 PhysicsHandle 组件（运行时动态创建） */
     UPROPERTY(Transient)

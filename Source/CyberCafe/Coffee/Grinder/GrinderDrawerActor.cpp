@@ -34,6 +34,13 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     GrabComp->SetupAttachment(DrawerMesh);
     GrabComp->GrabType = EGrabType::Custom;
     GrabComp->GrabPriority = 1;
+    // 抽屉默认使用"原地控制 + 隐藏手部 Mesh"：
+    //   - 挂在主体上时：GrabComponent 不生效原地控制（我们自己在 Tick 里用滑轨约束驱动位置），
+    //     仅隐藏手部 Mesh；
+    //   - 拔出到独立状态后：DetachFromGrinder 里调用 BeginGrabInPlace，抽屉不吸附到手柄，
+    //     悬在拔出位置由手柄增量驱动。
+    GrabComp->bGrabInPlace = true;
+    GrabComp->bHideHandWhileHeld = true;
     // 不在构造函数里禁远程抓取；挂在主体上时由 AttachToGrinder / ReattachToGrinder 关闭，
     // 拔出后（DetachFromGrinder）恢复为 true，自由抽屉就能像普通物体一样被远程抓。
 
@@ -118,6 +125,8 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     if (GrabComp)
     {
         GrabComp->bAllowRemoteGrab = false;
+        // 防御性：若之前处于原地控制模式，在重新挂回主体后关闭，避免 GrabComp Tick 继续驱动 Owner Actor
+        GrabComp->EndGrabInPlace();
     }
 
     // 恢复与主体的正常碰撞（初始挂上时保险起见清一次）
@@ -156,6 +165,8 @@ void AGrinderDrawerActor::ReattachToGrinder()
     if (GrabComp)
     {
         GrabComp->bAllowRemoteGrab = false;
+        // 防御性：若 Reattach 发生时抽屉还在原地控制模式，关闭标志避免 GrabComp Tick 继续驱动
+        GrabComp->EndGrabInPlace();
     }
 
     // 恢复与主体之间的正常碰撞（拔出期间通过 SetIgnoreCollisionWithGrinder(true) 忽略过）
@@ -169,18 +180,27 @@ void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionCo
         return;
     }
 
-    // 从主体上脱离，保持世界位姿；随后 Attach 到手柄
+    // 从主体上脱离，保持世界位姿
     DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-
-    FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
-    AttachRule.bWeldSimulatedBodies = true;
-    AttachToComponent(MotionController, AttachRule);
 
     if (DrawerMesh)
     {
         DrawerMesh->SetSimulatePhysics(false);
         // 拔出后恢复正常碰撞（可撞环境）
         DrawerMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+    }
+
+    if (GrabComp && GrabComp->bGrabInPlace)
+    {
+        // 原地控制：不 Attach 到手柄，交给 GrabComponent 驱动 Owner Actor 位姿
+        GrabComp->BeginGrabInPlace();
+    }
+    else
+    {
+        // 默认：Attach 到手柄
+        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
+        AttachRule.bWeldSimulatedBodies = true;
+        AttachToComponent(MotionController, AttachRule);
     }
 
     State = EDrawerState::Detached;
@@ -238,15 +258,27 @@ void AGrinderDrawerActor::HandleGrabbed()
     }
     else
     {
-        // Detached / Free：抽屉是独立物体，抓到就 Attach 到手柄（保持世界位姿）
-        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
-        AttachRule.bWeldSimulatedBodies = true;
-        AttachToComponent(MC, AttachRule);
-
-        if (DrawerMesh)
+        // Detached / Free：抽屉是独立物体，抓到后根据模式选 Attach 到手 或 原地控制
+        if (GrabComp->bGrabInPlace)
         {
-            DrawerMesh->SetSimulatePhysics(false);
-            DrawerMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+            if (DrawerMesh)
+            {
+                DrawerMesh->SetSimulatePhysics(false);
+                DrawerMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+            }
+            GrabComp->BeginGrabInPlace();
+        }
+        else
+        {
+            FAttachmentTransformRules AttachRule = FAttachmentTransformRules::KeepWorldTransform;
+            AttachRule.bWeldSimulatedBodies = true;
+            AttachToComponent(MC, AttachRule);
+
+            if (DrawerMesh)
+            {
+                DrawerMesh->SetSimulatePhysics(false);
+                DrawerMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+            }
         }
         State = EDrawerState::Detached;
     }
@@ -275,6 +307,7 @@ void AGrinderDrawerActor::HandleDropped()
     }
 
     // Detached / Free 松手：先脱离手柄，再判断是否吸回挂点
+    // 注：若处于"原地控制"模式，抽屉并未 Attach 到手柄，DetachFromActor 也安全（无作用）。
     DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
     if (!OwnerGrinder || !MountRef)

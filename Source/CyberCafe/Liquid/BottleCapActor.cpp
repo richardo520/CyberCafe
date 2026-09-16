@@ -34,6 +34,9 @@ ABottleCapActor::ABottleCapActor()
     GrabComp->GrabPriority = 1;
     // 瓶盖默认隐藏手部 Mesh，配合 bGrabInPlace 得到"手消失、盖子留在原地由手远程控制"的观感
     GrabComp->bHideHandWhileHeld = true;
+    // 瓶盖默认启用"原地控制"：拔盖后不吸附到手柄，盖子悬在原地由手柄的位移/旋转增量驱动。
+    // DetachFromBottle 里会调用 GrabComp->BeginGrabInPlace() 正式启动，Tick 由 GrabComponent 驱动。
+    GrabComp->bGrabInPlace = true;
     // 不在构造函数里禁远程抓取；盖在瓶口时由 AttachToBottle 关闭，拧下后（DetachFromBottle）恢复。
 
     // 默认参数
@@ -47,10 +50,6 @@ ABottleCapActor::ABottleCapActor()
     OwnerBottle              = nullptr;
     CapSocketName            = NAME_None;
     bGrabbedButNotDetached   = false;
-    // 默认启用原地控制：拔盖时盖子不吸附到手柄，而是在原地由手柄的位移/旋转增量驱动
-    bGrabInPlace             = true;
-    bDetachedInPlace         = false;
-    GrabbedRelativeToHand    = FTransform::Identity;
 }
 
 void ABottleCapActor::BeginPlay()
@@ -79,20 +78,8 @@ void ABottleCapActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // ---- 原地控制：盖已拔下但未 Attach 到手柄 → 每帧把手柄的位移 / 旋转增量应用到盖子 ----
-    if (bDetachedInPlace && !bIsAttached && GrabComp && GrabComp->IsHeld())
-    {
-        if (UMotionControllerComponent* MC = GrabComp->GetHoldingController())
-        {
-            const FTransform HandXform(MC->GetComponentQuat(), MC->GetComponentLocation());
-            // TargetWorld = HandXform * GrabbedRelativeToHand（将"盖子相对手"的常量变换乘到当前手位姿上）
-            const FTransform TargetWorld = GrabbedRelativeToHand * HandXform;
-            SetActorLocationAndRotation(TargetWorld.GetLocation(), TargetWorld.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
-        }
-    }
-
-    // 仅在"已抓住但尚未拔下来"状态下检测"往外拉"距离，超过阈值就拔出。
-    // 知道盖子已拔下后的一切盖回逻辑都在 HandleDropped 里完成。
+    // 注：原地控制的位姿驱动已交给 UGrabComponent::TickComponent 统一处理（当 GrabComp->IsGrabbingInPlace() 为 true）
+    // 此处仅保留"抓住但尚未拔下"状态下的拉出距离检测。
     if (!bGrabbedButNotDetached || !GrabComp || !OwnerBottle || !OwnerBottle->ContainerMesh)
     {
         return;
@@ -223,13 +210,11 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
         CapMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
     }
 
-    if (bGrabInPlace)
+    if (GrabComp && GrabComp->bGrabInPlace)
     {
-        // 原地控制：不 Attach 到手柄。记住"盖相对手"的当前变换，Tick 里用手柄位姿驱动盖子位姿。
-        const FTransform HandXform(MotionController->GetComponentQuat(), MotionController->GetComponentLocation());
-        const FTransform CapXform  = GetActorTransform();
-        GrabbedRelativeToHand = CapXform.GetRelativeTransform(HandXform);
-        bDetachedInPlace = true;
+        // 原地控制：不 Attach 到手柄。交给 GrabComponent 记录"盖相对手"的变换，
+        // 由其 Tick 驱动 Owner Actor 位姿。
+        GrabComp->BeginGrabInPlace();
     }
     else
     {
@@ -237,7 +222,6 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
         FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
         AttachRule.bWeldSimulatedBodies = true;
         AttachToComponent(MotionController, AttachRule);
-        bDetachedInPlace = false;
     }
 
     bIsAttached            = false;
@@ -264,7 +248,7 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
 
     // 3) 通知瓶子解锁倒液
     UE_LOG(LogTemp, Log, TEXT("[BottleCap] DetachFromBottle done. OwnerBottle=%s InPlace=%d, calling OnCapDetached..."),
-           OwnerBottle ? *OwnerBottle->GetName() : TEXT("NULL"), bDetachedInPlace ? 1 : 0);
+           OwnerBottle ? *OwnerBottle->GetName() : TEXT("NULL"), (GrabComp && GrabComp->IsGrabbingInPlace()) ? 1 : 0);
     if (OwnerBottle)
     {
         OwnerBottle->OnCapDetached();
@@ -301,18 +285,15 @@ void ABottleCapActor::HandleGrabbed()
     else
     {
         // 已经不在瓶口上——根据模式決定是 Attach 到手还是原地控制
-        if (bGrabInPlace)
+        if (GrabComp && GrabComp->bGrabInPlace)
         {
-            // 原地控制：重新拾起已拔下的盖子，仍然不 Attach，只重新锺定"盖相对手"的相对位姿
+            // 原地控制：重新拾起已拔下的盖子，仍然不 Attach，交由 GrabComponent 重新锺定"盖相对手"变换
             DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
             if (CapMesh)
             {
                 CapMesh->SetSimulatePhysics(false);
             }
-            const FTransform HandXform(MC->GetComponentQuat(), MC->GetComponentLocation());
-            const FTransform CapXform  = GetActorTransform();
-            GrabbedRelativeToHand = CapXform.GetRelativeTransform(HandXform);
-            bDetachedInPlace = true;
+            GrabComp->BeginGrabInPlace();
         }
         else
         {
@@ -324,7 +305,6 @@ void ABottleCapActor::HandleGrabbed()
             {
                 CapMesh->SetSimulatePhysics(false);
             }
-            bDetachedInPlace = false;
         }
         bGrabbedButNotDetached = false;
     }
@@ -341,8 +321,7 @@ void ABottleCapActor::HandleDropped()
     // 没有关物理，TrySimulateOnDrop 逻辑对我们影响可控；此处再显式接管一次以保证行为清晰。
 
     bGrabbedButNotDetached = false;
-    // 原地控制在松手后失效：不再追随手柄，需要重置标志
-    bDetachedInPlace = false;
+    // 注：原地控制标志 GrabComp->IsGrabbingInPlace() 已由 UGrabComponent::TryRelease 自动重置
 
     if (!OwnerBottle)
     {

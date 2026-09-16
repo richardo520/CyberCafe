@@ -82,20 +82,6 @@ public:
     TObjectPtr<USoundBase> ReattachSound;
 
     //=====================================================================
-    // 拔后交互模式
-    //=====================================================================
-
-    /**
-     * 拔下后盖子的控制方式。
-     * false（默认）：盖子 Attach 到 MotionController 上，直接跟随手柄运动。
-     * true ：盖子不 Attach 到手柄，而是"原地控制"：以拔下瞬间的盖与手相对位姿为基准，
-     *          Tick 里将手柄的位移 / 旋转增量应用到盖子上。盖子看起来像"悬在拔开位置，手开盖也开"。
-     * 配合 GrabComp->bHideHandWhileHeld 可得到"看不到手，只看到盖子在手柄位置"的观感。
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Detach")
-    bool bGrabInPlace;
-
-    //=====================================================================
     // "砸桌开盖"（SlamOpen）：握着瓶子带力撞击时，瓶盖向上飞出
     //=====================================================================
 
@@ -208,15 +194,4 @@ private:
     /** 是否处于"已抓住但尚未拔下来"的中间状态（Custom Grab 生效但仍附在瓶口 Socket 上） */
     UPROPERTY(Transient)
     bool bGrabbedButNotDetached;
-
-    /**
-     * 原地控制模式下，拔下瞬间盖子相对手柄的位姿。
-     * Tick 中每帧计算 TargetWorld = HandCurrent * GrabbedRelativeToHand 并 SetActorLocationAndRotation。
-     */
-    UPROPERTY(Transient)
-    FTransform GrabbedRelativeToHand;
-
-    /** 拔下后是否启用了原地控制（可能中途变更参数，需要保留拔盖瞬间的模式） */
-    UPROPERTY(Transient)
-    bool bDetachedInPlace;
 };

@@ -105,6 +105,23 @@ void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
             }
         }
     }
+
+    // Custom + bGrabInPlace 模式：物体已从约束态过渡到自由态，但不 Attach 到手柄；
+    // 每帧把 Owner Actor 的世界位姿驱动为 HeldRelativeToController * HandXform。
+    if (bIsHeld && bDetachedInPlace && MotionControllerRef)
+    {
+        if (AActor* OwnerActor = GetOwner())
+        {
+            const FTransform HandXform(MotionControllerRef->GetComponentQuat(), MotionControllerRef->GetComponentLocation());
+            const FTransform TargetWorld = HeldRelativeToController * HandXform;
+            OwnerActor->SetActorLocationAndRotation(
+                TargetWorld.GetLocation(),
+                TargetWorld.GetRotation(),
+                false,
+                nullptr,
+                ETeleportType::TeleportPhysics);
+        }
+    }
 }
 
 UPrimitiveComponent* UGrabComponent::GetOwnerPrimitive() const
@@ -272,6 +289,12 @@ bool UGrabComponent::TryRelease()
     if (bWasPhysHandle)
     {
         TeardownPhysicsHandle();
+    }
+
+    // 关闭原地控制模式（如果开启了）。释放后不再驱动 Owner Actor 跟随手柄。
+    if (bDetachedInPlace)
+    {
+        bDetachedInPlace = false;
     }
 
     switch (GrabType)
@@ -764,6 +787,42 @@ void UGrabComponent::SetupPhysicsHandle(UMotionControllerComponent* MotionContro
     const FVector  ObjLoc = GrabbedPrim->GetComponentLocation();
     const FRotator ObjRot = GrabbedPrim->GetComponentRotation();
     GrabPhysicsHandle->GrabComponentAtLocationWithRotation(GrabbedPrim, NAME_None, ObjLoc, ObjRot);
+}
+
+//===========================================================================
+// Grab In Place（原地控制）
+//===========================================================================
+
+bool UGrabComponent::BeginGrabInPlace()
+{
+    if (!bIsHeld || MotionControllerRef == nullptr)
+    {
+        return false;
+    }
+    if (GrabType != EGrabType::Custom)
+    {
+        // 仅对 Custom 有意义：Free / Snap 已由 GrabComponent 自己管理位姿
+        return false;
+    }
+
+    AActor* OwnerActor = GetOwner();
+    if (!OwnerActor)
+    {
+        return false;
+    }
+
+    // 记录"物体相对手柄"的当前变换，作为 Tick 里每帧驱动 Owner Actor 的常量偏移
+    const FTransform HandXform(MotionControllerRef->GetComponentQuat(), MotionControllerRef->GetComponentLocation());
+    const FTransform OwnerXform = OwnerActor->GetActorTransform();
+    HeldRelativeToController = OwnerXform.GetRelativeTransform(HandXform);
+
+    bDetachedInPlace = true;
+    return true;
+}
+
+void UGrabComponent::EndGrabInPlace()
+{
+    bDetachedInPlace = false;
 }
 
 void UGrabComponent::TeardownPhysicsHandle()
