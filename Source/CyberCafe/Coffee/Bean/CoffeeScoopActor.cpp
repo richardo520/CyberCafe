@@ -50,7 +50,7 @@ ACoffeeScoopActor::ACoffeeScoopActor()
     UprightDot                = 0.5f;
     PourDot                   = -0.1f;
     ScoopDepthBelowLidCm      = 0.f;
-    PourAlignRadiusCm         = 6.f;
+    PourAlignRadiusCm         = 15.f;  // 放宽到 15cm，VR 里对准漏斗中心更容易
 
     ScoopLoadGrams          = 0.f;
     ScoopBeanInitialScale   = FVector::OneVector;

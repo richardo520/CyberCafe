@@ -145,6 +145,23 @@ public:
     int32 BeanPileStepCount;
 
     /**
+     * 豆堆最小档位显示比例（0~1）。用于抬高"最低一档"的视觉高度，让 1/3、2/3、3/3
+     * 三档之间的差距不至于看不出来。
+     * 例：Step=3、MinDisplay=0.4 → 三档分别显示为 0.4 / 0.7 / 1.0 (线性映射到 [0.4, 1.0])。
+     * 0 时保持原比例（1/3、2/3、3/3）。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float BeanPileMinDisplayRatio;
+
+    /**
+     * 豆堆整体高度放大倍数。作用在最终 DisplayRatio 上（即 InitialScale.Z × DisplayRatio × Multiplier）。
+     * 蓝图里 BeanPileMesh 的 Scale.Z 已经调到"看得见"的基准后，如果还觉得整体太矮，用这个
+     * 参数放大一档（不用回蓝图重调 Scale）。默认 1.0。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grinder|Grind", meta = (ClampMin = "0.0"))
+    float BeanPileHeightMultiplier;
+
+    /**
      * 顶仓被磨空之后，把手空转时是否停止播放研磨音效。
      * true（默认）：豆磨完 → 继续摇 → 无声音（现实中磨完了确实是嘎嘎响很轻但可视为无效工作）
      * false：只要转就一直响（老式研磨器手感）

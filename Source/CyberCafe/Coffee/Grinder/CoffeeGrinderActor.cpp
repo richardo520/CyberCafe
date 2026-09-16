@@ -85,6 +85,8 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     GramsPerDegree    = 15.f / (6.f * 360.f);   // ≈ 0.00694
     GrindEfficiency   = 1.f;
     BeanPileStepCount = 3;             // 3 档（一勺一档）
+    BeanPileMinDisplayRatio = 0.4f;    // 最低一档至少 40% 高，与满档拉开可见差异
+    BeanPileHeightMultiplier = 1.f;    // 默认不额外放大（蓝图里 Scale.Z 已定基准）
     bSilentWhenEmpty  = true;          // 磨完后继续转把手 → 不出声
     CurrentBeanGrams  = 0.f;
     CurrentGroundGrams = 0.f;
@@ -388,6 +390,17 @@ void ACoffeeGrinderActor::UpdateBeanPileVisual()
         DisplayRatio = FMath::CeilToFloat(RawRatio * BeanPileStepCount) / static_cast<float>(BeanPileStepCount);
         DisplayRatio = FMath::Clamp(DisplayRatio, 0.f, 1.f);
     }
+
+    // 把 [0, 1] 的档位比例线性重映射到 [MinDisplay, 1]，抬高最低档使三档差异可见。
+    // 例：Step=3, Min=0.4 → 1/3 → 0.6、2/3 → 0.8、3/3 → 1.0
+    // 若 Min<=0 则保持原比例。
+    if (BeanPileMinDisplayRatio > 0.f && BeanPileMinDisplayRatio < 1.f)
+    {
+        DisplayRatio = FMath::Lerp(BeanPileMinDisplayRatio, 1.f, DisplayRatio);
+    }
+
+    // 整体高度放大倍数（蓝图不方便改时这里改）
+    DisplayRatio *= FMath::Max(BeanPileHeightMultiplier, 0.f);
 
     BeanPileMesh->SetVisibility(true, /*bPropagateToChildren=*/true);
     FVector NewScale = BeanPileInitialScale;
