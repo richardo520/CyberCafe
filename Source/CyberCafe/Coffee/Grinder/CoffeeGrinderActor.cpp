@@ -78,13 +78,13 @@ ACoffeeGrinderActor::ACoffeeGrinderActor()
     DrawerRef = nullptr;
 
     // ---- 豆 / 粉 默认参数 ----
-    // 顶仓 30g，分 6 档（每档 5g，刚好对应一个 5g 的小勺——一勺一档）；
-    // 每圈 360° × 0.01389 g/° ≈ 5g，6 圈 → 30g 磨完（每圈刚好掉一档）。
-    // 如果你想改成"2 圈掉一档、共 12 圈磨完"，把 GramsPerDegree 改成 0.00694 即可。
-    BeanCapacityGrams = 30.f;
-    GramsPerDegree    = 5.f / 360.f;   // ≈ 0.01389
+    // 顶仓 15g（3 勺 × 5g），分 3 档（一勺一档）；
+    // 6 圈 × 360° × GramsPerDegree = 15g → GramsPerDegree = 15/(6*360) ≈ 0.00694 g/°，
+    // 即 2 圈磨掉一档（6 圈磨完）。
+    BeanCapacityGrams = 15.f;
+    GramsPerDegree    = 15.f / (6.f * 360.f);   // ≈ 0.00694
     GrindEfficiency   = 1.f;
-    BeanPileStepCount = 6;             // 6 档（一勺一档 / 一圈一档）
+    BeanPileStepCount = 3;             // 3 档（一勺一档）
     bSilentWhenEmpty  = true;          // 磨完后继续转把手 → 不出声
     CurrentBeanGrams  = 0.f;
     CurrentGroundGrams = 0.f;
@@ -375,13 +375,13 @@ void ACoffeeGrinderActor::UpdateBeanPileVisual()
     // 无豆时直接隐藏，避免 Ratio=0 时缩成一层零厚度的飞盘
     if (RawRatio <= 0.001f)
     {
-        BeanPileMesh->SetVisibility(false);
+        BeanPileMesh->SetVisibility(false, /*bPropagateToChildren=*/true);
         return;
     }
 
     // 分档显示：豆堆高度向上取整到最近一档。
-    // 例：Step=6，Ratio=0.51 → SteppedRatio = ceil(0.51*6)/6 = 4/6 ≈ 0.667，展示四档高。
-    // 刚磨一点点（Ratio 略降）不会接发变矮，只有磨完一整档后才"跳"下一级。
+    // 例：Step=3，Ratio=0.34 → SteppedRatio = ceil(0.34*3)/3 = 2/3，展示中档高。
+    // 刚磨一点点（Ratio 略降）不会直接变矮，只有磨完一整档后才"跳"下一级。
     float DisplayRatio = RawRatio;
     if (BeanPileStepCount > 0)
     {
@@ -389,7 +389,7 @@ void ACoffeeGrinderActor::UpdateBeanPileVisual()
         DisplayRatio = FMath::Clamp(DisplayRatio, 0.f, 1.f);
     }
 
-    BeanPileMesh->SetVisibility(true);
+    BeanPileMesh->SetVisibility(true, /*bPropagateToChildren=*/true);
     FVector NewScale = BeanPileInitialScale;
     NewScale.Z = BeanPileInitialScale.Z * DisplayRatio;
     BeanPileMesh->SetRelativeScale3D(NewScale);
