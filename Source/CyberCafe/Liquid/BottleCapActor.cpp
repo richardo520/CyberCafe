@@ -32,6 +32,8 @@ ABottleCapActor::ABottleCapActor()
     GrabComp->GrabType = EGrabType::Custom;
     // 抓盖子优先于抓瓶身（避免玩家想抓盖子时抓到了瓶子）
     GrabComp->GrabPriority = 1;
+    // 瓶盖默认隐藏手部 Mesh，配合 bGrabInPlace 得到"手消失、盖子留在原地由手远程控制"的观感
+    GrabComp->bHideHandWhileHeld = true;
     // 不在构造函数里禁远程抓取；盖在瓶口时由 AttachToBottle 关闭，拧下后（DetachFromBottle）恢复。
 
     // 默认参数
@@ -45,7 +47,8 @@ ABottleCapActor::ABottleCapActor()
     OwnerBottle              = nullptr;
     CapSocketName            = NAME_None;
     bGrabbedButNotDetached   = false;
-    bGrabInPlace             = false;
+    // 默认启用原地控制：拔盖时盖子不吸附到手柄，而是在原地由手柄的位移/旋转增量驱动
+    bGrabInPlace             = true;
     bDetachedInPlace         = false;
     GrabbedRelativeToHand    = FTransform::Identity;
 }
