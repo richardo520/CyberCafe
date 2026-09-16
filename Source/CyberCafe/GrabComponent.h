@@ -309,6 +309,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
     bool bCaptureHand;
 
+    /**
+     * 抓握期间是否隐藏手部 SkeletalMesh。
+     * 开启后：TryCaptureHandMesh 里在链接 AnimLayer / Attach 到 HandSocket 之余，
+     * 额外调用 HandMesh->SetVisibility(false)，让玩家只看到被抓的物体；
+     * TryReleaseHandMesh 里恢复 SetVisibility(true)。
+     * 适用场景：物体本身就该"停在手柄位置"或需要精确对准（拧盖、旋钮等），
+     * 显示的手 Mesh 反而会遮挡物体、干扰观感。
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Hand")
+    bool bHideHandWhileHeld = false;
+
     /** 抓取时播放的触觉效果 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Haptics")
     TObjectPtr<UHapticFeedbackEffect_Base> OnGrabHapticEffect;

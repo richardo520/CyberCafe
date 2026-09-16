@@ -428,6 +428,12 @@ bool UGrabComponent::TryCaptureHandMesh()
         HandMesh->AttachToComponent(GetAttachParent(), FAttachmentTransformRules::SnapToTargetIncludingScale, *AttachHandSocket);
     }
 
+    // 可选：抓取期间隐藏手部 Mesh（对拧盖、旋钮等精确操作物体特别有用）
+    if (bHideHandWhileHeld)
+    {
+        HandMesh->SetVisibility(false, /*bPropagateToChildren=*/true);
+    }
+
     return true;
 }
 
@@ -444,7 +450,13 @@ void UGrabComponent::TryReleaseHandMesh()
         {
             HandMesh->AttachToComponent(MotionControllerRef, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
             HandMesh->SetRelativeTransform(CachedHandLocationTransform);
-        }   
+        }
+
+        // 恢复可见性（与 bHideHandWhileHeld 配对）
+        if (bHideHandWhileHeld)
+        {
+            HandMesh->SetVisibility(true, /*bPropagateToChildren=*/true);
+        }
     }
 }
 

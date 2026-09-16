@@ -37,6 +37,9 @@ ABeanJarLidActor::ABeanJarLidActor()
     OwnerJar               = nullptr;
     LidSocketName          = NAME_None;
     bGrabbedButNotDetached = false;
+    bGrabInPlace           = false;
+    bDetachedInPlace       = false;
+    GrabbedRelativeToHand  = FTransform::Identity;
 }
 
 void ABeanJarLidActor::BeginPlay()
@@ -62,6 +65,17 @@ void ABeanJarLidActor::BeginPlay()
 void ABeanJarLidActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+
+    // 原地控制：盖已拔下但未 Attach 到手柄 → 每帧把手柄位姿应用到盖子上
+    if (bDetachedInPlace && !bIsAttached && GrabComp && GrabComp->IsHeld())
+    {
+        if (UMotionControllerComponent* HandMC = GrabComp->GetHoldingController())
+        {
+            const FTransform HandXform(HandMC->GetComponentQuat(), HandMC->GetComponentLocation());
+            const FTransform TargetWorld = GrabbedRelativeToHand * HandXform;
+            SetActorLocationAndRotation(TargetWorld.GetLocation(), TargetWorld.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+        }
+    }
 
     // 只有"抓住但还没拔下"状态需要 Tick 里做距离检测
     if (!bGrabbedButNotDetached || !GrabComp || !OwnerJar)
@@ -171,15 +185,31 @@ void ABeanJarLidActor::DetachFromJar(UMotionControllerComponent* MotionControlle
         return;
     }
 
-    FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
-    AttachRule.bWeldSimulatedBodies = true;
-    AttachToComponent(MotionController, AttachRule);
+    // 先从罐上脱离（保持世界位姿）
+    DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
     if (LidMesh)
     {
         LidMesh->SetSimulatePhysics(false);
         // 拔下后恢复正常碰撞档案，可以撞桌面/地板
         LidMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+    }
+
+    if (bGrabInPlace)
+    {
+        // 原地控制：不 Attach 到手柄，记住"盖相对手"当前变换，Tick 里驱动盖子位姿
+        const FTransform HandXform(MotionController->GetComponentQuat(), MotionController->GetComponentLocation());
+        const FTransform LidXform  = GetActorTransform();
+        GrabbedRelativeToHand = LidXform.GetRelativeTransform(HandXform);
+        bDetachedInPlace = true;
+    }
+    else
+    {
+        // 默认：Attach 到手柄
+        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
+        AttachRule.bWeldSimulatedBodies = true;
+        AttachToComponent(MotionController, AttachRule);
+        bDetachedInPlace = false;
     }
 
     bIsAttached            = false;
@@ -227,13 +257,30 @@ void ABeanJarLidActor::HandleGrabbed()
     }
     else
     {
-        // 已经不在罐口——抓住就直接 Attach 到手（走一遍标准 Snap 逻辑）
-        FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
-        AttachRule.bWeldSimulatedBodies = true;
-        AttachToComponent(MC, AttachRule);
-        if (LidMesh)
+        // 已经不在罐口——根据模式选 Attach 到手 或 原地控制
+        if (bGrabInPlace)
         {
-            LidMesh->SetSimulatePhysics(false);
+            DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+            if (LidMesh)
+            {
+                LidMesh->SetSimulatePhysics(false);
+            }
+            const FTransform HandXform(MC->GetComponentQuat(), MC->GetComponentLocation());
+            const FTransform LidXform  = GetActorTransform();
+            GrabbedRelativeToHand = LidXform.GetRelativeTransform(HandXform);
+            bDetachedInPlace = true;
+        }
+        else
+        {
+            // 直接 Attach 到手
+            FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
+            AttachRule.bWeldSimulatedBodies = true;
+            AttachToComponent(MC, AttachRule);
+            if (LidMesh)
+            {
+                LidMesh->SetSimulatePhysics(false);
+            }
+            bDetachedInPlace = false;
         }
         bGrabbedButNotDetached = false;
     }
@@ -242,6 +289,8 @@ void ABeanJarLidActor::HandleGrabbed()
 void ABeanJarLidActor::HandleDropped()
 {
     bGrabbedButNotDetached = false;
+    // 松手后不再追随手柄，重置原地控制标志
+    bDetachedInPlace = false;
 
     if (!OwnerJar)
     {
