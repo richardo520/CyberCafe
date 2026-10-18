@@ -28,7 +28,15 @@ public class CyberCafe : ModuleRules
 		// 避免因非Public/Private目录结构导致的include定位失败
 		PublicIncludePaths.AddRange(new string[] {
 			ModuleDirectory,
-			System.IO.Path.Combine(ModuleDirectory, "Character")
+			System.IO.Path.Combine(ModuleDirectory, "Character"),
+			System.IO.Path.Combine(ModuleDirectory, "Liquid"),
+			System.IO.Path.Combine(ModuleDirectory, "UI"),
+			System.IO.Path.Combine(ModuleDirectory, "Coffee"),
+			System.IO.Path.Combine(ModuleDirectory, "Coffee", "Grinder"),
+			System.IO.Path.Combine(ModuleDirectory, "Coffee", "Bean"),
+			System.IO.Path.Combine(ModuleDirectory, "Tutorial"),
+			System.IO.Path.Combine(ModuleDirectory, "Tutorial", "Steps"),
+			System.IO.Path.Combine(ModuleDirectory, "Tutorial", "UI")
 		});
 
 		// Uncomment if you are using Slate UI
