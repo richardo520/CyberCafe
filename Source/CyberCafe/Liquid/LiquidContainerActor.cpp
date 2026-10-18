@@ -19,6 +19,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
+#include "Tutorial/CyberCafeEventSubsystem.h"
 
 ALiquidContainerActor::ALiquidContainerActor()
 {
@@ -978,7 +979,17 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
         //    量的具体值可通过 PourRatePerSecond 换算：每颗粒子 ~ PourRatePerSecond / 60
         //    但因回调频率与粒子数难以预测，暂用简单常量兜底。
         const float MLPerParticle = FMath::Max(PourRatePerSecond * 0.016f / FMath::Max(Data.Num(), 1), 0.05f);
-        Best->AddLiquid(MLPerParticle, LiquidColor);
+        const float AcceptedML = Best->AddLiquid(MLPerParticle, LiquidColor);
+
+        // 向全局事件总线广播：教学 Director 用以识别"从源容器 → 目标容器"的注液行为。
+        // 注意：每颗落点粒子都会触发一次。教学步骤在订阅侧做累计即可。
+        if (AcceptedML > KINDA_SMALL_NUMBER)
+        {
+            if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
+            {
+                Sys->OnLiquidPoured.Broadcast(this, Best, AcceptedML);
+            }
+        }
     }
 
 #if ENABLE_DRAW_DEBUG

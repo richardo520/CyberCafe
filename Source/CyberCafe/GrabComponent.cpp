@@ -10,6 +10,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Animation/AnimInstance.h"
+#include "Tutorial/CyberCafeEventSubsystem.h"
 
 UGrabComponent::UGrabComponent()
 {
@@ -176,6 +177,14 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
                 }
             }
             OnGrabbed.Broadcast();
+
+            // 向全局事件总线广播：便于教学 Director / 成就 / 统计等上层模块
+            // 统一订阅
+            if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
+            {
+                Sys->OnAnyObjectGrabbed.Broadcast(GetOwner(), GetHeldByHand());
+            }
+
             return true;
         }
     }
@@ -359,7 +368,7 @@ bool UGrabComponent::TryRelease()
 // 拉拽（Pull）
 //===========================================================================
 
-bool UGrabComponent::TryPull()
+bool UGrabComponent::TryPull(EControllerHand ByHand)
 {
     // 若本组件配置为"不允许远程抓取"，则直接拒绝拉拽。
     // 用于 Spawn 出来的子部件（瓶盖、研磨器把手/抽屉等），避免被远程召唤到手上导致异常表现。
@@ -383,6 +392,14 @@ bool UGrabComponent::TryPull()
 
     bIsPulled = true;
     SetPrimitiveCompPhysics(false);
+
+    // 向全局事件总线广播：教学系统用以识别
+    // "远处抓取"交互
+    if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
+    {
+        Sys->OnAnyObjectPulled.Broadcast(GetOwner(), ByHand);
+    }
+
     return true;
 }
 

@@ -360,7 +360,7 @@ void AVRPawn::OnGrabLeftPressed(const FInputActionValue& Value)
     {
         if (UGrabComponent* GrabComponent = GetGrabComponentUnderAim(MotionControllerLeftAim,TargetGrabComponentLeft))
         {
-            if (GrabComponent->TryPull())
+            if (GrabComponent->TryPull(EControllerHand::Left))
             {
                 PulledGrabComponentLeft = GrabComponent;
             }
@@ -395,7 +395,7 @@ void AVRPawn::OnGrabRightPressed(const FInputActionValue& Value)
     {
         if (UGrabComponent* GrabComponent = GetGrabComponentUnderAim(MotionControllerRightAim,TargetGrabComponentRight))
         {
-            if (GrabComponent->TryPull())
+            if (GrabComponent->TryPull(EControllerHand::Right))
             {
                 PulledGrabComponentRight = GrabComponent;
             }

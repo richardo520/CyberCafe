@@ -123,11 +123,13 @@ public:
 
     /**
      * 尝试拉拽本组件所属的物体（如抽剑、拉杆等）。
-     * @param MotionController 发起拉拽的手柄组件
+     * @param ByHand 发起拉拽的手（Left / Right / AnyHand）。
+     *               仅用于向上层事件（例如全局事件总线）告知"是谁触发的拉拽"。
+     *               默认值 AnyHand 兼容既有的无参调用（蓝图 / 其他 C++）。
      * @return 是否成功进入拉拽状态
      */
     UFUNCTION(BlueprintCallable, Category = "Grab|Pull")
-    bool TryPull();
+    bool TryPull(EControllerHand ByHand = EControllerHand::AnyHand);
 
     /** 结束拉拽 */
     UFUNCTION(BlueprintCallable, Category = "Grab|Pull")
