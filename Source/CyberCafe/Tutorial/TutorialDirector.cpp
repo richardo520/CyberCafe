@@ -20,7 +20,21 @@ void ATutorialDirector::BeginPlay()
 
     if (bAutoStart)
     {
-        StartTutorial();
+        // 延迟到下一帧再启动：
+        // UE 中同一关卡里多个 Actor 的 BeginPlay 执行顺序不保证，
+        // 如果 Director.BeginPlay 比 NPC.BeginPlay 先跑，这时 NPC 的 WidgetComponent
+        // 还没完成 UserWidget 实例化，ShowHint 会调不到 UI。
+        // 用一个 0 秒 Timer 推到下一帧，保证所有 Actor 都 BeginPlay 完。
+        if (UWorld* World = GetWorld())
+        {
+            FTimerHandle StartHandle;
+            World->GetTimerManager().SetTimer(StartHandle, this,
+                &ATutorialDirector::StartTutorial, 0.001f, false);
+        }
+        else
+        {
+            StartTutorial();
+        }
     }
 }
 

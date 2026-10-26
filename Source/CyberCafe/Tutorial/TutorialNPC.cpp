@@ -60,7 +60,15 @@ void ATutorialNPC::BeginPlay()
     if (HintBubble && HintWidgetClass && HintBubble->GetWidgetClass() != HintWidgetClass)
     {
         HintBubble->SetWidgetClass(HintWidgetClass);
+    }
+
+    // 无论上面是否替换 WidgetClass，都主动调一次 InitWidget 确保 UserWidget 实例存在
+    // （避免 Director 比我们先 BeginPlay 并调 ShowHint 时 UserWidget 还没造出来）
+    if (HintBubble)
+    {
         HintBubble->InitWidget();
+        // 初始隐藏：等 ShowHint 时再显示
+        HintBubble->SetVisibility(false);
     }
 
     // ---- 诊断日志：确认 HintBubble 配置是否就绪 ----
