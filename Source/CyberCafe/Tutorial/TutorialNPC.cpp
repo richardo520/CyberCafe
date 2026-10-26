@@ -62,10 +62,22 @@ void ATutorialNPC::BeginPlay()
         HintBubble->SetWidgetClass(HintWidgetClass);
         HintBubble->InitWidget();
     }
+
+    // ---- 诊断日志：确认 HintBubble 配置是否就绪 ----
+    UE_LOG(LogTemp, Warning, TEXT("[TutorialNPC] BeginPlay: HintBubble=%s, WidgetClass=%s, UserWidget=%s, HintWidgetClass=%s"),
+        HintBubble ? TEXT("OK") : TEXT("NULL"),
+        (HintBubble && HintBubble->GetWidgetClass()) ? *HintBubble->GetWidgetClass()->GetName() : TEXT("NONE"),
+        (HintBubble && HintBubble->GetUserWidgetObject()) ? *HintBubble->GetUserWidgetObject()->GetName() : TEXT("NONE"),
+        HintWidgetClass ? *HintWidgetClass->GetName() : TEXT("NONE"));
 }
 
 void ATutorialNPC::ShowHint(const FText& InText)
 {
+    UE_LOG(LogTemp, Warning, TEXT("[TutorialNPC] ShowHint called: Text='%s', HintBubble=%s, UserWidget=%s"),
+        *InText.ToString(),
+        HintBubble ? TEXT("OK") : TEXT("NULL"),
+        (HintBubble && HintBubble->GetUserWidgetObject()) ? *HintBubble->GetUserWidgetObject()->GetName() : TEXT("NONE"));
+
     if (!HintBubble)
     {
         return;
@@ -76,6 +88,10 @@ void ATutorialNPC::ShowHint(const FText& InText)
     if (UTutorialHintWidget* Widget = GetHintWidget())
     {
         Widget->SetHintText(InText);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("[TutorialNPC] ShowHint: UserWidget is null! Did you set HintBubble.WidgetClass in BP_TutorialNPC?"));
     }
 }
 
