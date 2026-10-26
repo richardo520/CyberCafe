@@ -6,25 +6,28 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "GameFramework/CharacterMovementComponent.h"
 
 ATutorialNPC::ATutorialNPC()
 {
     // 本 NPC 不需要帧更新；未来做眼神追踪再按需打开
     PrimaryActorTick.bCanEverTick = false;
 
-    // CapsuleComponent 不参与碰撞：避免挡住 VR 玩家 / 被物体撞飞
+    // Capsule 碰撞策略：
+    //   - 对 WorldStatic/WorldDynamic：Block，保证 Character 能站在地面上（不穿地）
+    //   - 对 Pawn/PhysicsBody：Ignore，避免挡住 VR 玩家 / 被玩家抓的物体撞飞
+    // 不能用 NoCollision —— 那样 FindFloor 失败，Character 会直接自由落体穿透地板。
     if (UCapsuleComponent* Capsule = GetCapsuleComponent())
     {
-        Capsule->SetCollisionProfileName(TEXT("NoCollision"));
+        Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);  // 只查询，不参与物理模拟
+        Capsule->SetCollisionObjectType(ECC_Pawn);
+        Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+        Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+        Capsule->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
     }
 
-    // 关闭 CharacterMovement 的物理计算：此 NPC 当前是"摆件"，省性能
-    if (UCharacterMovementComponent* Movement = GetCharacterMovement())
-    {
-        Movement->SetComponentTickEnabled(false);
-        Movement->MovementMode = MOVE_None;
-    }
+    // CharacterMovement 保持默认 Walking：这样引擎会每帧 FindFloor 把 Capsule 贴到地面上。
+    // 不要把 MovementMode 设为 MOVE_None —— 那样连"站在地上"的落地校正也没了。
+    // 想让 NPC 完全不动，只需 AIController 不发移动指令即可（我们本来就不发）。
 
     // Mesh 默认关闭碰撞：避免身体挡住 VR 玩家视线 / 物体
     if (USkeletalMeshComponent* MeshComp = GetMesh())
