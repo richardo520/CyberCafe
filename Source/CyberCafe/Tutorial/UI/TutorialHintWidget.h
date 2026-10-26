@@ -6,6 +6,8 @@
 #include "Blueprint/UserWidget.h"
 #include "TutorialHintWidget.generated.h"
 
+class UTextBlock;
+
 /**
  * UTutorialHintWidget
  *
@@ -35,8 +37,17 @@ public:
 
 protected:
     /**
-     * 蓝图可实现事件：收到新文本时的 UI 更新逻辑。
-     * 典型实现：Set Text of TextBlock_Hint = NewText。
+     * 自动绑定 WBP 里命名为 Text_Hint 的 TextBlock。
+     * optional=true 表示蓝图里没有这个控件也不会编译失败，但缺失时 C++ 会用日志告警。
+     * 推荐做法：直接在 WBP_TutorialHint 里放一个 TextBlock 并命名为 Text_Hint。
+     */
+    UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional), Transient)
+    TObjectPtr<UTextBlock> Text_Hint;
+
+    /**
+     * 蓝图可实现事件：收到新文本时的 UI 更新逻辑（可选）。
+     * 如果绑定了 Text_Hint，C++ 会自动写字；本事件主要用于额外的美术扩展
+     *（例如播放"冒出"动画、音效等）。
      */
     UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|Hint",
         meta = (DisplayName = "On Set Hint Text"))
