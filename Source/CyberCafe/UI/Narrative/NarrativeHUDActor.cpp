@@ -42,58 +42,63 @@ void ANarrativeHUDActor::BeginPlay()
         // 确保 UserWidget 实例已经创建
         PanelWidgetComp->InitWidget();
     }
+
+    // 缓存关卡摆放时的 Yaw / Roll，之后 Tick 里只会动 Pitch
+    const FRotator InitRot = GetActorRotation();
+    InitialYaw  = InitRot.Yaw;
+    InitialRoll = InitRot.Roll;
 }
 
 void ANarrativeHUDActor::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
-    FVector TargetLoc;
-    FRotator TargetRot;
-    ComputeFollowTarget(TargetLoc, TargetRot);
-
-    if (!bFirstTickSnapped)
+    // 位置不动，只做朝向偏转
+    if (!bFaceCamera)
     {
-        // 首帧直接吸附，避免看到面板从原点飞过来
-        SetActorLocationAndRotation(TargetLoc, TargetRot);
-        bFirstTickSnapped = true;
         return;
     }
 
-    const FVector  NewLoc = FMath::VInterpTo(GetActorLocation(), TargetLoc, DeltaSeconds, LocationInterpSpeed);
-    const FRotator NewRot = FMath::RInterpTo(GetActorRotation(), TargetRot, DeltaSeconds, RotationInterpSpeed);
-    SetActorLocationAndRotation(NewLoc, NewRot);
+    const FRotator Target  = ComputeTargetRotation();
+    const FRotator Current = GetActorRotation();
+    const FRotator NewRot  = FMath::RInterpTo(Current, Target, DeltaSeconds, RotationInterpSpeed);
+    SetActorRotation(NewRot);
 }
 
-void ANarrativeHUDActor::ComputeFollowTarget(FVector& OutLocation, FRotator& OutRotation) const
+FRotator ANarrativeHUDActor::ComputeTargetRotation() const
 {
+    // 默认：保持关卡摆放的朝向（Pitch=0）
+    FRotator Target(0.f, InitialYaw, InitialRoll);
+
     APlayerCameraManager* CamMgr = UGameplayStatics::GetPlayerCameraManager(this, 0);
     if (!CamMgr)
     {
-        OutLocation = GetActorLocation();
-        OutRotation = GetActorRotation();
-        return;
+        return Target;
     }
 
-    const FVector  CamLoc = CamMgr->GetCameraLocation();
-    const FRotator CamRot = CamMgr->GetCameraRotation();
+    const FVector CamLoc    = CamMgr->GetCameraLocation();
+    const FVector SelfLoc   = GetActorLocation();
 
-    // 跟随基准朝向：根据策略决定是否忽略 Pitch
-    FRotator BaseRot = CamRot;
-    if (bIgnoreCameraPitch)
-    {
-        BaseRot.Pitch = 0.f;
-        BaseRot.Roll  = 0.f;
-    }
+    // LookAt 得到的 Pitch 就是"面板看向相机"所需的俯仰
+    // 由于 WidgetComponent 的"正面"是 +X，所以让 Actor 的 +X 指向相机即可
+    // 但 Yaw 要锁死在初始值（不扭过去追玩家），所以这里只取 Pitch
+    const FRotator LookAtRot = UKismetMathLibrary::FindLookAtRotation(SelfLoc, CamLoc);
 
-    // 身前 FollowDistance 米处
-    const FVector Forward = BaseRot.Vector();
-    OutLocation = CamLoc + Forward * FollowDistance + FVector(0.f, 0.f, VerticalOffset);
+    // 把 LookAt 的 Pitch 投影到"初始 Yaw 朝向"下的 Pitch：
+    //   玩家在面板正前方上/下 → 需要正常 Pitch
+    //   玩家在面板侧后方（Yaw 偏离大）→ Pitch 没有物理意义，这时应回归 0
+    // 做法：计算 LookAt.Yaw 与 InitialYaw 的夹角，用它的 cos 作为 Pitch 的缩放系数。
+    //   夹角 0°（玩家在正前方）→ cos=1，完整生效
+    //   夹角 90°（玩家在正侧方）→ cos=0，Pitch 归零
+    //   夹角 >90°（玩家在身后）→ cos<0，Pitch 反向，这里直接 Clamp 到 0 更安全
+    const float YawDeltaDeg = FMath::FindDeltaAngleDegrees(InitialYaw, LookAtRot.Yaw);
+    const float Weight = FMath::Max(FMath::Cos(FMath::DegreesToRadians(YawDeltaDeg)), 0.f);
 
-    // 面板法线应指向摄像机 → 面板"正面"冲向玩家
-    // 用 LookAt(From=面板, To=相机)，再在 Yaw 上 +180：
-    // WidgetComponent 的"正面"是 +X 方向，所以直接用 LookAt 即可。
-    OutRotation = UKismetMathLibrary::FindLookAtRotation(OutLocation, CamLoc);
+    float Pitch = LookAtRot.Pitch * Weight;
+    Pitch = FMath::Clamp(Pitch, -MaxPitchDegrees, MaxPitchDegrees);
+
+    Target.Pitch = Pitch;
+    return Target;
 }
 
 void ANarrativeHUDActor::ShowPanel()

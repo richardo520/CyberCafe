@@ -5,6 +5,7 @@
 #include "UI/Narrative/NarrativeWidget.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Kismet/GameplayStatics.h"
 
 void UNarrativeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -42,16 +43,42 @@ void UNarrativeSubsystem::EnsureHUDSpawned()
     {
         return;
     }
-    if (!HUDWidgetClass)
-    {
-        UE_LOG(LogTemp, Warning,
-            TEXT("[NarrativeSubsystem] HUDWidgetClass is not set. Call SetHUDWidgetClass(WBP_NarrativeHUD) first."));
-        return;
-    }
 
     UWorld* World = GetWorld();
     if (!World)
     {
+        return;
+    }
+
+    // 1) 优先复用关卡里玩家手工摆放的实例（可以直接拖进场景，摆到桌子上方）
+    {
+        TArray<AActor*> Existing;
+        UGameplayStatics::GetAllActorsOfClass(World, ANarrativeHUDActor::StaticClass(), Existing);
+        if (Existing.Num() > 0)
+        {
+            if (ANarrativeHUDActor* FromLevel = Cast<ANarrativeHUDActor>(Existing[0]))
+            {
+                // 玩家在关卡里摆的实例通常已经通过蓝图配好了 WidgetClass；
+                // 如果 Subsystem 又被显式注入过 WidgetClass，就用注入的覆盖
+                if (HUDWidgetClass)
+                {
+                    FromLevel->SetWidgetClass(HUDWidgetClass);
+                }
+                HUDActor = FromLevel;
+                UE_LOG(LogTemp, Log,
+                    TEXT("[NarrativeSubsystem] Reusing existing NarrativeHUDActor from level: %s"),
+                    *FromLevel->GetName());
+                return;
+            }
+        }
+    }
+
+    // 2) 关卡里没有现成实例，才走 Spawn 兜底
+    if (!HUDWidgetClass)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("[NarrativeSubsystem] No NarrativeHUDActor in level and HUDWidgetClass is not set. ")
+            TEXT("Place a BP_NarrativeHUD into the level, or call SetHUDWidgetClass(WBP_NarrativeHUD)."));
         return;
     }
 

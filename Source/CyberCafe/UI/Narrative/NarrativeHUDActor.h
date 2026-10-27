@@ -12,15 +12,20 @@ class UNarrativeWidget;
 /**
  * ANarrativeHUDActor
  *
- * 玩家身前的"叙事面板"宿主 Actor。
+ * 场景中的"叙事告示牌"宿主 Actor。
  *
  * 工作方式：
  *   - 持有一个 World Space 的 UWidgetComponent，Widget 类是 UNarrativeWidget 的蓝图子类
- *   - 每帧跟随玩家摄像机：位置贴到相机前方 FollowDistance，水平转身跟你，俯仰保持水平
- *     （避免抬头 / 低头时面板跟着飞）
+ *   - 位置：**完全由关卡中的 Actor Transform 决定**（可以直接拖进关卡，摆到桌子上方）
+ *   - 朝向：
+ *       * Yaw / Roll 保持关卡中摆放时的朝向（不会扭过来追玩家）
+ *       * Pitch 根据玩家摄像机位置做平滑偏转（玩家坐下 → 面板低头，站起来 → 面板正向）
  *   - 通过 GetNarrativeWidget() 把 UI 暴露给 NarrativeSubsystem 操作
  *
- * 一般不要直接创建该 Actor，而是通过 UNarrativeSubsystem 的 API。
+ * 使用方式：
+ *   1) 在关卡中直接放置一个 BP_NarrativeHUD（基于本类的蓝图），放到合适位置
+ *   2) UNarrativeSubsystem 会自动发现并复用场景里现有的实例
+ *   3) 没有放置时，Subsystem 会在原点 Spawn 一个（兜底，不建议依赖）
  */
 UCLASS()
 class CYBERCAFE_API ANarrativeHUDActor : public AActor
@@ -49,28 +54,19 @@ protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Narrative|HUD")
     TObjectPtr<UWidgetComponent> PanelWidgetComp;
 
-    /** 跟随玩家摄像机前方的距离（厘米）。默认 200 = 2m */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD",
-        meta = (ClampMin = "50.0", ClampMax = "500.0"))
-    float FollowDistance = 200.f;
-
-    /** 相对视线中心的垂直偏移（厘米），负值 = 面板位于视线下方 */
+    /** 是否让面板朝向玩家（只偏 Pitch，Yaw 固定）。关闭则纯静态朝向 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD")
-    float VerticalOffset = -30.f;
+    bool bFaceCamera = true;
 
-    /** 位置平滑插值速率（越大越贴紧） */
+    /** Pitch 偏转最大角度（度），限制面板不要翘得太夸张 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD",
+        meta = (ClampMin = "0.0", ClampMax = "89.0"))
+    float MaxPitchDegrees = 60.f;
+
+    /** 旋转平滑插值速率（越大越贴紧玩家视角，越小越慵懒） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD",
         meta = (ClampMin = "0.0"))
-    float LocationInterpSpeed = 8.f;
-
-    /** 旋转平滑插值速率 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD",
-        meta = (ClampMin = "0.0"))
-    float RotationInterpSpeed = 8.f;
-
-    /** 跟随策略：true 则忽略摄像机俯仰（Pitch），面板保持水平 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD")
-    bool bIgnoreCameraPitch = true;
+    float RotationInterpSpeed = 4.f;
 
     /** 面板宽高（像素），决定 WidgetComponent 的 DrawSize */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD")
@@ -79,12 +75,13 @@ protected:
     /** 面板在世界里的物理尺寸比例（1 = 原尺寸，Scale 面板到合适大小） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Narrative|HUD",
         meta = (ClampMin = "0.01"))
-    float WorldScale = 0.3f;
+    float WorldScale = 0.2f;
 
 private:
-    /** 计算目标位置 + 旋转 */
-    void ComputeFollowTarget(FVector& OutLocation, FRotator& OutRotation) const;
+    /** 根据玩家摄像机计算目标 Pitch（Yaw / Roll 用关卡初始值） */
+    FRotator ComputeTargetRotation() const;
 
-    /** 第一帧用于避免插值从原点开始 */
-    bool bFirstTickSnapped = false;
+    /** 关卡中摆放时的初始 Yaw / Roll（BeginPlay 缓存，Pitch 由玩家视角动态计算） */
+    float InitialYaw = 0.f;
+    float InitialRoll = 0.f;
 };
