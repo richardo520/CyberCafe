@@ -3,6 +3,7 @@
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
+#include "UI/Narrative/NarrativeSubsystem.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 
@@ -18,13 +19,28 @@ void ATutorialDirector::BeginPlay()
 {
     Super::BeginPlay();
 
+    // 把 Widget 蓝图类注入 NarrativeSubsystem，这样 Subsystem 首次 ShowText 时能 Spawn HUD
+    if (UWorld* World = GetWorld())
+    {
+        if (UNarrativeSubsystem* Narrative = World->GetSubsystem<UNarrativeSubsystem>())
+        {
+            if (NarrativeHUDWidgetClass)
+            {
+                Narrative->SetHUDWidgetClass(NarrativeHUDWidgetClass);
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning,
+                    TEXT("[TutorialDirector] NarrativeHUDWidgetClass is not set; narrative HUD will not display"));
+            }
+        }
+    }
+
     if (bAutoStart)
     {
         // 延迟到下一帧再启动：
-        // UE 中同一关卡里多个 Actor 的 BeginPlay 执行顺序不保证，
-        // 如果 Director.BeginPlay 比 NPC.BeginPlay 先跑，这时 NPC 的 WidgetComponent
-        // 还没完成 UserWidget 实例化，ShowHint 会调不到 UI。
-        // 用一个 0 秒 Timer 推到下一帧，保证所有 Actor 都 BeginPlay 完。
+        // UE 中同一关卡里多个 Actor 的 BeginPlay 执行顺序不保证；
+        // 延到下一帧能确保 Subsystem、Widget 等都初始化完毕。
         if (UWorld* World = GetWorld())
         {
             FTimerHandle StartHandle;
@@ -40,12 +56,6 @@ void ATutorialDirector::BeginPlay()
 
 void ATutorialDirector::StartTutorial()
 {
-    // 容错：没有 NPC 也允许跑，只是不显示气泡；便于调试阶段只测 Step 判定
-    if (!NPCRef)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[TutorialDirector] NPCRef is null — hints will not be shown"));
-    }
-
     if (Steps.Num() == 0)
     {
         UE_LOG(LogTemp, Warning, TEXT("[TutorialDirector] Steps is empty, finishing immediately"));
@@ -100,11 +110,8 @@ void ATutorialDirector::StartStepAt(int32 Index)
     Step->OnStepCompleted.AddDynamic(this, &ATutorialDirector::HandleStepCompleted);
     Step->EnterStep(this);
 
-    // 让 NPC 显示提示文本
-    if (NPCRef)
-    {
-        NPCRef->ShowHint(Step->HintText);
-    }
+    // 通过 Narrative Subsystem 显示提示文本（身前文本框）
+    ShowNarrative(Step->HintText);
 }
 
 void ATutorialDirector::HandleStepCompleted(UTutorialStep* CompletedStep)
@@ -118,13 +125,10 @@ void ATutorialDirector::HandleStepCompleted(UTutorialStep* CompletedStep)
     // 立即解绑并显示"做得好"
     CompletedStep->OnStepCompleted.RemoveDynamic(this, &ATutorialDirector::HandleStepCompleted);
 
-    if (NPCRef)
+    // 若 Step 没配 CompletedText，就保留原 HintText 不动，避免文本框闪空
+    if (!CompletedStep->CompletedText.IsEmpty())
     {
-        // 若 Step 没配 CompletedText，就保留原 HintText，避免气泡闪空
-        if (!CompletedStep->CompletedText.IsEmpty())
-        {
-            NPCRef->ShowHint(CompletedStep->CompletedText);
-        }
+        ShowNarrative(CompletedStep->CompletedText);
     }
 
     // 延迟 CheerDuration 秒后真正退出当前 Step 并推进
@@ -172,17 +176,32 @@ void ATutorialDirector::FinishTutorial()
 {
     CurrentStepIndex = -1;
 
-    if (NPCRef)
+    if (!FinishedText.IsEmpty())
     {
-        if (!FinishedText.IsEmpty())
+        ShowNarrative(FinishedText, FinishedTextAutoHideSeconds);
+    }
+    else if (UWorld* World = GetWorld())
+    {
+        if (UNarrativeSubsystem* Narrative = World->GetSubsystem<UNarrativeSubsystem>())
         {
-            NPCRef->ShowHint(FinishedText);
-        }
-        else
-        {
-            NPCRef->HideHint();
+            Narrative->HideText();
         }
     }
 
     OnTutorialFinished.Broadcast();
+}
+
+void ATutorialDirector::ShowNarrative(const FText& InText, float AutoHideSeconds)
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+    UNarrativeSubsystem* Narrative = World->GetSubsystem<UNarrativeSubsystem>();
+    if (!Narrative)
+    {
+        return;
+    }
+    Narrative->ShowText(InText, AutoHideSeconds);
 }

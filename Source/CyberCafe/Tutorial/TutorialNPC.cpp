@@ -1,15 +1,14 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Tutorial/TutorialNPC.h"
-#include "Tutorial/UI/TutorialHintWidget.h"
-#include "Components/WidgetComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 
 ATutorialNPC::ATutorialNPC()
 {
-    // 本 NPC 不需要帧更新；未来做眼神追踪再按需打开
+    // 本 NPC 不需要每帧 Tick（无气泡 Billboard、无自定义运动）
+    // 后续真要加"眼神朝向玩家"时再在蓝图或子类里 bCanEverTick=true 并实现
     PrimaryActorTick.bCanEverTick = false;
 
     // Capsule 碰撞策略：
@@ -18,105 +17,22 @@ ATutorialNPC::ATutorialNPC()
     // 不能用 NoCollision —— 那样 FindFloor 失败，Character 会直接自由落体穿透地板。
     if (UCapsuleComponent* Capsule = GetCapsuleComponent())
     {
-        Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);  // 只查询，不参与物理模拟
+        Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
         Capsule->SetCollisionObjectType(ECC_Pawn);
         Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
         Capsule->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
         Capsule->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
     }
 
-    // CharacterMovement 保持默认 Walking：这样引擎会每帧 FindFloor 把 Capsule 贴到地面上。
-    // 不要把 MovementMode 设为 MOVE_None —— 那样连"站在地上"的落地校正也没了。
-    // 想让 NPC 完全不动，只需 AIController 不发移动指令即可（我们本来就不发）。
-
-    // Mesh 默认关闭碰撞：避免身体挡住 VR 玩家视线 / 物体
+    // Mesh 默认关碰撞：避免身体挡住 VR 玩家视线 / 物体
     if (USkeletalMeshComponent* MeshComp = GetMesh())
     {
         MeshComp->SetCollisionProfileName(TEXT("NoCollision"));
     }
 
-    // 头顶挂载点：蓝图子类里拖到骨骼头部上方
+    // 头部挂载点：挂在 CapsuleComponent 下（不受 Mesh 自身 Yaw=-90 旋转影响）
     HeadAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("HeadAnchor"));
-    HeadAnchor->SetupAttachment(GetMesh());
-    // 给个默认偏移：胶囊顶部大约 1.7m 高（避免蓝图里忘了调完全是 0）
-    HeadAnchor->SetRelativeLocation(FVector(0.f, 0.f, 180.f));
-
-    // 气泡 Widget：挂在 HeadAnchor 下
-    HintBubble = CreateDefaultSubobject<UWidgetComponent>(TEXT("HintBubble"));
-    HintBubble->SetupAttachment(HeadAnchor);
-    HintBubble->SetWidgetSpace(EWidgetSpace::World);
-    HintBubble->SetDrawSize(FVector2D(400.f, 100.f));
-    HintBubble->SetVisibility(false);  // 默认隐藏，等 ShowHint 时再开
-    // Pivot 居中偏下，让气泡尖端对准 HeadAnchor 位置
-    HintBubble->SetPivot(FVector2D(0.5f, 1.f));
-}
-
-void ATutorialNPC::BeginPlay()
-{
-    Super::BeginPlay();
-
-    // 允许蓝图里在 Details 面板选 HintWidgetClass；若选了，就动态替换 WidgetComponent 的 WidgetClass
-    // 这样蓝图子类也可以直接在 WidgetComponent 的 WidgetClass 里选，更灵活
-    if (HintBubble && HintWidgetClass && HintBubble->GetWidgetClass() != HintWidgetClass)
-    {
-        HintBubble->SetWidgetClass(HintWidgetClass);
-    }
-
-    // 无论上面是否替换 WidgetClass，都主动调一次 InitWidget 确保 UserWidget 实例存在
-    // （避免 Director 比我们先 BeginPlay 并调 ShowHint 时 UserWidget 还没造出来）
-    if (HintBubble)
-    {
-        HintBubble->InitWidget();
-        // 初始隐藏：等 ShowHint 时再显示
-        HintBubble->SetVisibility(false);
-    }
-
-    // ---- 诊断日志：确认 HintBubble 配置是否就绪 ----
-    UE_LOG(LogTemp, Warning, TEXT("[TutorialNPC] BeginPlay: HintBubble=%s, WidgetClass=%s, UserWidget=%s, HintWidgetClass=%s"),
-        HintBubble ? TEXT("OK") : TEXT("NULL"),
-        (HintBubble && HintBubble->GetWidgetClass()) ? *HintBubble->GetWidgetClass()->GetName() : TEXT("NONE"),
-        (HintBubble && HintBubble->GetUserWidgetObject()) ? *HintBubble->GetUserWidgetObject()->GetName() : TEXT("NONE"),
-        HintWidgetClass ? *HintWidgetClass->GetName() : TEXT("NONE"));
-}
-
-void ATutorialNPC::ShowHint(const FText& InText)
-{
-    UE_LOG(LogTemp, Warning, TEXT("[TutorialNPC] ShowHint called: Text='%s', HintBubble=%s, UserWidget=%s"),
-        *InText.ToString(),
-        HintBubble ? TEXT("OK") : TEXT("NULL"),
-        (HintBubble && HintBubble->GetUserWidgetObject()) ? *HintBubble->GetUserWidgetObject()->GetName() : TEXT("NONE"));
-
-    if (!HintBubble)
-    {
-        return;
-    }
-
-    HintBubble->SetVisibility(true);
-
-    if (UTutorialHintWidget* Widget = GetHintWidget())
-    {
-        Widget->SetHintText(InText);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("[TutorialNPC] ShowHint: UserWidget is null! Did you set HintBubble.WidgetClass in BP_TutorialNPC?"));
-    }
-}
-
-void ATutorialNPC::HideHint()
-{
-    if (!HintBubble)
-    {
-        return;
-    }
-    HintBubble->SetVisibility(false);
-}
-
-UTutorialHintWidget* ATutorialNPC::GetHintWidget() const
-{
-    if (!HintBubble)
-    {
-        return nullptr;
-    }
-    return Cast<UTutorialHintWidget>(HintBubble->GetUserWidgetObject());
+    HeadAnchor->SetupAttachment(GetCapsuleComponent());
+    // Capsule 中心在角色腰部，+100 大约到头顶上方一点；蓝图里可微调
+    HeadAnchor->SetRelativeLocation(FVector(0.f, 0.f, 100.f));
 }
