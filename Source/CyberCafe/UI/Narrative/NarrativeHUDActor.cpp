@@ -23,6 +23,10 @@ ANarrativeHUDActor::ANarrativeHUDActor()
     PanelWidgetComp->SetPivot(FVector2D(0.5f, 0.5f));
     // 双面显示：避免算错朝向时直接变透明
     PanelWidgetComp->SetTwoSided(true);
+    // ★ 关键：Widget 默认 BlendMode = Opaque，必须切成 Transparent，WBP 里的 Alpha 才会真正起作用
+    PanelWidgetComp->SetBlendMode(EWidgetBlendMode::Transparent);
+    // 让贴图的 Alpha 完整参与混合（部分 UE 版本默认 0 → 看起来还是不透明）
+    PanelWidgetComp->SetOpacityFromTexture(1.0f);
     // 禁掉碰撞，纯视觉对象
     PanelWidgetComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     PanelWidgetComp->SetGenerateOverlapEvents(false);
