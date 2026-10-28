@@ -31,12 +31,12 @@ public class CyberCafe : ModuleRules
 			System.IO.Path.Combine(ModuleDirectory, "Character"),
 			System.IO.Path.Combine(ModuleDirectory, "Liquid"),
 			System.IO.Path.Combine(ModuleDirectory, "UI"),
+			System.IO.Path.Combine(ModuleDirectory, "UI", "Narrative"),
 			System.IO.Path.Combine(ModuleDirectory, "Coffee"),
 			System.IO.Path.Combine(ModuleDirectory, "Coffee", "Grinder"),
 			System.IO.Path.Combine(ModuleDirectory, "Coffee", "Bean"),
 			System.IO.Path.Combine(ModuleDirectory, "Tutorial"),
-			System.IO.Path.Combine(ModuleDirectory, "Tutorial", "Steps"),
-			System.IO.Path.Combine(ModuleDirectory, "Tutorial", "UI")
+			System.IO.Path.Combine(ModuleDirectory, "Tutorial", "Steps")
 		});
 
 		// Uncomment if you are using Slate UI

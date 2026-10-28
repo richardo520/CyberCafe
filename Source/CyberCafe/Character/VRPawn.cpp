@@ -297,11 +297,6 @@ void AVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
     if (IA_SkipDialog)
     {
         EIC->BindAction(IA_SkipDialog, ETriggerEvent::Started, this, &AVRPawn::OnSkipDialogPressed);
-        UE_LOG(LogTemp, Warning, TEXT("[VRPawn] IA_SkipDialog bound OK."));
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("[VRPawn] IA_SkipDialog is NULL! Please assign it in BP_VRPawn -> VR|Input|Actions."));
     }
 }
 
@@ -477,10 +472,7 @@ void AVRPawn::OnSkipDialogPressed(const FInputActionValue& /*Value*/)
     // 单纯作为"跳过意图"信号广播到事件总线，
     // 由上层 UI 流程（教学叙事 Step 等）各自决定如何响应。
     // 本函数不做任何业务判断，保持 VRPawn 的"输入入口"职责单一。
-    UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this);
-    UE_LOG(LogTemp, Warning, TEXT("[VRPawn] OnSkipDialogPressed FIRED. Subsystem=%s"),
-        Sys ? TEXT("OK") : TEXT("NULL"));
-    if (Sys)
+    if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
     {
         Sys->OnPlayerSkipRequested.Broadcast();
     }

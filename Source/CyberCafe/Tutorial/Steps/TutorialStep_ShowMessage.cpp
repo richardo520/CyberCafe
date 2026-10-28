@@ -6,50 +6,6 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 
-namespace
-{
-    /**
-     * 把所有常见的 VR 手柄扳机 FKey 集中放到这里：
-     *  - Oculus/Meta Touch: OculusTouch_Left/Right_Trigger_Axis
-     *  - 通用 OpenXR / 其它厂商: MotionController_Left/Right_TriggerAxis
-     *  - 若将来接入 Vive/Index 的 FKey 名字不一样，这里再补即可。
-     * 查询扳机轴值时逐个询问，只要有一个超过阈值就算扣下。
-     */
-    static const FName GTriggerAxisKeyNames[] =
-    {
-        TEXT("OculusTouch_Left_Trigger_Axis"),
-        TEXT("OculusTouch_Right_Trigger_Axis"),
-        TEXT("MotionController_Left_TriggerAxis"),
-        TEXT("MotionController_Right_TriggerAxis"),
-    };
-
-    /** 查询玩家当前所有扳机轴中的最大值；拿不到 PC 时返回 0 */
-    static float GetMaxTriggerValue(const UObject* WorldContext)
-    {
-        APlayerController* PC = UGameplayStatics::GetPlayerController(WorldContext, 0);
-        if (!PC)
-        {
-            return 0.f;
-        }
-
-        float MaxVal = 0.f;
-        for (const FName& KeyName : GTriggerAxisKeyNames)
-        {
-            const FKey Key(KeyName);
-            if (!Key.IsValid())
-            {
-                continue;
-            }
-            const float V = PC->GetInputAnalogKeyState(Key);
-            if (V > MaxVal)
-            {
-                MaxVal = V;
-            }
-        }
-        return MaxVal;
-    }
-}
-
 void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
 {
     Super::EnterStep(InDirector);
@@ -71,7 +27,7 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
             &UTutorialStep_ShowMessage::HandleDurationElapsed, Duration, false);
     }
 
-    // 2) 订阅事件总线的"玩家请求跳过"事件（由 VRPawn 在扣扳机时广播）
+    // 2) 订阅事件总线的"玩家请求跳过"事件（由 VRPawn 在扣扶机时广播）
     //    先 RemoveDynamic 再 AddDynamic：防止同一个 Step 对象被重复 Enter（极端情况）
     //    导致订阅两份，收到广播时触发两次 MarkCompleted。
     if (bAllowSkipByInput)
@@ -80,11 +36,6 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
         {
             Sys->OnPlayerSkipRequested.RemoveDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
             Sys->OnPlayerSkipRequested.AddDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
-            UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Subscribed OnPlayerSkipRequested. Step=%s"), *GetName());
-        }
-        else
-        {
-            UE_LOG(LogTemp, Error, TEXT("[ShowMessage] EventSubsystem is NULL, cannot subscribe skip event."));
         }
     }
 
@@ -125,30 +76,25 @@ void UTutorialStep_ShowMessage::HandleDurationElapsed()
 
 void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
 {
-    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] HandlePlayerSkipRequested RECEIVED. Step=%s IsCompleted=%d"),
-        *GetName(), IsCompleted() ? 1 : 0);
-
     if (IsCompleted())
     {
         // 已完成的 Step 不该再响应（防御：Director 延迟 ExitStep 时的残留订阅）
         return;
     }
 
-    // 宽限期内不响应，防止上一个 Step 没松扳机的输入穿透
+    // 宽限期内不响应，防止上一个 Step 没松扶机的输入穿透
     if (const UWorld* World = GetWorld())
     {
         const float Elapsed = World->GetTimeSeconds() - EnterGameTime;
         if (Elapsed < InputGracePeriod)
         {
-            UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip BLOCKED by grace period (Elapsed=%.2fs < %.2fs)."),
-                Elapsed, InputGracePeriod);
             return;
         }
     }
 
     // 关键：立即解绑自己！
     // Director 在 Step 完成后会延迟 CheerDuration 秒再 ExitStep，这段窗口内本 Step
-    // 仍然在事件总线订阅列表里。如果玩家在这段窗口再扣一次扳机，就会触发已完成的
+    // 仍然在事件总线订阅列表里。如果玩家在这段窗口再扣一次扶机，就会触发已完成的
     // Step 又收到广播；更糟的是，当前这次广播还在遍历订阅列表，下一个 Step 若已
     // Enter（罕见但可能），也会被同一次广播触发。立即解绑可以从根上杜绝这些问题。
     if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
@@ -156,6 +102,5 @@ void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
         Sys->OnPlayerSkipRequested.RemoveDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip ACCEPTED, MarkCompleted. Step=%s"), *GetName());
     MarkCompleted();
 }

@@ -108,6 +108,20 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Director")
     TSubclassOf<UNarrativeWidget> NarrativeHUDWidgetClass;
 
+    //=====================================================================
+    // 跨 Step 共享状态
+    //=====================================================================
+
+    /**
+     * 最近一次成功"上菜"的杯子引用（由 UTutorialStep_WaitForServe 在
+     * 收到 OnDrinkServed 时写入；UTutorialStep_ConsumeServedDrink 用它
+     * 来执行"客人喝掉"的消失效果）。
+     *
+     * 这是跨 Step 的共享状态，放在 Director 层最合适。
+     */
+    UPROPERTY(Transient, BlueprintReadWrite, Category = "Tutorial|Director|State")
+    TObjectPtr<AActor> LastServedCup;
+
 protected:
     /** 启动指定索引的 Step */
     void StartStepAt(int32 Index);

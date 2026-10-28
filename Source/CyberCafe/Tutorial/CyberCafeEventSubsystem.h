@@ -8,6 +8,8 @@
 #include "CyberCafeEventSubsystem.generated.h"
 
 class AActor;
+class AServingSpotActor;
+class ALiquidContainerActor;
 
 /**
  * 任意物体被抓取（近距抓取）成功时广播。
@@ -43,6 +45,16 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnLiquidPouredSignature,
  * 没有参数：只是一个"玩家想跳过"的意图，不携带具体内容。
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPlayerSkipRequestedSignature);
+
+/**
+ * 玩家把一个液体容器"上菜"到一个 ServingSpot 时广播。
+ * 由 AServingSpotActor 在吸附完成后触发。
+ *
+ * @param ServingSpot 被放置到的上菜点 Actor
+ * @param Cup         被上菜的液体容器 Actor（通常是 ACupActor）
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDrinkServedSignature,
+    AServingSpotActor*, ServingSpot, ALiquidContainerActor*, Cup);
 
 /**
  * UCyberCafeEventSubsystem
@@ -89,4 +101,8 @@ public:
     /** 玩家主动请求跳过（扣扳机），供叙事/过场等 UI 流程订阅 */
     UPROPERTY(BlueprintAssignable, Category = "CyberCafe|Events")
     FOnPlayerSkipRequestedSignature OnPlayerSkipRequested;
+
+    /** 玩家把液体容器放到了某个上菜点（已完成吸附）*/
+    UPROPERTY(BlueprintAssignable, Category = "CyberCafe|Events")
+    FOnDrinkServedSignature OnDrinkServed;
 };

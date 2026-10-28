@@ -4,6 +4,7 @@
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
+#include "UI/Narrative/NarrativeWidget.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 
