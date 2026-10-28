@@ -77,6 +77,11 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
         if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
         {
             Sys->OnPlayerSkipRequested.AddDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
+            UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Subscribed OnPlayerSkipRequested. Step=%s"), *GetName());
+        }
+        else
+        {
+            UE_LOG(LogTemp, Error, TEXT("[ShowMessage] EventSubsystem is NULL, cannot subscribe skip event."));
         }
     }
 
@@ -117,6 +122,9 @@ void UTutorialStep_ShowMessage::HandleDurationElapsed()
 
 void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] HandlePlayerSkipRequested RECEIVED. IsCompleted=%d"),
+        IsCompleted() ? 1 : 0);
+
     if (IsCompleted())
     {
         return;
@@ -125,11 +133,15 @@ void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
     // 宽限期内不响应，防止上一个 Step 没松扳机的输入穿透
     if (const UWorld* World = GetWorld())
     {
-        if ((World->GetTimeSeconds() - EnterGameTime) < InputGracePeriod)
+        const float Elapsed = World->GetTimeSeconds() - EnterGameTime;
+        if (Elapsed < InputGracePeriod)
         {
+            UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip BLOCKED by grace period (Elapsed=%.2fs < %.2fs)."),
+                Elapsed, InputGracePeriod);
             return;
         }
     }
 
+    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip ACCEPTED, MarkCompleted."));
     MarkCompleted();
 }
