@@ -35,6 +35,16 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnLiquidPouredSignature,
     AActor*, FromActor, AActor*, ToActor, float, AcceptedML);
 
 /**
+ * 玩家主动请求"跳过当前 UI 流程"的广义信号。
+ * 目前由 VRPawn 在玩家扣扳机时广播（见 AVRPawn::OnSkipDialogPressed），
+ * 可被教学叙事（UTutorialStep_ShowMessage）、过场动画等任何需要"跳过"
+ * 语义的 UI 系统订阅。
+ *
+ * 没有参数：只是一个"玩家想跳过"的意图，不携带具体内容。
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPlayerSkipRequestedSignature);
+
+/**
  * UCyberCafeEventSubsystem
  *
  * CyberCafe 全局事件总线（GameInstanceSubsystem，关卡切换也不销毁）。
@@ -75,4 +85,8 @@ public:
     /** 任意倒液事件 */
     UPROPERTY(BlueprintAssignable, Category = "CyberCafe|Events")
     FOnLiquidPouredSignature OnLiquidPoured;
+
+    /** 玩家主动请求跳过（扣扳机），供叙事/过场等 UI 流程订阅 */
+    UPROPERTY(BlueprintAssignable, Category = "CyberCafe|Events")
+    FOnPlayerSkipRequestedSignature OnPlayerSkipRequested;
 };

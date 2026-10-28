@@ -2,12 +2,53 @@
 
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
 #include "Tutorial/TutorialDirector.h"
+#include "Tutorial/CyberCafeEventSubsystem.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
-#include "Kismet/GameplayStatics.h"
-#include "GameFramework/PlayerController.h"
-#include "Components/InputComponent.h"
-#include "InputCoreTypes.h"
+
+namespace
+{
+    /**
+     * 把所有常见的 VR 手柄扳机 FKey 集中放到这里：
+     *  - Oculus/Meta Touch: OculusTouch_Left/Right_Trigger_Axis
+     *  - 通用 OpenXR / 其它厂商: MotionController_Left/Right_TriggerAxis
+     *  - 若将来接入 Vive/Index 的 FKey 名字不一样，这里再补即可。
+     * 查询扳机轴值时逐个询问，只要有一个超过阈值就算扣下。
+     */
+    static const FName GTriggerAxisKeyNames[] =
+    {
+        TEXT("OculusTouch_Left_Trigger_Axis"),
+        TEXT("OculusTouch_Right_Trigger_Axis"),
+        TEXT("MotionController_Left_TriggerAxis"),
+        TEXT("MotionController_Right_TriggerAxis"),
+    };
+
+    /** 查询玩家当前所有扳机轴中的最大值；拿不到 PC 时返回 0 */
+    static float GetMaxTriggerValue(const UObject* WorldContext)
+    {
+        APlayerController* PC = UGameplayStatics::GetPlayerController(WorldContext, 0);
+        if (!PC)
+        {
+            return 0.f;
+        }
+
+        float MaxVal = 0.f;
+        for (const FName& KeyName : GTriggerAxisKeyNames)
+        {
+            const FKey Key(KeyName);
+            if (!Key.IsValid())
+            {
+                continue;
+            }
+            const float V = PC->GetInputAnalogKeyState(Key);
+            if (V > MaxVal)
+            {
+                MaxVal = V;
+            }
+        }
+        return MaxVal;
+    }
+}
 
 void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
 {
@@ -21,6 +62,8 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
         return;
     }
 
+    EnterGameTime = World->GetTimeSeconds();
+
     // 1) 定时器：Duration 秒后自动完成
     if (Duration > 0.f)
     {
@@ -28,18 +71,12 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
             &UTutorialStep_ShowMessage::HandleDurationElapsed, Duration, false);
     }
 
-    // 2) 按键跳过：订阅 PlayerController 的 AnyKey 事件
+    // 2) 订阅事件总线的"玩家请求跳过"事件（由 VRPawn 在扣扳机时广播）
     if (bAllowSkipByInput)
     {
-        if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+        if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
         {
-            if (UInputComponent* IC = PC->InputComponent)
-            {
-                // bConsume=false：不消费事件，不影响其它系统（抓取等）接收输入
-                FInputKeyBinding& Binding = IC->BindKey(EKeys::AnyKey, IE_Pressed, this,
-                    &UTutorialStep_ShowMessage::HandleAnyKeyPressed);
-                Binding.bConsumeInput = false;
-            }
+            Sys->OnPlayerSkipRequested.AddDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
         }
     }
 
@@ -53,28 +90,17 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
 
 void UTutorialStep_ShowMessage::ExitStep()
 {
-    // 清掉定时器（无论是因超时完成还是按键跳过）
     if (UWorld* World = GetWorld())
     {
         World->GetTimerManager().ClearTimer(DurationTimer);
     }
 
-    // 解绑 AnyKey：遍历 PlayerController 的 InputComponent 找到属于本对象的 KeyBinding 移除
+    // 解绑事件
     if (bAllowSkipByInput)
     {
-        if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+        if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
         {
-            if (UInputComponent* IC = PC->InputComponent)
-            {
-                for (int32 i = IC->KeyBindings.Num() - 1; i >= 0; --i)
-                {
-                    const FInputKeyBinding& B = IC->KeyBindings[i];
-                    if (B.KeyDelegate.IsBoundToObject(this))
-                    {
-                        IC->KeyBindings.RemoveAt(i);
-                    }
-                }
-            }
+            Sys->OnPlayerSkipRequested.RemoveDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
         }
     }
 
@@ -89,17 +115,21 @@ void UTutorialStep_ShowMessage::HandleDurationElapsed()
     }
 }
 
-void UTutorialStep_ShowMessage::HandleAnyKeyPressed(FKey Key)
+void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
 {
-    // 过滤连续轴输入（摇杆 / 扳机轴值），避免手柄漂移误触；
-    // 真正的按下事件都是离散按键，不会被过滤。
-    if (Key.IsAxis1D() || Key.IsAxis2D() || Key.IsAxis3D())
+    if (IsCompleted())
     {
         return;
     }
 
-    if (!IsCompleted())
+    // 宽限期内不响应，防止上一个 Step 没松扳机的输入穿透
+    if (const UWorld* World = GetWorld())
     {
-        MarkCompleted();
+        if ((World->GetTimeSeconds() - EnterGameTime) < InputGracePeriod)
+        {
+            return;
+        }
     }
+
+    MarkCompleted();
 }

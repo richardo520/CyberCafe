@@ -17,6 +17,8 @@
 #include "InputMappingContext.h"
 #include "InputAction.h"
 
+#include "Tutorial/CyberCafeEventSubsystem.h"
+
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Actor.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
@@ -290,6 +292,12 @@ void AVRPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
         EIC->BindAction(IA_RemoteGrab_Right, ETriggerEvent::Completed, this, &AVRPawn::OnRemoteGrabRightCompleted);
         EIC->BindAction(IA_RemoteGrab_Right, ETriggerEvent::Canceled,  this, &AVRPawn::OnRemoteGrabRightCompleted);
     }
+
+    // 跳过对话：扣扳机触发（左右手扳机都映射到同一 IA 即可，Started 只在跨过阈值的瞬间触发一次）
+    if (IA_SkipDialog)
+    {
+        EIC->BindAction(IA_SkipDialog, ETriggerEvent::Started, this, &AVRPawn::OnSkipDialogPressed);
+    }
 }
 
 //=====================================================================
@@ -457,6 +465,17 @@ void AVRPawn::OnRemoteGrabRightCompleted(const FInputActionValue& /*Value*/)
     }
     // 保险丝：确保右手循环震动停下
     StopHoverHaptic(true);
+}
+
+void AVRPawn::OnSkipDialogPressed(const FInputActionValue& /*Value*/)
+{
+    // 单纯作为"跳过意图"信号广播到事件总线，
+    // 由上层 UI 流程（教学叙事 Step 等）各自决定如何响应。
+    // 本函数不做任何业务判断，保持 VRPawn 的"输入入口"职责单一。
+    if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
+    {
+        Sys->OnPlayerSkipRequested.Broadcast();
+    }
 }
 
 void AVRPawn::PlayHoverHaptic(bool bRightHand)

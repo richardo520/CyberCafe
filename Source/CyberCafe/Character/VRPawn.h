@@ -144,6 +144,11 @@ public:
     // 按下开启 Aim 高亮 + 悬停震动，松开取消。真正的抓/拉仍由 Grip 键 IA_Grab_* 完成。
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_RemoteGrab_Left;
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_RemoteGrab_Right;
+
+    // 跳过对话（扣扳机触发；左右手扳机都映射到这同一个 IA 即可）
+    // 玩家扣下阈值后，VRPawn 会广播 UCyberCafeEventSubsystem::OnPlayerSkipRequested，
+    // 供教学叙事（Step: Show Message）、过场动画等 UI 流程订阅实现"跳过当前文本"。
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VR|Input|Actions") TObjectPtr<UInputAction> IA_SkipDialog;
     
     //=====================================================================
     // 蓝图暴露的配置属性
@@ -386,6 +391,12 @@ protected:
     void OnRemoteGrabLeftCompleted(const FInputActionValue& Value);
     void OnRemoteGrabRightStarted(const FInputActionValue& Value);
     void OnRemoteGrabRightCompleted(const FInputActionValue& Value);
+
+    /**
+     * 跳过对话（扣扳机）回调：广播事件总线的 OnPlayerSkipRequested，
+     * 由上层 UI 模块（教学叙事 Step、过场动画等）各自决定如何响应。
+     */
+    void OnSkipDialogPressed(const FInputActionValue& Value);
 
     /** 播放悬停触觉反馈（新目标首次锁定时调用） */
     void PlayHoverHaptic(bool bRightHand);
