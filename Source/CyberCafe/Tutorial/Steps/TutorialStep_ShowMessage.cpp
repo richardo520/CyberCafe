@@ -72,10 +72,13 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
     }
 
     // 2) 订阅事件总线的"玩家请求跳过"事件（由 VRPawn 在扣扳机时广播）
+    //    先 RemoveDynamic 再 AddDynamic：防止同一个 Step 对象被重复 Enter（极端情况）
+    //    导致订阅两份，收到广播时触发两次 MarkCompleted。
     if (bAllowSkipByInput)
     {
         if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
         {
+            Sys->OnPlayerSkipRequested.RemoveDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
             Sys->OnPlayerSkipRequested.AddDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
             UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Subscribed OnPlayerSkipRequested. Step=%s"), *GetName());
         }
@@ -122,11 +125,12 @@ void UTutorialStep_ShowMessage::HandleDurationElapsed()
 
 void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
 {
-    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] HandlePlayerSkipRequested RECEIVED. IsCompleted=%d"),
-        IsCompleted() ? 1 : 0);
+    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] HandlePlayerSkipRequested RECEIVED. Step=%s IsCompleted=%d"),
+        *GetName(), IsCompleted() ? 1 : 0);
 
     if (IsCompleted())
     {
+        // 已完成的 Step 不该再响应（防御：Director 延迟 ExitStep 时的残留订阅）
         return;
     }
 
@@ -142,6 +146,16 @@ void UTutorialStep_ShowMessage::HandlePlayerSkipRequested()
         }
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip ACCEPTED, MarkCompleted."));
+    // 关键：立即解绑自己！
+    // Director 在 Step 完成后会延迟 CheerDuration 秒再 ExitStep，这段窗口内本 Step
+    // 仍然在事件总线订阅列表里。如果玩家在这段窗口再扣一次扳机，就会触发已完成的
+    // Step 又收到广播；更糟的是，当前这次广播还在遍历订阅列表，下一个 Step 若已
+    // Enter（罕见但可能），也会被同一次广播触发。立即解绑可以从根上杜绝这些问题。
+    if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
+    {
+        Sys->OnPlayerSkipRequested.RemoveDynamic(this, &UTutorialStep_ShowMessage::HandlePlayerSkipRequested);
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[ShowMessage] Skip ACCEPTED, MarkCompleted. Step=%s"), *GetName());
     MarkCompleted();
 }
