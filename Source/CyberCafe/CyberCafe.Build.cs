@@ -23,6 +23,11 @@ public class CyberCafe : ModuleRules
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
+		// Editor-only UMG identity repair. These modules are never linked into game targets.
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] { "UMGEditor", "UnrealEd" });
+		}
 
 		// 显式将模块根目录及所有子目录加入头文件搜索路径，
 		// 避免因非Public/Private目录结构导致的include定位失败

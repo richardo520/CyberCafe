@@ -1,6 +1,8 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
+// @trace LQ-01 LQ-02 LQ-05
 #include "Liquid/LiquidContainerActor.h"
+#include "Liquid/LiquidTransferSubsystem.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
@@ -25,6 +27,7 @@ ALiquidContainerActor::ALiquidContainerActor()
 {
     // 打开 Tick：基类统一驱动"动态波动 + 倒液"两条主流程，子类无需重复
     PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.TickGroup = TG_PostPhysics;
 
     // 容器外壳作为 Root（模拟物理 + 抓取目标）
     ContainerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ContainerMesh"));
@@ -119,6 +122,7 @@ ALiquidContainerActor::ALiquidContainerActor()
 void ALiquidContainerActor::BeginPlay()
 {
     Super::BeginPlay();
+    InitializeLiquidState();
 
     // 从 LiquidFX 组件上反查美术配置的液体材质 Override，回填到 C++ 缓存，
     // 作为后续“倒液传材质 / 读取颜色”的唯一数据源。
@@ -145,6 +149,23 @@ void ALiquidContainerActor::BeginPlay()
     }
 }
 
+void ALiquidContainerActor::EndPlay(const EEndPlayReason::Type Reason)
+{
+    StopPouring();
+    if (bLiquidStateInitialized && GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
+            S->UnregisterContainer(this, CurrentVolumeML);
+    Super::EndPlay(Reason);
+}
+
+void ALiquidContainerActor::Destroyed()
+{
+    if (bLiquidStateInitialized && GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
+            S->UnregisterContainer(this, CurrentVolumeML);
+    Super::Destroyed();
+}
+
 void ALiquidContainerActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
@@ -157,8 +178,8 @@ void ALiquidContainerActor::Tick(float DeltaTime)
     {
         const float CriticalAngle = ComputeCriticalTiltAngleDegrees();
         const bool bShouldPour =
-            (FillAmount > KINDA_SMALL_NUMBER) &&
-            (GetTiltAngleDegrees() >= CriticalAngle - PourAngleTolerance);
+            (GetPreciseVolumeML() > 0.0) &&
+            (GetTiltAngleDegrees() >= FMath::Max(MinPourTiltDegrees, CriticalAngle - PourAngleTolerance));
 
         if (bShouldPour && !bIsPouring)
         {
@@ -185,73 +206,97 @@ void ALiquidContainerActor::Tick(float DeltaTime)
 // 液体 API
 //=====================================================================
 
-float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
+void ALiquidContainerActor::InitializeLiquidState()
 {
-    if (DeltaML <= 0.f || MaxVolumeML <= 0.f)
-    {
-        return 0.f;
-    }
+    if (bLiquidStateInitialized) return;
+    MaxVolumeML = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.f;
+    const double InitialFill = FMath::IsFinite(FillAmount) ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) : 0.0;
+    CurrentVolumeML = InitialFill * MaxVolumeML;
+    bLiquidStateInitialized = true;
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
+            S->RegisterContainer(this, CurrentVolumeML);
+}
 
-    const float CurrentML   = FillAmount * MaxVolumeML;
-    const float RemainingML = FMath::Max(0.f, MaxVolumeML - CurrentML);
-    const float AcceptedML  = FMath::Min(DeltaML, RemainingML);
+double ALiquidContainerActor::GetPreciseVolumeML() const
+{
+    if (bLiquidStateInitialized) return CurrentVolumeML;
+    return FMath::IsFinite(FillAmount) && FMath::IsFinite(MaxVolumeML)
+        ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) * FMath::Max(0.f, MaxVolumeML) : 0.0;
+}
 
-    if (AcceptedML <= KINDA_SMALL_NUMBER)
-    {
-        return 0.f;
-    }
+double ALiquidContainerActor::DebitVolumeInternal(double RequestedML)
+{
+    InitializeLiquidState();
+    if (!FMath::IsFinite(RequestedML) || RequestedML <= 0) return 0;
+    const double Actual = FMath::Min(RequestedML, CurrentVolumeML);
+    CurrentVolumeML -= Actual;
+    return Actual;
+}
 
-    const float NewTotalML = CurrentML + AcceptedML;
+double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLinearColor& InColor)
+{
+    InitializeLiquidState();
+    if (!FMath::IsFinite(RequestedML) || RequestedML <= 0 || !FMath::IsFinite(InColor.R) || !FMath::IsFinite(InColor.G) || !FMath::IsFinite(InColor.B) || !FMath::IsFinite(InColor.A)) return 0;
+    const double Capacity = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.0;
+    const double Actual = FMath::Min(RequestedML, FMath::Max(0.0, Capacity - CurrentVolumeML));
+    if (Actual <= 0) return 0;
+    const double Total = CurrentVolumeML + Actual;
+    LiquidColor = LiquidColor * static_cast<float>(CurrentVolumeML / Total) + InColor * static_cast<float>(Actual / Total);
+    LiquidColor.A = 1.f;
+    CurrentVolumeML = Total;
+    return Actual;
+}
 
-    // 按体积加权混色
-    if (NewTotalML > KINDA_SMALL_NUMBER)
-    {
-        LiquidColor = (LiquidColor * CurrentML + InColor * AcceptedML) / NewTotalML;
-        LiquidColor.A = 1.f;
-    }
-
-    FillAmount = FMath::Clamp(NewTotalML / MaxVolumeML, 0.f, 1.f);
-
+void ALiquidContainerActor::NotifyLiquidState()
+{
     RefreshLiquidFX();
     OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
+}
 
-    return AcceptedML;
+void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
+{
+    if (!FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
+    if (!bLiquidStateInitialized)
+    {
+        // Construction/default setup changes capacity while retaining saved initial
+        // fill. Do not lock the old capacity into runtime mL before BeginPlay.
+        MaxVolumeML = NewCapacityML;
+        RefreshLiquidFX();
+        return;
+    }
+    MaxVolumeML = NewCapacityML;
+    const double Excess = FMath::Max(0.0, CurrentVolumeML - MaxVolumeML);
+    CurrentVolumeML -= Excess;
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordSpilled(Excess);
+    NotifyLiquidState();
+}
+
+float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
+{
+    const double Actual = CreditVolumeInternal(DeltaML, InColor);
+    if (Actual <= 0) return 0;
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordInjected(Actual);
+    NotifyLiquidState();
+    return static_cast<float>(Actual);
 }
 
 float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
 {
-    if (DeltaML <= 0.f || MaxVolumeML <= 0.f)
-    {
-        return 0.f;
-    }
-
-    const float CurrentML  = FillAmount * MaxVolumeML;
-    const float ConsumedML = FMath::Min(DeltaML, CurrentML);
-
-    if (ConsumedML <= KINDA_SMALL_NUMBER)
-    {
-        return 0.f;
-    }
-
-    float NewTotalML = CurrentML - ConsumedML;
-
-    // “尾油”阅值：剩下不到 0.5mL 一律归零，
-    // 避免 Fill 浮点残留（如 0.00001）导致瓶底总看到一小层液体没法排干。
-    if (NewTotalML < 0.5f)
-    {
-        NewTotalML = 0.f;
-    }
-
-    FillAmount = FMath::Clamp(NewTotalML / MaxVolumeML, 0.f, 1.f);
-
-    RefreshLiquidFX();
-    OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
-
-    return ConsumedML;
+    const double Actual = DebitVolumeInternal(DeltaML);
+    if (Actual <= 0) return 0;
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordRemoved(Actual);
+    NotifyLiquidState();
+    return static_cast<float>(Actual);
 }
 
 void ALiquidContainerActor::RefreshLiquidFX()
 {
+    if (bLiquidStateInitialized)
+        FillAmount = MaxVolumeML > 0.f ? static_cast<float>(FMath::Clamp(CurrentVolumeML / MaxVolumeML, 0.0, 1.0)) : 0.f;
     if (!LiquidFX)
     {
         return;
@@ -440,7 +485,7 @@ void ALiquidContainerActor::InitPourFX()
     PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
 
     // 将本 Actor 注册为 P_Ribbon 里“Export Particle Data to Blueprint”模块的
-    // CallbackHandler——Niagara 每帧会把碰撞死亡的水流粒子数据回调
+    // CallbackHandler——仅保留旧资产接口兼容，不再由粒子决定液量；数据仍会回调
     // 到 ReceiveParticleData_Implementation。
     // 注意：不同的 Niagara 资产可能把 Handler Parameter 绑定到不同名字上，
     // 这里一次写入三个最常见命名。Niagara 对不存在的 User 参数会静默忽略，
@@ -449,6 +494,11 @@ void ALiquidContainerActor::InitPourFX()
     PourFX->SetNiagaraVariableObject(TEXT("User.Handler"),         this);
     PourFX->SetNiagaraVariableObject(TEXT("User.CallbackHandler"), this);
 
+    if (bUseRibbonTrajectory && PourFX->GetAsset() && PourFX->GetAsset()->GetFName() == TEXT("P_Ribbon"))
+    {
+        PourFX->SetNiagaraVariableFloat(TEXT("User.Velocity"), PourRibbonVelocity);
+        PourFX->SetNiagaraVariableFloat(TEXT("User.Offset"), PourRibbonOffset);
+    }
     // 默认关闭，要倒液时才 Activate
     PourFX->Deactivate();
 }
@@ -459,29 +509,9 @@ void ALiquidContainerActor::InitPourFX()
 
 FTransform ALiquidContainerActor::GetPourWorldTransform() const
 {
-    // ============================================================
-    // 动态出液环：在 PourEntryPoint 的口沿圆环上，找世界 Z 最低点
-    // ============================================================
-    //
-    // 【问题】：如果直接返回 PourFX 组件自身的 Transform，出液起点会固定在
-    //   美术在蓝图里配置的那个局部坐标上。这样容器无论倾斜角度多大、往哪个
-    //   方向倾斜，水柱都从同一个局部点喷出——看起来像凭空喷水而不是"顺着
-    //   杯口/瓶口最低边沿自然流下"。
-    //
-    // 【方案】：把 PourEntryPoint（+PourEntryRadius）视为一个"口沿圆环"，
-    //   每帧在这个圆环上找世界 Z 最低的一点 P，作为水柱起点：
-    //     ① 取世界 -Z 方向在 PourEntryPoint 局部 XY 平面上的投影方向 D
-    //        （D 就是"沿口沿哪个方向重力最先把液面拉下去"的方向）
-    //     ② P = C + D * PourEntryRadius，其中 C 是 PourEntryPoint 世界位置
-    //     ③ 输出 Transform 的 +X 轴对齐 +N（杯身正方向）。P_Ribbon 内部
-    //        粒子实际沿组件 -X 发射，所以组件 +X = +N 时，粒子最终沿 -N
-    //        方向飞出，视觉上"与杯壁保持平行 / 沿杯身轴反向抛出"。
-    //        用 D 与 N 的叉积构造 +Y，保证正交系稳定。
-    //
-    // 【回退】：当 PourEntryPoint 未设置 / 半径 <= 0 / 容器几乎正立或倒置
-    //   （投影方向长度趋近于 0，无法定义唯一最低点）时，退回旧行为，使用
-    //   PourFX 组件自身的 Transform。
-    // ============================================================
+    // Lowest lip point is the shared origin. +X stays aligned with mouth +Z.
+    // The exported P_Ribbon uses age-driven displacement along +X; its first
+    // 0.15s starts behind the lip. Do not assume generic -X particle emission.
 
     if (PourEntryPoint && PourEntryRadius > KINDA_SMALL_NUMBER)
     {
@@ -506,40 +536,7 @@ FTransform ALiquidContainerActor::GetPourWorldTransform() const
             // 圆环上世界 Z 最低点——水柱的起点
             const FVector Lowest = C + D * PourEntryRadius;
 
-            // ============================================================
-            // 出液 Transform 的朝向构造 —— 方案 A：+X = +N（沿杯身正方向）
-            // ============================================================
-            // 【设计目标】水柱应"贴着杯壁 / 平行于杯壁"从杯口最低点抛出，
-            //   而不是"垂直于杯壁"顶出来。
-            //
-            // 【几何观察】
-            //   - 杯身轴向 = 口沿平面法线 N（PourEntryPoint 局部 +Z 的世界方向，
-            //     从杯底指向杯口）
-            //   - "沿杯壁朝外"的方向 = -N（从杯口沿杯身反向继续延伸出去）
-            //
-            // 【为什么 AxisX = +N 而不是 -N】
-            //   经实测，P_Ribbon 内部粒子的发射朝向是沿组件 +X 的【反向】
-            //   （粒子朝 -X 方向飞）。因此为了让粒子最终朝 -N 方向抛出（沿
-            //   杯壁往外流），组件的 +X 需要设为 +N，这样组件 -X（粒子实际
-            //   飞行方向）= -N，正好指向"从杯口往外沿杯身反向"。
-            //
-            //   ⚠️ 如果将来更换 P_Ribbon 资产、粒子改为沿组件 +X 发射，只需
-            //   把这里的 AxisX 换回 -N 即可。
-            //
-            // 【正交系构造】
-            //   AxisX = +N                     —— 组件 +X（粒子实际朝 -X = -N 飞）
-            //   AxisY = normalize(N × D)       —— 与 AxisX 正交的横切向
-            //                                    （D 与 N 严格正交，故 |N×D|=1）
-            //   AxisZ = AxisX × AxisY          —— 落在 (N, D) 平面内、朝向 -D 侧
-            //   此 3 轴构成合法右手系。
-            //
-            // 【失效场景与回退】
-            //   - 当容器几乎正立/倒置时，D 长度 < 0.05 已被外层挡掉，走
-            //     PourFX 固定 Transform 的回退分支，本段代码不会执行。
-            //   - 当 |N × D| 意外过小（理论上不会发生，因为 D ⊥ N 是构造出来
-            //     的），保底取一个与 N 正交的向量作为 AxisY。
-            // ============================================================
-
+            // Match the existing Ribbon owner axis; build an orthonormal basis.
             const FVector AxisX = N;
             FVector AxisY = FVector::CrossProduct(N, D);
             if (!AxisY.Normalize())
@@ -653,7 +650,8 @@ void ALiquidContainerActor::StartPouring()
         PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
         PourFX->SetNiagaraVariableObject     (TEXT("User.Data"),         this);
 
-        PourFX->Activate(/*bReset=*/true);
+        // Resume without killing the already emitted visual tail.
+        PourFX->Activate(/*bReset=*/false);
     }
 }
 
@@ -726,15 +724,18 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
     if (PourFX)
     {
         PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"), LiquidColor);
+        if (bUseRibbonTrajectory && PourFX->GetAsset() && PourFX->GetAsset()->GetFName() == TEXT("P_Ribbon"))
+        {
+            PourFX->SetNiagaraVariableFloat(TEXT("User.Velocity"), PourRibbonVelocity);
+            PourFX->SetNiagaraVariableFloat(TEXT("User.Offset"), PourRibbonOffset);
+        }
     }
 
-    // 本帧应流出的液体量——只负责"从源容器扣掉"，
-    // 至于"液体是否倒进了某个目标容器/在哪落地/是否需要 Splash"，
-    // 全部交给 ReceiveParticleData_Implementation 处理：
-    // Niagara 内部的 Export Particle Data DI 会把水流粒子真正的碰撞死亡位置
-    // 每帧回调回来——那才是"水柱物理上真实的落点"，与视觉完全对齐。
-    const float DesiredML = PourRatePerSecond * DeltaTime;
-    ConsumeLiquid(DesiredML);
+    // One transaction debits the source and credits a precise in-flight packet.
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
+            S->EmitPour(this, DeltaTime, GetPourWorldTransform());
+    if (GetPreciseVolumeML() <= 0.0) StopPouring();
 }
 
 //=====================================================================
@@ -867,235 +868,11 @@ bool ALiquidContainerActor::TryReadColorFromMaterial()
     return false;
 }
 
-//=====================================================================
-// Niagara 粒子回调：接收 P_Ribbon 里 "Export Particle Data to Blueprint"
-// 导出的水流粒子实时数据（每颗满足条件的粒子的 Position/Size/Velocity）。
-//
-// P_Ribbon 里美术设置的条件通常是"粒子碰撞死亡时导出"——也就是说，
-// 这里拿到的每颗 Particle.Position 就是【水柱真正命中场景的落点】，
-// 与视觉水花的生成位置完全对齐。
-//
-// 我们据此做接液判定（双锚点入口圆柱方案）：
-//   - 遍历所有可接液容器（PourEntryRadius > 0 视为启用）
-//   - 将粒子位置转到 PourEntryPoint 局部空间，若粒子处于以 PourEntryPoint
-//     为中心、半径 = PourEntryRadius、沿局部 -Z 延伸的圆柱内
-//     → 认为水滴进了这个杯子，触发 AddLiquid + 材质传递
-//=====================================================================
-
+// Niagara exports remain connected for asset compatibility, but never own volume.
 void ALiquidContainerActor::ReceiveParticleData_Implementation(
     const TArray<FBasicParticleData>& Data,
     UNiagaraSystem* NiagaraSystem,
     const FVector& SimulationPositionOffset)
 {
-    if (Data.Num() == 0)
-    {
-        return;
-    }
-
-    UWorld* World = GetWorld();
-    if (!World)
-    {
-        return;
-    }
-
-    // 预先收集场景中所有"可接液"的容器（排除自己），一帧内共享，避免每颗粒子重复迭代。
-    TArray<ALiquidContainerActor*> Candidates;
-    for (TActorIterator<ALiquidContainerActor> It(World); It; ++It)
-    {
-        ALiquidContainerActor* Cand = *It;
-        if (!Cand || Cand == this)                       continue;
-        if (!Cand->bAcceptLiquidFromOthers)              continue;
-        if (Cand->PourEntryRadius <= 0.f)                continue; // 未启用接液的容器直接跳过
-        if (!Cand->PourEntryPoint)                       continue;
-        Candidates.Add(Cand);
-    }
-
-    if (Candidates.Num() == 0)
-    {
-        // 场景里没有匹配的可接液容器：粒子落到了地板/桌面等——不接液，
-        // 视觉上由 P_Ribbon 内部的 Splash Emitter 自己生成水花，C++ 无需干预。
-        return;
-    }
-
-    // 每帧一次的粒子回调可能一次带回多颗粒子——为了避免"同一杯子同一帧被判定多次
-    // 触发 SetLiquidMaterialAsset/ReinitializeSystem"，做一个"已处理集合"。
-    TSet<ALiquidContainerActor*> HitTargets;
-
-    // 粒子刚穿过入口平面时的 Z 容差（cm）——判定循环与调试可视化共用
-    constexpr float EntryZTolerance = 1.f;
-
-    for (const FBasicParticleData& Particle : Data)
-    {
-        const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
-
-        // 找出这颗粒子属于哪个杯子——双锚点入口圆柱判定：
-        // 粒子必须处于以 PourEntryPoint 为中心、半径 = PourEntryRadius、
-        // 沿其局部 -Z 延伸的圆柱体内。在 PourEntryPoint 局部坐标下：
-        //   — XY 距离 ≤ PourEntryRadius（粒子在杯口圆盘正下方）
-        //   — Z ≤ EntryZTolerance（粒子已穿越杯口平面进入内腽）
-        // 杯身外壁掠过的粒子——局部 XY 超出杯口半径 → 直接淘汰。
-        ALiquidContainerActor* Best = nullptr;
-        float BestDistSq = TNumericLimits<float>::Max();
-        for (ALiquidContainerActor* Cand : Candidates)
-        {
-            const FTransform& EntryTM = Cand->PourEntryPoint->GetComponentTransform();
-            const FVector DeltaLS = EntryTM.InverseTransformPositionNoScale(ParticleWS);
-
-            // 1) 粒子必须已穿越杯口平面（沿局部 -Z 方向进入杯内），允许少量容差
-            if (DeltaLS.Z > EntryZTolerance) continue;
-
-            // 2) 局部 XY 必须在杯口圆盘内
-            const float DistSqXY = DeltaLS.X * DeltaLS.X + DeltaLS.Y * DeltaLS.Y;
-            const float RSq      = Cand->PourEntryRadius * Cand->PourEntryRadius;
-            if (DistSqXY > RSq) continue;
-
-            if (DistSqXY < BestDistSq)
-            {
-                BestDistSq = DistSqXY;
-                Best = Cand;
-            }
-        }
-
-        if (!Best)
-        {
-            continue;
-        }
-
-        // 1) 材质传递（只需一次；重复调用会导致 ReinitializeSystem 频繁重启）
-        if (!HitTargets.Contains(Best))
-        {
-            HitTargets.Add(Best);
-
-            if (LiquidMaterialAsset && Best->LiquidMaterialAsset != LiquidMaterialAsset)
-            {
-                Best->SetLiquidMaterialAsset(LiquidMaterialAsset, /*bReadColor=*/true);
-            }
-        }
-
-        // 2) 加液：每颗粒子代表一个"液滴事件"。
-        //    使用 PourRatePerSecond * DeltaTime / 预计粒子数 会更精确，但复杂度太高；
-        //    这里按"每颗粒子固定加一小口"处理——量的多少由 Niagara 侧粒子生成频率决定，
-        //    如果视觉水柱粒子密度合适，感觉就是自然的。
-        //    量的具体值可通过 PourRatePerSecond 换算：每颗粒子 ~ PourRatePerSecond / 60
-        //    但因回调频率与粒子数难以预测，暂用简单常量兜底。
-        const float MLPerParticle = FMath::Max(PourRatePerSecond * 0.016f / FMath::Max(Data.Num(), 1), 0.05f);
-        const float AcceptedML = Best->AddLiquid(MLPerParticle, LiquidColor);
-
-        // 向全局事件总线广播：教学 Director 用以识别"从源容器 → 目标容器"的注液行为。
-        // 注意：每颗落点粒子都会触发一次。教学步骤在订阅侧做累计即可。
-        if (AcceptedML > KINDA_SMALL_NUMBER)
-        {
-            if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
-            {
-                Sys->OnLiquidPoured.Broadcast(this, Best, AcceptedML);
-            }
-        }
-    }
-
-#if ENABLE_DRAW_DEBUG
-    if (bDebugDrawTrace)
-    {
-        // ======================================================================
-        // 调试可视化（双锚点入口圆柱）：
-        //   — 洋红大球  = PourEntryPoint 世界位置（杯口锚点）
-        //   — 洋红小球  = PourTargetPoint 世界位置（杯底锚点，仅参考）
-        //   — 绿色圆盘  = 杯口圆盘（贴在 PourEntryPoint 平面上）
-        //   — 浅蓝圆柱  = 杯口向下延伸的入口圆柱（盞盘 + 4 条侧壁连线近似）
-        //   — 黄色小球  = 每颗粒子的落点
-        //   — 绿/红连线 = 该粒子是否通过入口圆柱判定
-        // ======================================================================
-
-        for (ALiquidContainerActor* Cand : Candidates)
-        {
-            const FTransform& EntryTM = Cand->PourEntryPoint->GetComponentTransform();
-            const FVector EntryWS = EntryTM.GetLocation();
-
-            // 杯口锚点（洋红大球）
-            DrawDebugSphere(World, EntryWS, 2.5f, 12, FColor::Magenta, false, 0.f, 0, 0.4f);
-
-            // 杯底锚点（洋红小球，仅作视觉参考）
-            if (Cand->PourTargetPoint)
-            {
-                DrawDebugSphere(World, Cand->PourTargetPoint->GetComponentLocation(),
-                    1.5f, 8, FColor(200, 100, 200), false, 0.f, 0, 0.3f);
-            }
-
-            // 杯口圆盘（绿色，贴在 PourEntryPoint 平面上）
-            //
-            // 注意：DrawDebugCircle(FMatrix) 内部在传入矩阵的 "YZ 平面" 画圆
-            // （法线 = 矩阵的 X 轴）。我们希望圆盘贴在 PourEntryPoint 的 XY 平面
-            // 上（法线 = 杯口局部 +Z），因此需要"轴换位"：
-            //   矩阵 X 轴 ← 杯口 +Z（作为法线）
-            //   矩阵 Y 轴 ← 杯口 +X（作为圆盘平面基向量）
-            //   矩阵 Z 轴 ← 杯口 +Y（作为圆盘平面基向量）
-            const FVector EntryX = EntryTM.GetUnitAxis(EAxis::X);
-            const FVector EntryY = EntryTM.GetUnitAxis(EAxis::Y);
-            const FVector EntryZ = EntryTM.GetUnitAxis(EAxis::Z);
-            const FMatrix DiskTM(EntryZ, EntryX, EntryY, EntryWS);
-            DrawDebugCircle(World,
-                DiskTM,
-                Cand->PourEntryRadius,
-                32, FColor::Green, false, 0.f, 0, 0.5f,
-                /*bDrawAxis=*/false);
-
-            // 入口圆柱（浅蓝，沿杯口局部 -Z 向内延伸）
-            const FVector EntryDown = -EntryZ;
-            const float CylHeight = FMath::Max(Cand->PourEntryRadius * 4.f, 15.f);
-            const FVector CylBottomWS = EntryWS + EntryDown * CylHeight;
-
-            // 圆柱底盘（下方）——同样按上文"轴换位"规则构造矩阵
-            const FMatrix CylBottomTM(EntryZ, EntryX, EntryY, CylBottomWS);
-            DrawDebugCircle(World,
-                CylBottomTM,
-                Cand->PourEntryRadius,
-                32, FColor(80, 160, 255), false, 0.f, 0, 0.3f,
-                /*bDrawAxis=*/false);
-
-            // 圆柱侧壁 4 条连线
-            const FVector AxisX = EntryX * Cand->PourEntryRadius;
-            const FVector AxisY = EntryY * Cand->PourEntryRadius;
-            for (int32 i = 0; i < 4; ++i)
-            {
-                const float Ang = i * PI * 0.5f;
-                const FVector Off = AxisX * FMath::Cos(Ang) + AxisY * FMath::Sin(Ang);
-                DrawDebugLine(World, EntryWS + Off, CylBottomWS + Off,
-                    FColor(80, 160, 255), false, 0.f, 0, 0.3f);
-            }
-        }
-
-        // 每颗粒子 + 到判定锚点的连线（绿=通过, 红=淘汰）
-        for (const FBasicParticleData& Particle : Data)
-        {
-            const FVector ParticleWS = Particle.Position + SimulationPositionOffset;
-            DrawDebugSphere(World, ParticleWS, 1.5f, 8, FColor::Yellow, false, 0.f, 0, 0.2f);
-
-            // 找到局部 XY 最近的候选杯子做可视化
-            ALiquidContainerActor* NearestCand = nullptr;
-            float NearestXYSq = TNumericLimits<float>::Max();
-            FVector NearestDeltaLS = FVector::ZeroVector;
-            for (ALiquidContainerActor* Cand : Candidates)
-            {
-                const FTransform& EntryTM = Cand->PourEntryPoint->GetComponentTransform();
-                const FVector DeltaLS = EntryTM.InverseTransformPositionNoScale(ParticleWS);
-                const float DSq = DeltaLS.X * DeltaLS.X + DeltaLS.Y * DeltaLS.Y;
-                if (DSq < NearestXYSq)
-                {
-                    NearestXYSq = DSq;
-                    NearestCand = Cand;
-                    NearestDeltaLS = DeltaLS;
-                }
-            }
-            if (NearestCand)
-            {
-                const FVector EntryWS = NearestCand->PourEntryPoint->GetComponentLocation();
-                const float RSq = NearestCand->PourEntryRadius * NearestCand->PourEntryRadius;
-                const bool bPass = (NearestDeltaLS.Z <= EntryZTolerance) && (NearestXYSq <= RSq);
-
-                DrawDebugLine(World, ParticleWS, EntryWS,
-                    bPass ? FColor::Green : FColor::Red,
-                    false, 0.f, 0, 0.3f);
-            }
-        }
-    }
-#endif
+    // @trace LQ-05. Actual reception is settled by LiquidTransferSubsystem.
 }

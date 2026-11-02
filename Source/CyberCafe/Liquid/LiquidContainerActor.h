@@ -15,6 +15,7 @@ class UNiagaraComponent;
 class UNiagaraSystem;
 class USceneComponent;
 class UMaterialInstanceDynamic;
+class ULiquidTransferSubsystem;
 
 /**
  * 液体变化事件
@@ -92,7 +93,15 @@ public:
     ALiquidContainerActor();
 
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Destroyed() override;
     virtual void Tick(float DeltaTime) override;
+
+    // @trace LQ-01. Initializes from saved FillAmount once; runtime mL is authoritative.
+    void InitializeLiquidState();
+    double GetPreciseVolumeML() const;
+    UFUNCTION(BlueprintSetter, Category = "Liquid")
+    void SetCapacityML(float NewCapacityML);
 
     //=====================================================================
     // 组件
@@ -229,6 +238,26 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
     float PourRatePerSecond;
 
+    /** Logical flight speed, matched to P_Ribbon's spawn velocity (cm/s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float PourInitialSpeedCms = 100.f;
+
+    /** Use the existing P_Ribbon's exported age curves instead of guessed gravity. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour")
+    bool bUseRibbonTrajectory = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float PourRibbonVelocity = 20.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float PourRibbonOffset = 3.f;
+
+    /** Logical acceleration; match the Niagara gravity parameter (cm/s^2). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour")
+    FVector PourGravityCms2 = FVector(0.f, 0.f, -980.f);
+
+    /** Prevent a full, upright cup from continuously emitting through angle tolerance. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
+    float MinPourTiltDegrees = 2.f;
+
     /** 传入 P_Ribbon.User.FlowStrength 的水流强度 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour", meta = (ClampMin = "0.0"))
     float FlowStrength;
@@ -309,7 +338,7 @@ public:
     float FillAmount;
 
     /** 容器最大容量(毫升) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid", meta = (ClampMin = "0.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, BlueprintSetter = SetCapacityML, Category = "Liquid", meta = (ClampMin = "0.0"))
     float MaxVolumeML;
 
     /** 当前液体颜色(RGB) */
@@ -422,7 +451,7 @@ public:
 
     /** 获取当前液体的体积(mL) */
     UFUNCTION(BlueprintPure, Category = "Liquid")
-    float GetCurrentVolumeML() const { return FillAmount * MaxVolumeML; }
+    float GetCurrentVolumeML() const { return static_cast<float>(GetPreciseVolumeML()); }
 
     /** 是否已被抓取(便于蓝图查询) */
     UFUNCTION(BlueprintPure, Category = "Liquid")
@@ -460,7 +489,7 @@ public:
     /**
      * P_Ribbon 中的 "Export Particle Data to Blueprint" 模块每帧把满足条件的粒子
      * （本项目里：“碰撞死亡”的水流粒子）回调回来，提供真实落点位置。
-     * 我们在此基于落点判定“是否倒进了杯口”并触发接液。
+     * 仅保留旧资产回调兼容；此处不再加液，防止粒子与定量在途包重复结算。
      */
     virtual void ReceiveParticleData_Implementation(
         const TArray<FBasicParticleData>& Data,
@@ -468,6 +497,15 @@ public:
         const FVector& SimulationPositionOffset) override;
 
 protected:
+    friend class ULiquidTransferSubsystem;
+    double DebitVolumeInternal(double RequestedML);
+    double CreditVolumeInternal(double RequestedML, const FLinearColor& InColor);
+    void NotifyLiquidState();
+
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Runtime")
+    double CurrentVolumeML = 0.0;
+    bool bLiquidStateInitialized = false;
+
     /**
      * 初始化 LiquidFX：只预写运行时表现参数（Fill / Opacity / Waves / Viscosity）。
      * User.Mesh / User.Material / User.BottleSize 均由美术在蓝图的 LiquidFX 组件 Details 面板直接配置。
@@ -542,7 +580,7 @@ protected:
     /** 停止倒液 VFX / 状态 */
     virtual void StopPouring();
 
-    /** 每 Tick 执行的倒液实际逻辑(FX 位置更新 + SphereTrace 判定 + 加/扣液) */
+    /** 每 Tick 同步 FX 起点并提交定量在途包；接液由世界级转移系统结算。 */
     virtual void UpdatePouring(float DeltaTime);
 
     /**
