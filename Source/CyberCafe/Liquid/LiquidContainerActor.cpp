@@ -212,6 +212,7 @@ void ALiquidContainerActor::InitializeLiquidState()
     MaxVolumeML = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.f;
     const double InitialFill = FMath::IsFinite(FillAmount) ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) : 0.0;
     CurrentVolumeML = InitialFill * MaxVolumeML;
+    Composition = FLiquidComposition::Pure(InitialIngredientId, CurrentVolumeML);
     bLiquidStateInitialized = true;
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
@@ -225,22 +226,47 @@ double ALiquidContainerActor::GetPreciseVolumeML() const
         ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) * FMath::Max(0.f, MaxVolumeML) : 0.0;
 }
 
-double ALiquidContainerActor::DebitVolumeInternal(double RequestedML)
+FLiquidComposition ALiquidContainerActor::GetComposition() const
+{
+    return bLiquidStateInitialized ? Composition : FLiquidComposition::Pure(InitialIngredientId, GetPreciseVolumeML());
+}
+
+void ALiquidContainerActor::FreezeLiquidForServing()
+{
+    InitializeLiquidState();
+    bLiquidFrozen = true;
+    bCanPour = false;
+    bAcceptLiquidFromOthers = false;
+    StopPouring();
+}
+
+double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition)
 {
     InitializeLiquidState();
     if (!FMath::IsFinite(RequestedML) || RequestedML <= 0) return 0;
     const double Actual = FMath::Min(RequestedML, CurrentVolumeML);
+    if (Actual <= 0) return 0;
+    const FLiquidComposition Taken = Composition.Portion(Actual);
+    if (OutComposition) *OutComposition = Taken;
+    Composition.Remove(Taken);
     CurrentVolumeML -= Actual;
+    if (CurrentVolumeML == 0) Composition.Ingredients.Empty();
+    ++LiquidRevision;
     return Actual;
 }
 
-double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLinearColor& InColor)
+double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition)
 {
+    if (bLiquidFrozen) return 0;
     InitializeLiquidState();
     if (!FMath::IsFinite(RequestedML) || RequestedML <= 0 || !FMath::IsFinite(InColor.R) || !FMath::IsFinite(InColor.G) || !FMath::IsFinite(InColor.B) || !FMath::IsFinite(InColor.A)) return 0;
     const double Capacity = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.0;
     const double Actual = FMath::Min(RequestedML, FMath::Max(0.0, Capacity - CurrentVolumeML));
     if (Actual <= 0) return 0;
+    const FLiquidComposition Received = InComposition ? InComposition->Portion(Actual) : FLiquidComposition::Pure(TEXT("Unknown"), Actual);
+    if (FMath::Abs(Received.Total() - Actual) > 1.e-6) return 0;
+    Composition.Add(Received);
+    ++LiquidRevision;
     const double Total = CurrentVolumeML + Actual;
     LiquidColor = LiquidColor * static_cast<float>(CurrentVolumeML / Total) + InColor * static_cast<float>(Actual / Total);
     LiquidColor.A = 1.f;
@@ -256,7 +282,7 @@ void ALiquidContainerActor::NotifyLiquidState()
 
 void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
 {
-    if (!FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
+    if (bLiquidFrozen || !FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
     if (!bLiquidStateInitialized)
     {
         // Construction/default setup changes capacity while retaining saved initial
@@ -266,8 +292,7 @@ void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
         return;
     }
     MaxVolumeML = NewCapacityML;
-    const double Excess = FMath::Max(0.0, CurrentVolumeML - MaxVolumeML);
-    CurrentVolumeML -= Excess;
+    const double Excess = DebitVolumeInternal(FMath::Max(0.0, CurrentVolumeML - MaxVolumeML));
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordSpilled(Excess);
     NotifyLiquidState();
@@ -276,6 +301,17 @@ void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
 float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
 {
     const double Actual = CreditVolumeInternal(DeltaML, InColor);
+    if (Actual <= 0) return 0;
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordInjected(Actual);
+    NotifyLiquidState();
+    return static_cast<float>(Actual);
+}
+
+float ALiquidContainerActor::AddIngredientLiquid(float DeltaML, FName IngredientId, FLinearColor InColor)
+{
+    const FLiquidComposition Added = FLiquidComposition::Pure(IngredientId, DeltaML);
+    const double Actual = CreditVolumeInternal(DeltaML, InColor, &Added);
     if (Actual <= 0) return 0;
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordInjected(Actual);

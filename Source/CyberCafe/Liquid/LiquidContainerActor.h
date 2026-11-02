@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "NiagaraDataInterfaceExport.h"
+#include "Liquid/LiquidComposition.h"
 #include "LiquidContainerActor.generated.h"
 
 class UStaticMeshComponent;
@@ -102,6 +103,21 @@ public:
     double GetPreciseVolumeML() const;
     UFUNCTION(BlueprintSetter, Category = "Liquid")
     void SetCapacityML(float NewCapacityML);
+
+    // @trace RC-01 RC-05. Explicit initial identity, no material/colour inference.
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Liquid|Composition")
+    FName InitialIngredientId = TEXT("Unknown");
+    UFUNCTION(BlueprintPure,Category="Liquid|Composition")
+    FLiquidComposition GetComposition() const;
+    UFUNCTION(BlueprintPure,Category="Liquid|Composition")
+    double GetIngredientVolumeML(FName IngredientId) const { return GetComposition().Get(IngredientId); }
+    UFUNCTION(BlueprintCallable,Category="Liquid|Composition")
+    float AddIngredientLiquid(float DeltaML,FName IngredientId,FLinearColor InColor);
+    UFUNCTION(BlueprintPure,Category="Liquid|Composition")
+    int32 GetLiquidRevision() const { return LiquidRevision; }
+    UFUNCTION(BlueprintPure,Category="Liquid|Composition")
+    bool IsLiquidFrozen() const { return bLiquidFrozen; }
+    void FreezeLiquidForServing();
 
     //=====================================================================
     // 组件
@@ -498,13 +514,17 @@ public:
 
 protected:
     friend class ULiquidTransferSubsystem;
-    double DebitVolumeInternal(double RequestedML);
-    double CreditVolumeInternal(double RequestedML, const FLinearColor& InColor);
+    double DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition = nullptr);
+    double CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition = nullptr);
     void NotifyLiquidState();
 
     UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Runtime")
     double CurrentVolumeML = 0.0;
     bool bLiquidStateInitialized = false;
+    UPROPERTY(Transient,VisibleInstanceOnly,BlueprintReadOnly,Category="Liquid|Composition")
+    FLiquidComposition Composition;
+    UPROPERTY(Transient) int32 LiquidRevision = 0;
+    UPROPERTY(Transient) bool bLiquidFrozen = false;
 
     /**
      * 初始化 LiquidFX：只预写运行时表现参数（Fill / Opacity / Waves / Viscosity）。

@@ -4,12 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Serving/DrinkRecipe.h"
 #include "ServingSpotActor.generated.h"
 
 class UBoxComponent;
 class UStaticMeshComponent;
 class USceneComponent;
 class ALiquidContainerActor;
+class AServingSpotActor;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnDrinkValidatedSignature, AServingSpotActor*, Spot, ALiquidContainerActor*, Cup, const FDrinkValidationResult&, Result);
 
 /**
  * AServingSpotActor
@@ -38,6 +41,28 @@ class CYBERCAFE_API AServingSpotActor : public AActor
 
 public:
     AServingSpotActor();
+
+    // @trace RC-03 RC-05. Null recipe retains legacy generic serving behaviour.
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="ServingSpot|Recipe")
+    TObjectPtr<UDrinkRecipe> ActiveRecipe;
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="ServingSpot|Recipe")
+    bool bAcceptSubmissions = true;
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="ServingSpot|Recipe",meta=(ClampMin="0.0"))
+    float StabilitySeconds = .4f;
+    UPROPERTY(BlueprintAssignable,Category="ServingSpot|Recipe")
+    FOnDrinkValidatedSignature OnDrinkValidated;
+    UFUNCTION(BlueprintCallable,Category="ServingSpot|Recipe")
+    void SetActiveRecipe(UDrinkRecipe* Recipe);
+    UFUNCTION(BlueprintCallable,Category="ServingSpot|Recipe")
+    void SetSubmissionEnabled(bool bEnabled);
+    UFUNCTION(BlueprintCallable,Category="ServingSpot|Recipe")
+    bool TrySubmitCup(ALiquidContainerActor* Cup);
+    UFUNCTION(BlueprintPure,Category="ServingSpot|Recipe")
+    FDrinkValidationResult GetLastValidation() const { return LastValidation; }
+    bool HasAcceptedCup(const ALiquidContainerActor* Cup,FName RecipeId) const;
+    uint32 GetOrderSerial() const { return OrderSerial; }
+    uint32 GetAcceptedOrderSerial() const { return AcceptedOrderSerial; }
+    bool IsInServingArea(const ALiquidContainerActor* Cup) const;
 
     //~ Begin AActor
     virtual void BeginPlay() override;
@@ -145,4 +170,12 @@ private:
     /** 已被服务上来的杯子（Attach 到本 Spot）*/
     UPROPERTY(Transient)
     TWeakObjectPtr<ALiquidContainerActor> ServedCup;
+    UPROPERTY(Transient) FDrinkValidationResult LastValidation;
+    UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> LastAttemptCup;
+    int32 LastAttemptRevision = -1;
+    int32 ObservedRevision = -1;
+    uint32 OrderSerial = 0;
+    uint32 AcceptedOrderSerial = 0;
+    float StableElapsed = 0;
+    bool bCommitting = false;
 };

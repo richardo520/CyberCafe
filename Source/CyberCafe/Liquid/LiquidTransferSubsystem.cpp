@@ -61,7 +61,9 @@ double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double
     Source->InitializeLiquidState();
     const FLinearColor Color=Source->LiquidColor;
     UMaterialInterface* Material=Source->LiquidMaterialAsset;
-    const double Actual=Source->DebitVolumeInternal(ML);
+    if (Source->IsLiquidFrozen()) return 0;
+    FLiquidComposition Composition;
+    const double Actual=Source->DebitVolumeInternal(ML, &Composition);
     if(Actual<=0)return 0;
     if(Packets.Num()>=MaxPackets)
     {
@@ -74,6 +76,7 @@ double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double
         P.RibbonVelocity=Source->PourRibbonVelocity;P.RibbonOffset=Source->PourRibbonOffset;
         P.Position=P.Origin+CyberCafeLiquid::RibbonDisplacement(0,P.RibbonAxis,P.RibbonVelocity,P.RibbonOffset);
     }
+    P.Composition = Composition;
     P.IgnoreActors.Add(Source);
     TArray<AActor*> Ignore;Source->GetPourTraceIgnoreActors(Ignore);
     if(Source->GetInstigator())Ignore.Add(Source->GetInstigator());
@@ -116,7 +119,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
         if(!A||!A->PourEntryPoint)continue;
         const FTransform Current=A->PourEntryPoint->GetComponentTransform();
         const FTransform* Previous=PreviousMouths.Find(Weak);
-        if(A->bAcceptLiquidFromOthers&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
+        if(A->bAcceptLiquidFromOthers&&!A->IsLiquidFrozen()&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
         PreviousMouths.Add(Weak,Current);
     }
     struct FAccepted{TWeakObjectPtr<ALiquidContainerActor> Source,Target;double ML;};
@@ -168,7 +171,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
             if(Target)
             {
                 const bool bEmpty=Target->GetPreciseVolumeML()<=0;
-                const double Received=Target->CreditVolumeInternal(P.VolumeML,P.Color);
+                const double Received=Target->CreditVolumeInternal(P.VolumeML,P.Color,&P.Composition);
                 SpilledML+=P.VolumeML-Received;
                 if(Received>0)
                 {

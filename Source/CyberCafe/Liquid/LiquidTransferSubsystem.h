@@ -2,6 +2,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Liquid/LiquidComposition.h"
 #include "LiquidTransferSubsystem.generated.h"
 class ALiquidContainerActor;
 class UMaterialInterface;
@@ -36,6 +37,7 @@ struct FLiquidPacket
     FVector RibbonAxis=FVector::ForwardVector;
     double RibbonVelocity=20, RibbonOffset=3;
     FLinearColor Color=FLinearColor::White;
+    UPROPERTY() FLiquidComposition Composition;
     UPROPERTY() TObjectPtr<UMaterialInterface> Material;
     UPROPERTY() TWeakObjectPtr<ALiquidContainerActor> Source;
     UPROPERTY() TArray<TWeakObjectPtr<AActor>> IgnoreActors;

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Tutorial/TutorialStep.h"
+#include "Serving/DrinkRecipe.h"
 #include "TutorialStep_WaitForServe.generated.h"
 
 class AServingSpotActor;
@@ -29,6 +30,9 @@ public:
     /** 可选：仅对该上菜点的事件响应；为空接受所有上菜点 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Step|WaitForServe")
     TObjectPtr<AServingSpotActor> RequiredSpot;
+    // @trace RC-04. Optional for older generic teaching steps.
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Tutorial|Step|WaitForServe")
+    TObjectPtr<UDrinkRecipe> RequiredRecipe;
 
     //~ Begin UTutorialStep
     virtual void EnterStep(ATutorialDirector* InDirector) override;
@@ -38,4 +42,11 @@ public:
 protected:
     UFUNCTION()
     void HandleDrinkServed(AServingSpotActor* ServingSpot, ALiquidContainerActor* Cup);
+    UFUNCTION()
+    void HandleDrinkValidated(AServingSpotActor* Spot, ALiquidContainerActor* Cup, const FDrinkValidationResult& Result);
+    bool bActive = false;
+    uint32 FeedbackSerial = 0;
+    uint32 OwnedOrderSerial = 0;
+    UPROPERTY(Transient) TWeakObjectPtr<UDrinkRecipe> PreviousRecipe;
+    bool bPreviousEnabled = true;
 };
