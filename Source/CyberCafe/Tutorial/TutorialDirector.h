@@ -19,11 +19,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTutorialFinishedSignature);
 /**
  * ATutorialDirector
  *
- * 教学流程导演：按顺序推进 StepClasses 列表里的所有 UTutorialStep。
+ * 教学流程导演：按顺序推进 Instanced Steps 列表里的所有 UTutorialStep。
  *
  * 工作流程：
  *   1) BeginPlay：
- *      - 为 StepClasses 中的每个类实例化一个 UTutorialStep
+ *      - 使用蓝图／关卡配置的内联 UTutorialStep 实例
  *      - 把 NarrativeHUDWidgetClass 注册到 UNarrativeSubsystem
  *      - 如果 bAutoStart = true，立即启动第一个 Step
  *   2) 启动 Step：
@@ -49,6 +49,7 @@ public:
 
     //~ Begin AActor
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     //~ End AActor
 
     /** 手动启动教学（bAutoStart = false 时用） */
@@ -108,6 +109,20 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Director")
     TSubclassOf<UNarrativeWidget> NarrativeHUDWidgetClass;
 
+    /** Editable identity; never inferred from dialogue text. Empty hides the name row. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Dialogue")
+    FText DialogueSpeakerName;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Dialogue")
+    bool bDialogueTypewriter = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Dialogue", meta = (ClampMin = "1.0", ClampMax = "120.0"))
+    float DialogueCharsPerSecond = 30.f;
+
+    /** Use NPCRef's HeadAnchor for spatial speech grains. No NPC reference means silent. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Dialogue")
+    bool bDialogueVoice = true;
+
     //=====================================================================
     // 跨 Step 共享状态
     //=====================================================================
@@ -138,6 +153,20 @@ protected:
 
     /** 向 NarrativeSubsystem 显示一段文本（内部封装 null 检查） */
     void ShowNarrative(const FText& InText, float AutoHideSeconds = 0.f);
+    void ShowDialogue(const FText& InText, float Speed, float AutoHideSeconds = 0.f);
+    void ScheduleAfterCheer();
+    void ClearActiveStep();
+    void RemoveFeedbackSubscription();
+
+    UFUNCTION()
+    void HandleFeedbackPresentationFinished();
+    void HandleOwnedFeedbackFinished(uint32 FinishedSerial);
+    FDelegateHandle FeedbackFinishedHandle;
+    FDelegateHandle FeedbackCancelledHandle;
+    uint32 OwnedFeedbackSerial = 0;
+
+    bool bWaitingForFeedback = false;
+    FTimerHandle StartTimerHandle;
 
     /** 当前正在进行的 Step 索引（-1 表示未开始 / 已结束） */
     UPROPERTY(Transient)
