@@ -4,6 +4,7 @@
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
 #include "Serving/ServingSpotActor.h"
+#include "Serving/OrderHologramActor.h"
 // @trace RC-04
 #include "Liquid/LiquidContainerActor.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
@@ -21,6 +22,8 @@ void UTutorialStep_WaitForServe::EnterStep(ATutorialDirector* InDirector)
         RequiredSpot->SetActiveRecipe(RequiredRecipe);
         RequiredSpot->SetSubmissionEnabled(true);
         OwnedOrderSerial = RequiredSpot->GetOrderSerial();
+        if (IsValid(OrderHologram) && IsValid(InDirector))
+            OrderHologram->BeginOrder(RequiredRecipe, RequiredSpot, InDirector->NPCRef, InDirector->DialogueSpeakerName);
         RequiredSpot->OnDrinkValidated.AddUniqueDynamic(this, &UTutorialStep_WaitForServe::HandleDrinkValidated);
     }
     if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
@@ -33,6 +36,7 @@ void UTutorialStep_WaitForServe::EnterStep(ATutorialDirector* InDirector)
 void UTutorialStep_WaitForServe::ExitStep()
 {
     bActive = false;
+    if (IsValid(OrderHologram)) OrderHologram->CancelOrder(RequiredSpot, OwnedOrderSerial);
     if (RequiredSpot && RequiredRecipe)
     {
         RequiredSpot->OnDrinkValidated.RemoveDynamic(this, &UTutorialStep_WaitForServe::HandleDrinkValidated);

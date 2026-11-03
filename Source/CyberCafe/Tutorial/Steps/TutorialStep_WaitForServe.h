@@ -33,6 +33,9 @@ public:
     // @trace RC-04. Optional for older generic teaching steps.
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Tutorial|Step|WaitForServe")
     TObjectPtr<UDrinkRecipe> RequiredRecipe;
+    // @trace HO-02. Optional, preserves older maps that have no display.
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Tutorial|Step|WaitForServe")
+    TObjectPtr<class AOrderHologramActor> OrderHologram;
 
     //~ Begin UTutorialStep
     virtual void EnterStep(ATutorialDirector* InDirector) override;
