@@ -15,6 +15,11 @@ FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
 {
     FDrinkValidationResult R;R.RecipeId=RecipeId;
     auto Fail=[&](EDrinkValidationReason Reason,const FString& Text){R.Reason=Reason;R.Feedback=FText::FromString(Text);return R;};
+    if(IsValid(Cup)&&Cup->IsBroken())
+    {
+        R.LiquidRevision=Cup->GetLiquidRevision();
+        return Fail(EDrinkValidationReason::Unavailable,TEXT("杯子已破碎，请换一只完整的杯子。"));
+    }
     double MinSum=0,MaxSum=0;TSet<FName> Ids;
     if(RecipeId.IsNone()||!FMath::IsFinite(TargetVolumeML)||!FMath::IsFinite(MinVolumeML)||!FMath::IsFinite(MaxVolumeML)||MinVolumeML<=0||MinVolumeML>TargetVolumeML||TargetVolumeML>MaxVolumeML||Rules.IsEmpty())
         return Fail(EDrinkValidationReason::InvalidRecipe,TEXT("当前订单配置有误，请检查配方。"));

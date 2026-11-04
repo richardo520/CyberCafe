@@ -97,6 +97,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Grab")
     bool TryRelease();
 
+    /** 破碎专用释放：不计算或施加投掷速度。 */
+    void ReleaseForBreak();
+
     /** 当前是否已被抓取 */
     UFUNCTION(BlueprintPure, Category = "Grab")
     bool IsHeld() const { return bIsHeld; }

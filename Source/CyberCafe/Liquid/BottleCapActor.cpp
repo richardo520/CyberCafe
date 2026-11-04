@@ -80,7 +80,7 @@ void ABottleCapActor::Tick(float DeltaTime)
 
     // 注：原地控制的位姿驱动已交给 UGrabComponent::TickComponent 统一处理（当 GrabComp->IsGrabbingInPlace() 为 true）
     // 此处仅保留"抓住但尚未拔下"状态下的拉出距离检测。
-    if (!bGrabbedButNotDetached || !GrabComp || !OwnerBottle || !OwnerBottle->ContainerMesh)
+    if (!bGrabbedButNotDetached || !GrabComp || !IsValid(OwnerBottle) || OwnerBottle->IsBroken() || !OwnerBottle->ContainerMesh)
     {
         return;
     }
@@ -106,7 +106,7 @@ void ABottleCapActor::Tick(float DeltaTime)
 
 void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
 {
-    if (!InBottle)
+    if (!IsValid(InBottle) || InBottle->IsBroken())
     {
         return;
     }
@@ -143,9 +143,35 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
     }
 }
 
+void ABottleCapActor::InvalidateBrokenBottle()
+{
+    const bool bWasAttached = bIsAttached;
+    if (IsValid(OwnerBottle) && OwnerBottle->ContainerMesh)
+        OwnerBottle->ContainerMesh->OnComponentHit.RemoveDynamic(this, &ABottleCapActor::HandleBottleHit);
+
+    // OnDropped 可能尝试回挂，必须先切断归属和附着状态。
+    if (bWasAttached) DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+    bIsAttached = false;
+    bGrabbedButNotDetached = false;
+    OwnerBottle = nullptr;
+    CapSocketName = NAME_None;
+    SetOwner(nullptr);
+    if (GrabComp) GrabComp->bAllowRemoteGrab = true;
+    if (bWasAttached)
+    {
+        if (GrabComp)
+        {
+            GrabComp->GrabType = EGrabType::None;
+            GrabComp->bAllowRemoteGrab = false;
+            GrabComp->ReleaseForBreak();
+        }
+        Destroy();
+    }
+}
+
 void ABottleCapActor::ReattachToBottle()
 {
-    if (!OwnerBottle)
+    if (!IsValid(OwnerBottle) || OwnerBottle->IsBroken())
     {
         return;
     }
@@ -189,7 +215,7 @@ void ABottleCapActor::ReattachToBottle()
 
 void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionController)
 {
-    if (!MotionController || !bGrabbedButNotDetached)
+    if (!MotionController || !bGrabbedButNotDetached || (OwnerBottle && OwnerBottle->IsBroken()))
     {
         return;
     }
@@ -265,7 +291,7 @@ void ABottleCapActor::HandleGrabbed()
 {
     // Custom 模式下 GrabComponent 不 Attach 也不关物理，我们在这里做"拔出前的准备"：
     // 只有在盖着状态下才进入"拉出拔盖"流程；若盖子已经掉下来后再次被抓，直接 Attach 到手
-    if (!GrabComp || !OwnerBottle)
+    if (!GrabComp || (OwnerBottle && OwnerBottle->IsBroken()))
     {
         return;
     }
@@ -323,7 +349,7 @@ void ABottleCapActor::HandleDropped()
     bGrabbedButNotDetached = false;
     // 注：原地控制标志 GrabComp->IsGrabbingInPlace() 已由 UGrabComponent::TryRelease 自动重置
 
-    if (!OwnerBottle)
+    if (!IsValid(OwnerBottle) || OwnerBottle->IsBroken())
     {
         // 没有归属瓶子——只能当独立物体落地
         if (CapMesh)
@@ -376,7 +402,7 @@ void ABottleCapActor::HandleBottleHit(UPrimitiveComponent* HitComp, AActor* Othe
     // 触发条件一层层校验：任何一条不满足都直接跳过
 
     // 1) 盖子必须还盖着（已经拔下就不用管了）
-    if (!bIsAttached || !OwnerBottle)
+    if (!bIsAttached || !IsValid(OwnerBottle) || OwnerBottle->IsBroken())
     {
         return;
     }
@@ -412,7 +438,7 @@ void ABottleCapActor::HandleBottleHit(UPrimitiveComponent* HitComp, AActor* Othe
 
 void ABottleCapActor::SlamOpenCap(const FVector& HitNormal)
 {
-    if (!OwnerBottle || !OwnerBottle->ContainerMesh || !CapMesh)
+    if (!IsValid(OwnerBottle) || OwnerBottle->IsBroken() || !OwnerBottle->ContainerMesh || !CapMesh)
     {
         return;
     }

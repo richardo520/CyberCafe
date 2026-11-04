@@ -123,6 +123,7 @@ void ALiquidContainerActor::BeginPlay()
 {
     Super::BeginPlay();
     InitializeLiquidState();
+    if (bBroken) return;
 
     // 从 LiquidFX 组件上反查美术配置的液体材质 Override，回填到 C++ 缓存，
     // 作为后续“倒液传材质 / 读取颜色”的唯一数据源。
@@ -169,6 +170,7 @@ void ALiquidContainerActor::Destroyed()
 void ALiquidContainerActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    if (bBroken) return;
 
     // 1) 根据容器运动状态实时调节液面波动
     UpdateDynamicWaves(DeltaTime);
@@ -231,6 +233,30 @@ FLiquidComposition ALiquidContainerActor::GetComposition() const
     return bLiquidStateInitialized ? Composition : FLiquidComposition::Pure(InitialIngredientId, GetPreciseVolumeML());
 }
 
+bool ALiquidContainerActor::BreakContainerForImpact()
+{
+    if (bLiquidFrozen || bBroken) return false;
+    // 先锁定破碎状态，结算完成后才通知外部，防止回调重入重复记账。
+    bBroken = true;
+    InitializeLiquidState();
+    const double RemainingML = CurrentVolumeML;
+    DebitVolumeInternal(RemainingML);
+    if (GetWorld())
+        if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
+            S->RecordSpilled(RemainingML);
+
+    bCanPour = false;
+    bAcceptLiquidFromOthers = false;
+    StopPouring();
+    if (PourFX)
+    {
+        PourFX->DeactivateImmediate();
+        PourFX->SetVisibility(false);
+    }
+    NotifyLiquidState();
+    return true;
+}
+
 void ALiquidContainerActor::FreezeLiquidForServing()
 {
     InitializeLiquidState();
@@ -257,7 +283,7 @@ double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidCom
 
 double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition)
 {
-    if (bLiquidFrozen) return 0;
+    if (bLiquidFrozen || bBroken) return 0;
     InitializeLiquidState();
     if (!FMath::IsFinite(RequestedML) || RequestedML <= 0 || !FMath::IsFinite(InColor.R) || !FMath::IsFinite(InColor.G) || !FMath::IsFinite(InColor.B) || !FMath::IsFinite(InColor.A)) return 0;
     const double Capacity = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.0;
@@ -282,7 +308,7 @@ void ALiquidContainerActor::NotifyLiquidState()
 
 void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
 {
-    if (bLiquidFrozen || !FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
+    if (bLiquidFrozen || bBroken || !FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
     if (!bLiquidStateInitialized)
     {
         // Construction/default setup changes capacity while retaining saved initial
@@ -300,6 +326,7 @@ void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
 
 float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
 {
+    if (bBroken) return 0;
     const double Actual = CreditVolumeInternal(DeltaML, InColor);
     if (Actual <= 0) return 0;
     if (GetWorld())
@@ -310,6 +337,7 @@ float ALiquidContainerActor::AddLiquid(float DeltaML, FLinearColor InColor)
 
 float ALiquidContainerActor::AddIngredientLiquid(float DeltaML, FName IngredientId, FLinearColor InColor)
 {
+    if (bBroken) return 0;
     const FLiquidComposition Added = FLiquidComposition::Pure(IngredientId, DeltaML);
     const double Actual = CreditVolumeInternal(DeltaML, InColor, &Added);
     if (Actual <= 0) return 0;
@@ -321,6 +349,7 @@ float ALiquidContainerActor::AddIngredientLiquid(float DeltaML, FName Ingredient
 
 float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
 {
+    if (bBroken) return 0;
     const double Actual = DebitVolumeInternal(DeltaML);
     if (Actual <= 0) return 0;
     if (GetWorld())
@@ -331,6 +360,17 @@ float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
 
 void ALiquidContainerActor::RefreshLiquidFX()
 {
+    if (bBroken)
+    {
+        FillAmount = 0.f;
+        if (LiquidFX)
+        {
+            LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"), 0.f);
+            LiquidFX->DeactivateImmediate();
+            LiquidFX->SetVisibility(false);
+        }
+        return;
+    }
     if (bLiquidStateInitialized)
         FillAmount = MaxVolumeML > 0.f ? static_cast<float>(FMath::Clamp(CurrentVolumeML / MaxVolumeML, 0.0, 1.0)) : 0.f;
     if (!LiquidFX)
@@ -452,7 +492,7 @@ void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
 
 void ALiquidContainerActor::InitLiquidFX()
 {
-    if (!LiquidFX)
+    if (bBroken || !LiquidFX)
     {
         return;
     }
@@ -659,6 +699,7 @@ float ALiquidContainerActor::ComputeCriticalTiltAngleDegrees() const
 
 void ALiquidContainerActor::StartPouring()
 {
+    if (bBroken) return;
     bIsPouring = true;
 
     if (PourFX)
@@ -709,7 +750,7 @@ void ALiquidContainerActor::StopPouring()
 
 void ALiquidContainerActor::UpdatePouring(float DeltaTime)
 {
-    if (!ContainerMesh)
+    if (bBroken || !ContainerMesh)
     {
         return;
     }
@@ -780,7 +821,7 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
 
 void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMaterial, bool bReadColor)
 {
-    if (!NewMaterial)
+    if (bBroken || !NewMaterial)
     {
         return;
     }
@@ -839,7 +880,7 @@ void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMateri
 
 void ALiquidContainerActor::EnsureLiquidMID(bool bForceRecreate)
 {
-    if (!LiquidFX || !LiquidMaterialAsset)
+    if (bBroken || !LiquidFX || !LiquidMaterialAsset)
     {
         return;
     }

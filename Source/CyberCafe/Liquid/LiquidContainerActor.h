@@ -119,6 +119,10 @@ public:
     bool IsLiquidFrozen() const { return bLiquidFrozen; }
     void FreezeLiquidForServing();
 
+    bool BreakContainerForImpact();
+    UFUNCTION(BlueprintPure, Category = "Liquid|Runtime")
+    bool IsBroken() const { return bBroken; }
+
     //=====================================================================
     // 组件
     //=====================================================================
@@ -512,6 +516,9 @@ public:
         UNiagaraSystem* NiagaraSystem,
         const FVector& SimulationPositionOffset) override;
 
+    // @trace GB-04. Set before BeginPlay only for an explicitly reclaimed new container.
+    UPROPERTY(Transient) bool bInitialVolumeIsReplacement = false;
+
 protected:
     friend class ULiquidTransferSubsystem;
     double DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition = nullptr);
@@ -525,6 +532,7 @@ protected:
     FLiquidComposition Composition;
     UPROPERTY(Transient) int32 LiquidRevision = 0;
     UPROPERTY(Transient) bool bLiquidFrozen = false;
+    UPROPERTY(Transient) bool bBroken = false;
 
     /**
      * 初始化 LiquidFX：只预写运行时表现参数（Fill / Opacity / Waves / Viscosity）。

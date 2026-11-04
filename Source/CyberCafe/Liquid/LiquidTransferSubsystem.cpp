@@ -40,7 +40,8 @@ void ULiquidTransferSubsystem::Deinitialize()
 void ULiquidTransferSubsystem::RegisterContainer(ALiquidContainerActor* A,double ML)
 {
     if(!A||Containers.Contains(A))return;
-    Containers.Add(A);InitialML+=ML;
+    Containers.Add(A);
+    if(A->bInitialVolumeIsReplacement)InjectedML+=ML;else InitialML+=ML;
     if(A->PourEntryPoint)PreviousMouths.Add(A,A->PourEntryPoint->GetComponentTransform());
 }
 void ULiquidTransferSubsystem::UnregisterContainer(ALiquidContainerActor* A,double ML)
@@ -61,7 +62,7 @@ double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double
     Source->InitializeLiquidState();
     const FLinearColor Color=Source->LiquidColor;
     UMaterialInterface* Material=Source->LiquidMaterialAsset;
-    if (Source->IsLiquidFrozen()) return 0;
+    if (Source->IsLiquidFrozen() || Source->IsBroken()) return 0;
     FLiquidComposition Composition;
     const double Actual=Source->DebitVolumeInternal(ML, &Composition);
     if(Actual<=0)return 0;
@@ -119,7 +120,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
         if(!A||!A->PourEntryPoint)continue;
         const FTransform Current=A->PourEntryPoint->GetComponentTransform();
         const FTransform* Previous=PreviousMouths.Find(Weak);
-        if(A->bAcceptLiquidFromOthers&&!A->IsLiquidFrozen()&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
+        if(A->bAcceptLiquidFromOthers&&!A->IsLiquidFrozen()&&!A->IsBroken()&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
         PreviousMouths.Add(Weak,Current);
     }
     struct FAccepted{TWeakObjectPtr<ALiquidContainerActor> Source,Target;double ML;};

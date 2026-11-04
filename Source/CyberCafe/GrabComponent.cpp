@@ -1,6 +1,10 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "GrabComponent.h"
+#include "Character/VRPawn.h"
+#include "Liquid/LiquidContainerActor.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "MotionControllerComponent.h"
@@ -144,6 +148,8 @@ UPrimitiveComponent* UGrabComponent::GetOwnerPrimitive() const
 
 bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
 {
+    const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(GetOwner());
+    if (Container && Container->IsBroken()) return false;
     // 参数与状态校验
     if (MotionController == nullptr || GrabType == EGrabType::None)
     {
@@ -154,6 +160,7 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
     
     if (!bIsHeld || TryRelease())
     {
+        if (Container && Container->IsBroken()) return false;
         // 内部执行抓取动作
         PerformGrab(MotionController);
 
@@ -177,6 +184,7 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
                 }
             }
             OnGrabbed.Broadcast();
+            if (!bIsHeld || MotionControllerRef != MotionController || (Container && Container->IsBroken())) return false;
 
             // 向全局事件总线广播：便于教学 Director / 成就 / 统计等上层模块
             // 统一订阅
@@ -185,7 +193,7 @@ bool UGrabComponent::TryGrab(UMotionControllerComponent* MotionController)
                 Sys->OnAnyObjectGrabbed.Broadcast(GetOwner(), GetHeldByHand());
             }
 
-            return true;
+            return bIsHeld && MotionControllerRef == MotionController && (!Container || !Container->IsBroken());
         }
     }
     return false;
@@ -274,8 +282,45 @@ void UGrabComponent::PerformGrab(UMotionControllerComponent* MotionController)
     }
 }
 
+void UGrabComponent::ReleaseForBreak()
+{
+    const bool bWasHeld = bIsHeld;
+    const bool bWasPulled = bIsPulled;
+    bIsPulled = false;
+    bIsHeld = false;
+    bDetachedInPlace = false;
+    TeardownPhysicsHandle();
+    SetComponentTickEnabled(false);
+    ThrowSamples.Reset();
+
+    // 还原手部需要原控制器，不能先清 MotionControllerRef。
+    if (bWasHeld && IsValid(MotionControllerRef) && IsValid(HandMesh))
+        TryReleaseHandMesh();
+    if (AActor* OwnerActor = GetOwner())
+        OwnerActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+    if ((bWasHeld || bWasPulled) && bSimulateOnDrop)
+        SetPrimitiveCompPhysics(true);
+
+    MotionControllerRef = nullptr;
+    HandMesh = nullptr;
+    PrimaryGrabComponent = nullptr;
+    PrimaryGrabRelativeRotation = FRotator::ZeroRotator;
+    HeldRelativeToController = FTransform::Identity;
+    CachedHandLocationTransform = FTransform::Identity;
+    // Pull 阶段没有控制器引用；悬停引用也可能属于另一只手或另一 Pawn。
+    if (GetWorld())
+        for (TActorIterator<AVRPawn> It(GetWorld()); It; ++It)
+            It->ForgetGrabForBreak(this);
+    if (bWasHeld) OnDropped.Broadcast();
+}
+
 bool UGrabComponent::TryRelease()
 {
+    if (const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(GetOwner()); Container && Container->IsBroken())
+    {
+        ReleaseForBreak();
+        return true;
+    }
     // 释放前，先把当前的手柄位姿作为"最后一帧"补录到采样缓冲，
     // 这样即使 Tick 与 TryRelease 之间还有半帧偏差也能覆盖到。
     // 注意：只补录不清空，真正的速度计算在下面。
@@ -370,6 +415,8 @@ bool UGrabComponent::TryRelease()
 
 bool UGrabComponent::TryPull(EControllerHand ByHand)
 {
+    const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(GetOwner());
+    if (Container && Container->IsBroken()) return false;
     // 若本组件配置为"不允许远程抓取"，则直接拒绝拉拽。
     // 用于 Spawn 出来的子部件（瓶盖、研磨器把手/抽屉等），避免被远程召唤到手上导致异常表现。
     if (!bAllowRemoteGrab)
@@ -400,7 +447,7 @@ bool UGrabComponent::TryPull(EControllerHand ByHand)
         Sys->OnAnyObjectPulled.Broadcast(GetOwner(), ByHand);
     }
 
-    return true;
+    return bIsPulled && (!Container || !Container->IsBroken());
 }
 
 void UGrabComponent::StopPull()

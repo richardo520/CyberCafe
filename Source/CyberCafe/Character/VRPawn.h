@@ -286,6 +286,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "VR|Grab")
     bool TryGrabRight(UGrabComponent* GrabComponent);
 
+    /** 仅清除此组件对应的双手抓取、拉拽和悬停引用。 */
+    void ForgetGrabForBreak(UGrabComponent* GrabComponent);
+
     /**
      * 找到MotionController附近的GrabComponent中最近的一个。
      * 对应蓝图 GetGrabComponentNearMotionController。

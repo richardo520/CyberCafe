@@ -159,6 +159,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Cap")
     void ReattachToBottle();
 
+    /** 破碎时解除瓶盖归属；仍附着的盖子释放抓取后销毁，独立盖子保留。 */
+    void InvalidateBrokenBottle();
+
     /**
      * "拔下来"：将盖子 Attach 到 MotionController，关物理，标记 bIsAttached=false，
      * 通知瓶子解锁倒液。

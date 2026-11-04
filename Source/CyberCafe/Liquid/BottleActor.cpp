@@ -42,6 +42,7 @@ ABottleActor::ABottleActor()
 void ABottleActor::BeginPlay()
 {
     Super::BeginPlay();
+    if (IsBroken()) return;
 
     // 开启瓶身刚体的碰撞通知：这样 UPrimitiveComponent::OnComponentHit 才会派发。
     // BottleCapActor 需要监听瓶身 Hit 事件以实现"砸桌开盖"。
@@ -76,6 +77,7 @@ void ABottleActor::BeginPlay()
 
 void ABottleActor::OnCapAttached()
 {
+    if (IsBroken()) return;
     bIsCapped = true;
     // 盖着不能倒
     bCanPour = false;
@@ -88,6 +90,7 @@ void ABottleActor::OnCapAttached()
 
 void ABottleActor::OnCapDetached()
 {
+    if (IsBroken()) return;
     bIsCapped = false;
     // 解锁倒液（基类 Tick 会自动判定倾角）
     bCanPour = true;
@@ -95,6 +98,7 @@ void ABottleActor::OnCapDetached()
 
 void ABottleActor::StartPouring()
 {
+    if (IsBroken()) return;
     // 先执行基类流程（激活 PourFX、写入 User 参数、置 bIsPouring）
     Super::StartPouring();
 

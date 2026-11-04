@@ -66,7 +66,7 @@ void AServingSpotActor::Tick(float DeltaSeconds)
         return;
     }
 
-    if (!IsInServingArea(Cup)) { CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1; return; }
+    if (Cup->IsBroken() || !IsInServingArea(Cup)) { CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1; return; }
     // Picking up re-arms the submission; never force a release to serve a cup.
     if (Cup->IsHeld())
     { StableElapsed = 0; ObservedRevision = -1; if (LastAttemptCup.Get() == Cup) LastAttemptRevision = -1; return; }
@@ -81,7 +81,7 @@ void AServingSpotActor::Tick(float DeltaSeconds)
 
 bool AServingSpotActor::IsCupAcceptable(ALiquidContainerActor* Cup) const
 {
-    if (!Cup)
+    if (!IsValid(Cup) || Cup->IsBroken())
     {
         return false;
     }
@@ -186,7 +186,7 @@ bool AServingSpotActor::TrySubmitCup(ALiquidContainerActor* Cup)
         return false;
     }
     // No asynchronous bool or old timer may lock a changed cup/changed order.
-    if (Serial != OrderSerial || Recipe != ActiveRecipe || !bAcceptSubmissions || Cup->IsHeld() || !IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision) return false;
+    if (Serial != OrderSerial || Recipe != ActiveRecipe || !bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || !IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision) return false;
     AcceptedOrderSerial = Serial;
     Cup->FreezeLiquidForServing();
     PerformServe(Cup);
@@ -195,7 +195,7 @@ bool AServingSpotActor::TrySubmitCup(ALiquidContainerActor* Cup)
 
 void AServingSpotActor::PerformServe(ALiquidContainerActor* Cup)
 {
-    if (!Cup)
+    if (!IsValid(Cup) || Cup->IsBroken())
     {
         return;
     }

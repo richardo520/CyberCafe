@@ -32,6 +32,7 @@
 
 #include "Blueprint/UserWidget.h"
 #include "GrabComponent.h"
+#include "Liquid/LiquidContainerActor.h"
 #include "VRFunctionLibrary.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Components/MeshComponent.h"
@@ -550,6 +551,34 @@ bool AVRPawn::TryGrabRight(UGrabComponent* GrabComponent)
     return false;
 }
 
+void AVRPawn::ForgetGrabForBreak(UGrabComponent* GrabComponent)
+{
+    if (!GrabComponent) return;
+    if (HeldComponentLeft == GrabComponent)
+    {
+        HeldComponentLeft = nullptr;
+        HideUnhideHand(false, false);
+    }
+    if (HeldComponentRight == GrabComponent)
+    {
+        HeldComponentRight = nullptr;
+        HideUnhideHand(true, false);
+    }
+    if (PulledGrabComponentLeft == GrabComponent) PulledGrabComponentLeft = nullptr;
+    if (PulledGrabComponentRight == GrabComponent) PulledGrabComponentRight = nullptr;
+    if (TargetGrabComponentLeft == GrabComponent)
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentLeft);
+    if (TargetGrabComponentRight == GrabComponent)
+        UpdateTargetGrabComponent(nullptr, TargetGrabComponentRight);
+    MarkForGrab(GrabComponent, false);
+    if (AActor* Actor = GrabComponent->GetOwner())
+    {
+        TArray<UMeshComponent*> Meshes;
+        Actor->GetComponents<UMeshComponent>(Meshes);
+        for (UMeshComponent* Mesh : Meshes) HighlightMIDs.Remove(Mesh);
+    }
+}
+
 UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerComponent* MotionController, UGrabComponent* TargetGrabComponent) const
 {
     if (MotionController == nullptr)
@@ -557,6 +586,11 @@ UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerC
         return nullptr;
     }
     
+    if (TargetGrabComponent)
+    {
+        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(TargetGrabComponent->GetOwner());
+        if (Container && Container->IsBroken()) TargetGrabComponent = nullptr;
+    }
     if (TargetGrabComponent)
     {
         FVector TargetGrabLocation = TargetGrabComponent->GetComponentLocation();
@@ -606,6 +640,8 @@ UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerC
             continue;
         }
 
+        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(HitActor);
+        if (Container && Container->IsBroken()) continue;
         TArray<UGrabComponent*> Grabs;
         HitActor->GetComponents<UGrabComponent>(Grabs);
         for (UGrabComponent* G : Grabs)
@@ -639,6 +675,11 @@ UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* Mo
 {
     if (TargetGrabComponent)
     {
+        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(TargetGrabComponent->GetOwner());
+        if (Container && Container->IsBroken()) TargetGrabComponent = nullptr;
+    }
+    if (TargetGrabComponent)
+    {
         return TargetGrabComponent;
     }
     
@@ -655,6 +696,8 @@ UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* Mo
         {
             return nullptr;
         }
+        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(HitActor);
+        if (Container && Container->IsBroken()) return nullptr;
         return Grab;
     }
     return nullptr;
@@ -667,6 +710,12 @@ bool AVRPawn::UpdatePulledObject(UGrabComponent* InGrabComponent, UMotionControl
         return false;
     }
 
+    const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(InGrabComponent->GetOwner());
+    if (Container && Container->IsBroken())
+    {
+        InGrabComponent->ReleaseForBreak();
+        return false;
+    }
     // 简化：当拉拽距离足够接近手时，转为正式抓取
     const FVector HandLoc = InMotionController->GetComponentLocation();
     const FVector ObjLoc = InGrabComponent->GetOwner()->GetActorLocation();
@@ -685,6 +734,11 @@ bool AVRPawn::UpdatePulledObject(UGrabComponent* InGrabComponent, UMotionControl
 
 void AVRPawn::UpdateTargetGrabComponent(UGrabComponent* NewTarget,TObjectPtr<UGrabComponent>& TargetGrabComponent)
 {
+    if (NewTarget)
+    {
+        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(NewTarget->GetOwner());
+        if (Container && Container->IsBroken()) NewTarget = nullptr;
+    }
     if (NewTarget == TargetGrabComponent)
     {
         return;
@@ -746,6 +800,8 @@ void AVRPawn::MarkForGrab(UGrabComponent* InGrabComponent, bool bCanBeGrab)
         return;
     }
 
+    if (const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(OwnerActor); Container && Container->IsBroken())
+        bCanBeGrab = false;
     // 1) 材质内 Fresnel 高亮（主途径，支持半透明玻璃杯等）
     ApplyHighlightToActor(OwnerActor, bCanBeGrab);
 
