@@ -2,6 +2,7 @@
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/BottleActor.h"
 #include "Liquid/BottleCapActor.h"
+#include "Liquid/IceInteraction.h"
 #include "GrabComponent.h"
 #include "Character/VRPawn.h"
 #include "Components/StaticMeshComponent.h"
@@ -42,7 +43,8 @@ bool UGlassBreakableComponent::TryImpact(const FVector& Contact,const FVector& N
 {
  ALiquidContainerActor* A=Container.Get();if(!A)A=Cast<ALiquidContainerActor>(GetOwner());
  if(!A||!Profile||Age<StartupGraceSeconds||GraceRemaining>0||Contact.ContainsNaN()||A->IsBroken()||A->IsLiquidFrozen())return false;
- if(Other==A||Cast<APawn>(Other)||Cast<ALiquidContainerActor>(Other)||Cast<ABottleCapActor>(Other)||Cast<AGlassDebrisActor>(Other))return false;
+ // @trace IC-04. Ice and the dedicated scoop cannot shatter a glass during normal filling.
+ if(Other==A||Cast<AIceCubeActor>(Other)||Cast<AIceScoopActor>(Other)||Cast<APawn>(Other)||Cast<ALiquidContainerActor>(Other)||Cast<ABottleCapActor>(Other)||Cast<AGlassDebrisActor>(Other))return false;
  if(A->GrabComp && A->GrabComp->IsPulled())return false;
  const float Speed=ClosingSpeed(Velocity,Normal);
  if(CVarGlassDebug.GetValueOnGameThread()>0)DrawDebugString(GetWorld(),Contact,FString::Printf(TEXT("Glass %.0f / %.0f cm/s"),Speed,Profile->BreakSpeedCms),nullptr,FColor::Orange,1.f);
@@ -51,6 +53,7 @@ bool UGlassBreakableComponent::TryImpact(const FVector& Contact,const FVector& N
  const FTransform Body=A->ContainerMesh->GetComponentTransform();
  UMotionControllerComponent* Hand=A->GrabComp?A->GrabComp->GetHoldingController():nullptr;
  if(!A->BreakContainerForImpact())return false;
+ if(auto* CupIce=A->FindComponentByClass<UCupIceComponent>())CupIce->ReleaseAll();
  if(Hand){if(auto* Pawn=Cast<AVRPawn>(Hand->GetOwner()))if(auto* PC=Cast<APlayerController>(Pawn->GetController()))if(Pawn->HoverHapticEffect)PC->PlayHapticEffect(Pawn->HoverHapticEffect,A->GrabComp->GetHeldByHand(),.8f,false);}
  // Disconnect caps before release broadcasts; attached cap goes with broken bottle,
  // detached cap survives without ever snapping back to an invalid container.
