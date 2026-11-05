@@ -57,6 +57,9 @@ public:
  UPROPERTY(BlueprintReadOnly) EIceState State=EIceState::Free;
  UPROPERTY(BlueprintReadOnly) TObjectPtr<UCupIceComponent> CupIce;
  UPROPERTY(BlueprintReadOnly) TObjectPtr<AIceScoopActor> Scoop;
+ // @trace RS-02. Retained origin for selective cleanup; never erase unrelated ice.
+ UPROPERTY(Transient) TWeakObjectPtr<ACupActor> LastCupSource;
+ UPROPERTY(Transient) TWeakObjectPtr<AIceScoopActor> LastScoopSource;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float RadiusCM=1.25f;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float FreeLifetimeSeconds=12.f;
  FVector LocalVelocity=FVector::ZeroVector;
@@ -89,6 +92,8 @@ public:
  UFUNCTION(BlueprintPure) int32 GetLoadedCount() const;
  UFUNCTION(BlueprintCallable) bool TryLoadFromBucket();
  UFUNCTION(BlueprintCallable) bool ReleaseOne();
+ // @trace RS-03 只复位本铲，不改桶、抓取组件或音效引用。
+ UFUNCTION(BlueprintCallable) bool ResetForWorkbench(FTransform SavedPose);
 private:
  UPROPERTY() TArray<TObjectPtr<AIceCubeActor>> Loaded;
  bool bBucketArmed=true;

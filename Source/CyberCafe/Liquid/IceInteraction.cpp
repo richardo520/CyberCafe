@@ -13,6 +13,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/StrongObjectPtr.h"
 
 namespace
 {
@@ -245,6 +246,7 @@ bool UCupIceComponent::TryAccept(AIceCubeActor* Ice, const FVector& Previous, co
     Ice->Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Ice->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
     Ice->CupIce = this;
+    Ice->LastCupSource=Cup;
     Ice->Scoop = nullptr;
     Ice->State = EIceState::InCup;
     Ice->SetOwner(nullptr);
@@ -497,6 +499,7 @@ void AIceCubeActor::PlaceInScoop(AIceScoopActor* OwnerScoop, FVector LocalPositi
     if (IsValid(CupIce.Get())) CupIce->RemoveIce(this);
     CupIce = nullptr;
     Scoop = OwnerScoop;
+    LastScoopSource=OwnerScoop;
     State = EIceState::InScoop;
     FreeAge = 0.f;
     LocalVelocity = FVector::ZeroVector;
@@ -737,6 +740,38 @@ bool AIceScoopActor::ReleaseOne()
     Ice->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
     Ice->SetActorLocation(Lip, false, nullptr, ETeleportType::TeleportPhysics);
     Ice->ReleaseToWorld(SafeVelocity(FrameVelocity) + GetActorForwardVector() * 90.f);
+    return true;
+}
+
+// @trace RS-03
+bool AIceScoopActor::ResetForWorkbench(FTransform SavedPose)
+{
+    if (IsActorBeingDestroyed() || !IsValid(Mesh.Get()) || !IsUsableTransform(SavedPose)
+        || (IsValid(Grab.Get()) && (Grab->IsHeld() || Grab->IsPulled()))) return false;
+    TStrongObjectPtr<AIceScoopActor> Self(this);
+    const TArray<TObjectPtr<AIceCubeActor>> Disposing = MoveTemp(Loaded);
+    Loaded.Reset();
+    // 只销毁仍归本铲所有的装载冰，不能释放成新的散冰，也不能误删已入杯的冰。
+    for (const TObjectPtr<AIceCubeActor>& Item : Disposing)
+    {
+        AIceCubeActor* Ice = Item.Get();
+        if (IsValid(Ice) && !Ice->IsActorBeingDestroyed()
+            && Ice->State == EIceState::InScoop && Ice->Scoop.Get() == this) Ice->Destroy();
+    }
+    if (!IsValid(this) || IsActorBeingDestroyed() || !IsValid(Mesh.Get())) return false;
+    Mesh->SetSimulatePhysics(false);
+    DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+    SetActorTransform(SavedPose, false, nullptr, ETeleportType::TeleportPhysics);
+    Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+    Mesh->SetEnableGravity(true);
+    if (Mesh->GetStaticMesh()) Mesh->SetSimulatePhysics(true);
+    Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+    Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+    bBucketArmed = false;
+    ReleaseCountdown = 0.f;
+    PreviousPosition = Mesh->GetComponentLocation();
+    FrameVelocity = FVector::ZeroVector;
     return true;
 }
 

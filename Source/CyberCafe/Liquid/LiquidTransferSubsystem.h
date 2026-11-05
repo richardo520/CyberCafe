@@ -55,12 +55,20 @@ public:
     virtual void Deinitialize() override;
     void RegisterContainer(ALiquidContainerActor* Container,double InitialVolume);
     void UnregisterContainer(ALiquidContainerActor* Container,double RemainingVolume);
+    // 仅限主游戏线程；预检不校验数组、不修改状态。
+    bool CanPrepareWorkbenchRestore() const { return !bSimulating; }
+    // false 表示未修改：正在结算、无世界，或任一目标无效/跨世界/冻结。
+    // true 仅锁定旧容器并取消其来源包；manager 随后 Destroy，由 Unregister 记 Removed。
+    // 不清余液、容量、成分；新容器须在初始化/BeginPlay 前标记 replacement。
+    // 未取消来源仍在途；新杯接液隔离由 manager 覆盖剩余 BirthDelay + 3 秒模拟时间。
+    bool PrepareWorkbenchRestore(const TArray<ALiquidContainerActor*>& ContainersToRestore);
     void RecordInjected(double ML){InjectedML+=ML;}
     void RecordRemoved(double ML){RemovedML+=ML;}
     void RecordSpilled(double ML){SpilledML+=ML;}
     double EmitVolume(ALiquidContainerActor* Source,double RequestedML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay=0,const FTransform* RibbonTransform=nullptr);
     void EmitPour(ALiquidContainerActor* Source,double DeltaTime,const FTransform& PourTransform);
     void Simulate(double DeltaTime);
+    double GetUnsettledFlightHorizon() const;
     UFUNCTION(BlueprintPure,Category="Liquid|Debug") FLiquidBalance GetBalance() const;
 private:
     UPROPERTY() TArray<FLiquidPacket> Packets;

@@ -4,7 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "Engine/DataAsset.h"
 #include "GlassBreakableComponent.generated.h"
-class ALiquidContainerActor;
+class ALiquidContainerActor;class ABottleCapActor;
 class UStaticMesh;class USoundBase;class UPrimitiveComponent;class AGlassRecoveryActor;
 USTRUCT(BlueprintType)
 struct FGlassShardSpec
@@ -37,6 +37,8 @@ public:
  virtual void EndPlay(const EEndPlayReason::Type Reason) override;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) TObjectPtr<UGlassBreakProfile> Profile;
  UPROPERTY(BlueprintAssignable) FOnGlassBroken OnBroken;
+ // @trace GBX-01 保留断开归属的盖子身份，恢复时只清理本容器的配套物。
+ UPROPERTY() TWeakObjectPtr<ABottleCapActor> RelatedCap;
  UFUNCTION(BlueprintCallable) bool TryImpact(const FVector& Contact,const FVector& Normal,const FVector& PreImpactVelocity,AActor* OtherActor=nullptr);
  static float ClosingSpeed(const FVector& Velocity,const FVector& Normal);
  UPROPERTY(EditAnywhere) float StartupGraceSeconds=.6f;
@@ -55,6 +57,8 @@ class CYBERCAFE_API AGlassDebrisActor:public AActor
  GENERATED_BODY()
 public:
  AGlassDebrisActor();
+ // @trace GBX-01 弱身份可在原容器 Destroy 后用于限定碎片清理。
+ UPROPERTY() TWeakObjectPtr<ALiquidContainerActor> SourceContainer;
  void Initialize(UGlassBreakProfile* Profile,const FTransform& Body,const FVector& Contact,const FVector& Velocity,const FVector& Normal,double SpilledML=0,FLinearColor LiquidColor=FLinearColor::White);
  virtual void Tick(float Dt) override;
 private:

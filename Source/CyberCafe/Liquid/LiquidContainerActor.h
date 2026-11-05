@@ -17,6 +17,7 @@ class UNiagaraSystem;
 class USceneComponent;
 class UMaterialInstanceDynamic;
 class ULiquidTransferSubsystem;
+class UGlassBreakProfile;
 
 /**
  * 液体变化事件
@@ -92,6 +93,10 @@ class CYBERCAFE_API ALiquidContainerActor : public AActor, public INiagaraPartic
 
 public:
     ALiquidContainerActor();
+    // @trace GBX-01. Optional per-blueprint profile; native or unconfigured props stay intact.
+    UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category="Glass Breakage") TObjectPtr<UGlassBreakProfile> GlassBreakProfile;
+    // @trace RS-03. Replacements reject pre-restore unrelated in-flight packages briefly.
+    UPROPERTY(Transient) float RestoreReceiveCooldown=0.f;
 
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

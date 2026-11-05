@@ -141,6 +141,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "ServingSpot")
     void ResetServing();
 
+    // 主游戏线程、销毁前调用；只忘记同世界待恢复非冻结 ACupActor。
+    // 不重置订单、不广播、不清理 ServedCup；允许失败验收回调重入。
+    void ForgetRestoredContainers(const TArray<ALiquidContainerActor*>& ContainersToRestore);
+
 protected:
     /** Overlap 开始：记录候选杯子 */
     UFUNCTION()
@@ -177,5 +181,6 @@ private:
     uint32 OrderSerial = 0;
     uint32 AcceptedOrderSerial = 0;
     float StableElapsed = 0;
+    UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> CommittingCup;
     bool bCommitting = false;
 };

@@ -6,6 +6,7 @@
 #include "Components/StaticMeshComponent.h"
 // @trace RC-03 RC-05
 #include "Liquid/LiquidContainerActor.h"
+#include "Liquid/CupActor.h"
 #include "GrabComponent.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
 #include "Engine/World.h"
@@ -166,17 +167,21 @@ void AServingSpotActor::SetSubmissionEnabled(bool bEnabled)
 
 bool AServingSpotActor::HasAcceptedCup(const ALiquidContainerActor* Cup, FName RecipeId) const
 {
-    return bHasBeenServed && ServedCup.Get() == Cup && LastValidation.bAccepted && LastValidation.RecipeId == RecipeId;
+    return IsValid(Cup) && bHasBeenServed && ServedCup.Get() == Cup && LastValidation.bAccepted && LastValidation.RecipeId == RecipeId;
 }
 
 bool AServingSpotActor::TrySubmitCup(ALiquidContainerActor* Cup)
 {
     if (!bAcceptSubmissions || bCommitting || (bHasBeenServed && bOneShot) || !IsCupAcceptable(Cup) || !IsInServingArea(Cup) || Cup->IsHeld() || Cup->IsLiquidFrozen() || Cup->bIsPouring) return false;
     TGuardValue<bool> Guard(bCommitting, true);
-    if (!ActiveRecipe) { PerformServe(Cup); return bHasBeenServed && ServedCup.Get() == Cup; }
+    const TWeakObjectPtr<ALiquidContainerActor> SubmissionCup(Cup);
+    TGuardValue<TWeakObjectPtr<ALiquidContainerActor>> CupGuard(CommittingCup, SubmissionCup);
+    if (!ActiveRecipe) { PerformServe(Cup); return SubmissionCup.IsValid() && bHasBeenServed && ServedCup == SubmissionCup; }
     const uint32 Serial = OrderSerial;
     UDrinkRecipe* Recipe = ActiveRecipe;
     const FDrinkValidationResult Result = Recipe->Evaluate(Cup);
+    Cup = SubmissionCup.Get();
+    if (!IsValid(this) || !Cup || CommittingCup != SubmissionCup) return false;
     const bool bNewAttempt = LastAttemptCup.Get() != Cup || LastAttemptRevision != Result.LiquidRevision;
     LastAttemptCup = Cup; LastAttemptRevision = Result.LiquidRevision;
     LastValidation = Result;
@@ -187,10 +192,12 @@ bool AServingSpotActor::TrySubmitCup(ALiquidContainerActor* Cup)
     }
     // No asynchronous bool or old timer may lock a changed cup/changed order.
     if (Serial != OrderSerial || Recipe != ActiveRecipe || !bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || !IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision) return false;
-    AcceptedOrderSerial = Serial;
     Cup->FreezeLiquidForServing();
+    Cup = SubmissionCup.Get();
+    if (!IsValid(this) || !Cup || CommittingCup != SubmissionCup) return false;
+    AcceptedOrderSerial = Serial;
     PerformServe(Cup);
-    return bHasBeenServed && ServedCup.Get() == Cup;
+    return SubmissionCup.IsValid() && bHasBeenServed && ServedCup == SubmissionCup;
 }
 
 void AServingSpotActor::PerformServe(ALiquidContainerActor* Cup)
@@ -201,6 +208,7 @@ void AServingSpotActor::PerformServe(ALiquidContainerActor* Cup)
     }
 
     if (Cup->IsHeld()) return;
+    const TWeakObjectPtr<ALiquidContainerActor> ServingCup(Cup);
     // Never take a cup away from a player's hand, even during an explicit submission.
 
     // 2) 关闭杯身物理 + 碰撞，防止吸附后被玩家再次抓起或被别的物体撞飞
@@ -208,9 +216,15 @@ void AServingSpotActor::PerformServe(ALiquidContainerActor* Cup)
     {
         if (UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(Cup->GetRootComponent()))
         {
+            const TWeakObjectPtr<UPrimitiveComponent> Body(Root);
             Root->SetSimulatePhysics(false);
+            Cup = ServingCup.Get();
+            Root = Body.Get();
+            if (!IsValid(this) || !Cup || !Root || (bCommitting && CommittingCup != ServingCup)) return;
             Root->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         }
+        Cup = ServingCup.Get();
+        if (!IsValid(this) || !Cup || (bCommitting && CommittingCup != ServingCup)) return;
 
         // 禁止远程/近距抓取（防御：即便没关碰撞也抓不到）
         if (UGrabComponent* GrabComp = Cup->FindComponentByClass<UGrabComponent>())
@@ -221,27 +235,66 @@ void AServingSpotActor::PerformServe(ALiquidContainerActor* Cup)
         }
     }
 
+    Cup = ServingCup.Get();
+    if (!IsValid(this) || !Cup || Cup->IsBroken() || Cup->IsHeld() || (bCommitting && CommittingCup != ServingCup)) return;
+
     // 3) 瞬移吸附：Attach 到 SceneRoot 并对齐世界 Transform
     //    SnapToTarget 规则会把杯子的位置/朝向直接 = SceneRoot 的位置/朝向
     const FAttachmentTransformRules AttachRule(EAttachmentRule::SnapToTarget,
         EAttachmentRule::SnapToTarget, EAttachmentRule::KeepWorld, /*bWeld=*/false);
     Cup->AttachToComponent(SceneRoot, AttachRule);
+    Cup = ServingCup.Get();
+    if (!IsValid(this) || !Cup || Cup->IsBroken() || Cup->IsHeld() || (bCommitting && CommittingCup != ServingCup)) return;
 
     // 4) 更新状态
     bHasBeenServed = true;
     ServedCup = Cup;
     CandidateCup.Reset();
 
-    // Result is committed before either callback; only accepted submissions emit success.
-    if (ActiveRecipe && LastValidation.bAccepted) OnDrinkValidated.Broadcast(this, Cup, LastValidation);
+    // 回调使用结果快照；恢复/销毁回调后不可继续使用旧裸指针。
+    const FDrinkValidationResult Validation = LastValidation;
+    if (ActiveRecipe && Validation.bAccepted) OnDrinkValidated.Broadcast(this, Cup, Validation);
+    Cup = ServingCup.Get();
+    if (!IsValid(this) || !Cup) return;
     // 5) 广播全局事件
     if (UCyberCafeEventSubsystem* Sys = UCyberCafeEventSubsystem::Get(this))
     {
         Sys->OnDrinkServed.Broadcast(this, Cup);
     }
 
+    Cup = ServingCup.Get();
+    if (!IsValid(this) || !Cup) return;
     UE_LOG(LogTemp, Log, TEXT("[ServingSpot] Served cup %s on spot %s"),
         *Cup->GetName(), *GetName());
+}
+
+void AServingSpotActor::ForgetRestoredContainers(const TArray<ALiquidContainerActor*>& ContainersToRestore)
+{
+    check(IsInGameThread());
+    TSet<TWeakObjectPtr<ALiquidContainerActor>> RestoredCups;
+    for(ALiquidContainerActor* A:ContainersToRestore)
+    {
+        if(!IsValid(A)||A->IsActorBeingDestroyed()||A->GetWorld()!=GetWorld()||A->IsLiquidFrozen())continue;
+        ACupActor* Cup=Cast<ACupActor>(A);
+        if(!Cup)continue;
+        const TWeakObjectPtr<ALiquidContainerActor> Key(Cup);
+        if(Key!=ServedCup)RestoredCups.Add(Key);
+    }
+    // 按对象身份清缓存；无关候选的稳定时间、已验收结果与订单均保留。
+    if(RestoredCups.Contains(CandidateCup))
+    {
+        CandidateCup.Reset();
+        StableElapsed=0;
+        ObservedRevision=-1;
+    }
+    if(RestoredCups.Contains(LastAttemptCup))
+    {
+        LastAttemptCup.Reset();
+        LastAttemptRevision=-1;
+        if(!LastValidation.bAccepted)LastValidation=FDrinkValidationResult();
+    }
+    // 即使在吸附/失败回调中恢复，也不得继续提交被忘记的旧杯。
+    if(RestoredCups.Contains(CommittingCup))CommittingCup.Reset();
 }
 
 void AServingSpotActor::ResetServing()

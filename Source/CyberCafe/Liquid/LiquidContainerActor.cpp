@@ -3,6 +3,7 @@
 // @trace LQ-01 LQ-02 LQ-05
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
+#include "Liquid/GlassBreakableComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
@@ -124,6 +125,11 @@ void ALiquidContainerActor::BeginPlay()
     Super::BeginPlay();
     InitializeLiquidState();
     if (bBroken) return;
+    if (GlassBreakProfile && !FindComponentByClass<UGlassBreakableComponent>())
+    {
+        auto* Breakable=NewObject<UGlassBreakableComponent>(this);
+        Breakable->Profile=GlassBreakProfile;AddInstanceComponent(Breakable);Breakable->RegisterComponent();
+    }
 
     // 从 LiquidFX 组件上反查美术配置的液体材质 Override，回填到 C++ 缓存，
     // 作为后续“倒液传材质 / 读取颜色”的唯一数据源。
@@ -170,6 +176,7 @@ void ALiquidContainerActor::Destroyed()
 void ALiquidContainerActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    RestoreReceiveCooldown=FMath::Max(0.f,RestoreReceiveCooldown-DeltaTime);
     if (bBroken) return;
 
     // 1) 根据容器运动状态实时调节液面波动

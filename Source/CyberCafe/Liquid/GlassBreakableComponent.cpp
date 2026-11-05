@@ -57,7 +57,7 @@ bool UGlassBreakableComponent::TryImpact(const FVector& Contact,const FVector& N
  if(Hand){if(auto* Pawn=Cast<AVRPawn>(Hand->GetOwner()))if(auto* PC=Cast<APlayerController>(Pawn->GetController()))if(Pawn->HoverHapticEffect)PC->PlayHapticEffect(Pawn->HoverHapticEffect,A->GrabComp->GetHeldByHand(),.8f,false);}
  // Disconnect caps before release broadcasts; attached cap goes with broken bottle,
  // detached cap survives without ever snapping back to an invalid container.
- if(auto* Bottle=Cast<ABottleActor>(A)){if(Bottle->CapActor)Bottle->CapActor->InvalidateBrokenBottle();Bottle->CapActor=nullptr;Bottle->bIsCapped=false;}
+ if(auto* Bottle=Cast<ABottleActor>(A)){RelatedCap=Bottle->CapActor;if(Bottle->CapActor)Bottle->CapActor->InvalidateBrokenBottle();Bottle->CapActor=nullptr;Bottle->bIsCapped=false;}
  if(A->GrabComp)A->GrabComp->ReleaseForBreak();
  for(TActorIterator<AVRPawn> I(GetWorld());I;++I)I->ForgetGrabForBreak(A->GrabComp);
  A->ContainerMesh->SetSimulatePhysics(false);A->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -66,7 +66,7 @@ bool UGlassBreakableComponent::TryImpact(const FVector& Contact,const FVector& N
  for(UActorComponent* C:A->GetComponents())if(auto* W=Cast<UWidgetComponent>(C))W->SetVisibility(false);
  if(Profile->BreakSound)UGameplayStatics::PlaySoundAtLocation(this,Profile->BreakSound,Contact,.7f);
  FActorSpawnParameters Params;Params.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
- if(auto* Debris=GetWorld()->SpawnActor<AGlassDebrisActor>(AGlassDebrisActor::StaticClass(),FTransform::Identity,Params))Debris->Initialize(Profile,Body,Contact,Velocity,Normal,SpilledVolume,SpilledColor);
+ if(auto* Debris=GetWorld()->SpawnActor<AGlassDebrisActor>(AGlassDebrisActor::StaticClass(),FTransform::Identity,Params)){Debris->SourceContainer=A;Debris->Initialize(Profile,Body,Contact,Velocity,Normal,SpilledVolume,SpilledColor);}
  SetComponentTickEnabled(false);OnBroken.Broadcast(A);return true;
 }
 void UGlassBreakableComponent::HandleHit(UPrimitiveComponent*,AActor* Other,UPrimitiveComponent* OtherComp,FVector,const FHitResult& Hit)

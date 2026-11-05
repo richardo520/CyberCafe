@@ -49,12 +49,69 @@ void ULiquidTransferSubsystem::UnregisterContainer(ALiquidContainerActor* A,doub
     if(Containers.Remove(A)>0){RemovedML+=ML;PreviousMouths.Remove(A);}
     // The source's already emitted packets survive its destruction.
 }
+bool ULiquidTransferSubsystem::PrepareWorkbenchRestore(const TArray<ALiquidContainerActor*>& ContainersToRestore)
+{
+    if(bSimulating)return false;
+    check(IsInGameThread());
+    const UWorld* World=GetWorld();
+    if(!World)return false;
+
+    TSet<TWeakObjectPtr<ALiquidContainerActor>> Sources;
+    struct FRestoreSource
+    {
+        TWeakObjectPtr<ALiquidContainerActor> Actor;
+        TWeakObjectPtr<UNiagaraComponent> PourFX;
+    };
+    TArray<FRestoreSource> RestoreSources;
+    for(ALiquidContainerActor* A:ContainersToRestore)
+    {
+        if(!IsValid(A)||A->IsActorBeingDestroyed()||A->GetWorld()!=World||A->IsLiquidFrozen())return false;
+        const TWeakObjectPtr<ALiquidContainerActor> Key(A);
+        if(Sources.Contains(Key))continue;
+        Sources.Add(Key);
+        RestoreSources.Add({Key,A->PourFX.Get()});
+    }
+
+    // 全量校验后先提交；FX 组件回调期间拒绝 Simulate/恢复重入。
+    TGuardValue<bool> Guard(bSimulating,true);
+    for(const FRestoreSource& Source:RestoreSources)
+    {
+        ALiquidContainerActor* A=Source.Actor.Get();
+        check(A);
+        A->bCanPour=false;
+        A->bAcceptLiquidFromOthers=false;
+        A->bIsPouring=false;
+    }
+    for(FLiquidPacket& P:Packets)
+    {
+        // 按弱指针身份匹配，不把失效 Source.Get()==nullptr 当作匹配。
+        if(!Sources.Contains(P.Source))continue;
+        SpilledML+=P.VolumeML;
+        P.VolumeML=0;
+    }
+    Packets.RemoveAll([&Sources](const FLiquidPacket& P){return Sources.Contains(P.Source);});
+
+    // 所有液体状态已提交；限定基类调用，避开子类 virtual 事件。
+    // StopPouring/Deactivate 仍可能触发组件回调，之后只重新解析快照。
+    for(const FRestoreSource& Source:RestoreSources)
+    {
+        if(ALiquidContainerActor* A=Source.Actor.Get())A->ALiquidContainerActor::StopPouring();
+        if(UNiagaraComponent* FX=Source.PourFX.Get())FX->DeactivateImmediate();
+    }
+    return true;
+}
 FLiquidBalance ULiquidTransferSubsystem::GetBalance() const
 {
     FLiquidBalance B;B.InitialML=InitialML;B.InjectedML=InjectedML;B.RemovedML=RemovedML;B.SpilledML=SpilledML;
     for(const auto& Weak:Containers)if(const ALiquidContainerActor* A=Weak.Get())B.ContainerML+=A->GetPreciseVolumeML();
     for(const FLiquidPacket& P:Packets)B.InFlightML+=P.VolumeML;
     B.PacketCount=Packets.Num();B.ErrorML=B.InitialML+B.InjectedML-B.RemovedML-B.ContainerML-B.InFlightML-B.SpilledML;return B;
+}
+double ULiquidTransferSubsystem::GetUnsettledFlightHorizon() const
+{
+    double Horizon=0;
+    for(const FLiquidPacket& P:Packets)if(P.VolumeML>0)Horizon=FMath::Max(Horizon,FMath::Max(0.0,P.BirthDelay)+FMath::Max(0.0,3.0-P.Age)+.02);
+    return Horizon;
 }
 double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double ML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay,const FTransform* RibbonTransform)
 {
@@ -120,7 +177,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
         if(!A||!A->PourEntryPoint)continue;
         const FTransform Current=A->PourEntryPoint->GetComponentTransform();
         const FTransform* Previous=PreviousMouths.Find(Weak);
-        if(A->bAcceptLiquidFromOthers&&!A->IsLiquidFrozen()&&!A->IsBroken()&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
+        if(A->bAcceptLiquidFromOthers&&!A->IsLiquidFrozen()&&!A->IsBroken()&&A->RestoreReceiveCooldown<=0&&A->PourEntryRadius>0)Mouths.Add({A,Previous?*Previous:Current,Current,A->PourEntryRadius});
         PreviousMouths.Add(Weak,Current);
     }
     struct FAccepted{TWeakObjectPtr<ALiquidContainerActor> Source,Target;double ML;};
