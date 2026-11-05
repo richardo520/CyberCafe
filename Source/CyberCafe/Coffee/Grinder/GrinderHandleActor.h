@@ -61,8 +61,8 @@ public:
     /**
      * 手偏出旋转半径的最大容差 (cm)。
      * 计算手柄相对挂点的水平投影长度 |Local.XY|，若与设计半径 HandleArmRadius 相差
-     * 超过 MaxHandOffset，则视为"玩家的手已经跑掉"，自动 TryRelease() 松手。
-     * <= 0 表示不检查。
+     * 原字段保留以兼容蓝图。采样改用实际臂长的 0.4~2.8 倍半径和死区，
+     * 跟踪异常只重建基准，不立即自动松手。
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config", meta = (ClampMin = "0.0"))
     float MaxHandOffset;
@@ -92,7 +92,20 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config")
     int32 EffectiveDirectionSign;
 
-    /** 转动触觉反馈（可选，抓着把手转动时可以周期性播放，让玩家感受"咔哒" */
+    /** 轴心死区与跟踪保护；运行时也校验，不能靠蓝图绕过上限。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config", meta = (ClampMin = "1.0"))
+    float DeadRadiusCM = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config", meta = (ClampMin = "0.1", ClampMax = "35.0"))
+    float MaxTrackingJumpCM = 35.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config", meta = (ClampMin = "1.0", ClampMax = "1200.0"))
+    float MaxAngularSpeedDegPerSecond = 1200.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Config", meta = (ClampMin = "1.2", ClampMax = "180.0"))
+    float MinEffectiveAngleDeg = 1.2f;
+
+    /** 转动触觉反馈（可选，抓着把手转动时可以周期性播放，让玩家感受"咔哒"） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Handle|Feedback")
     TObjectPtr<UHapticFeedbackEffect_Base> TurnHaptic;
 
@@ -136,7 +149,22 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Handle")
     void AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp);
 
+    /** 输入是 HandleMountPoint 局部位置；首帧仅立基准，true 表示样本有效。无需实际抓取，便于原生测试。 */
+    UFUNCTION(BlueprintCallable, Category = "Handle")
+    bool ApplyHandSample(const FVector& LocalHand, float Dt);
+
 protected:
+    void ResetHandSampling();
+    void SanitizeSamplingProperties();
+
+    FVector LastHandLocal = FVector::ZeroVector;
+    double DeltaBudgetDeg = 0.0;
+    double DeltaBudgetTime = 0.0;
+    double VisualAngleDeg = 0.0;
+    bool bLastOneWayEffective = true;
+    int32 LastEffectiveDirectionSign = 1;
+    TWeakObjectPtr<UMotionControllerComponent> LastHoldingController;
+
     /** GrabComp 广播回调 */
     UFUNCTION()
     void HandleGrabbed();

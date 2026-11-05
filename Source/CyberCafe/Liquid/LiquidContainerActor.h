@@ -124,6 +124,10 @@ public:
     bool IsLiquidFrozen() const { return bLiquidFrozen; }
     void FreezeLiquidForServing();
 
+    // @trace CF-03. Default is identity; brewing may relabel a transferred portion
+    // without increasing its volume or independently injecting liquid.
+    virtual void PrepareTransferredLiquid(FLiquidComposition& Portion,FLinearColor& Color) {}
+    virtual UMaterialInterface* GetTransferredMaterial(const FLiquidComposition& Portion) const {return LiquidMaterialAsset.Get();}
     bool BreakContainerForImpact();
     UFUNCTION(BlueprintPure, Category = "Liquid|Runtime")
     bool IsBroken() const { return bBroken; }

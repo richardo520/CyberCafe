@@ -2,9 +2,15 @@
 
 #include "Coffee/Grinder/GrinderDrawerActor.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
+#include "Coffee/Brew/HandDripperActor.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
 #include "GrabComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "UObject/ConstructorHelpers.h"
 #include "MotionControllerComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -14,6 +20,7 @@
 AGrinderDrawerActor::AGrinderDrawerActor()
 {
     PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.TickGroup = TG_PostPhysics;
 
     // 抽屉 Mesh 作为 Root。默认 Attached 状态下关物理；Detach 后再开
     DrawerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DrawerMesh"));
@@ -28,6 +35,13 @@ AGrinderDrawerActor::AGrinderDrawerActor()
     GroundPileMesh->SetSimulatePhysics(false);
     GroundPileMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     GroundPileMesh->SetVisibility(false);
+    PowderStream=CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PowderStream"));
+    PowderStream->SetupAttachment(DrawerMesh);PowderStream->SetCollisionEnabled(ECollisionEnabled::NoCollision);PowderStream->SetCastShadow(false);
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> Grain(TEXT("/Engine/BasicShapes/Sphere.Sphere"));PowderStream->SetStaticMesh(Grain.Object);
+
+    GroundPourPoint = CreateDefaultSubobject<USceneComponent>(TEXT("GroundPourPoint"));
+    GroundPourPoint->SetupAttachment(DrawerMesh);
+    GroundPourPoint->SetRelativeLocation(FVector(0.f, 6.f, 2.f));
 
     // Custom 抓取：由本类手动维护滑动 / 拔出 / 落地
     GrabComp = CreateDefaultSubobject<UGrabComponent>(TEXT("GrabComp"));
@@ -82,10 +96,13 @@ void AGrinderDrawerActor::BeginPlay()
         GrabComp->OnDropped.AddDynamic(this, &AGrinderDrawerActor::HandleDropped);
     }
 
-    // 缓存粉堆初始缩放，后续只改 Z
+    SanitizeGroundProperties();
+    // 缓存完整基准；平移模式不压缩网格，抓取组件在本 Actor 查询之前更新位姿。
+    if (GrabComp) { AddTickPrerequisiteComponent(GrabComp); }
     if (GroundPileMesh)
     {
         GroundPileInitialScale = GroundPileMesh->GetRelativeScale3D();
+        GroundPileInitialLocation = GroundPileMesh->GetRelativeLocation();
     }
     UpdateGroundPileVisual();
 }
@@ -96,8 +113,13 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     {
         return;
     }
+    if (OwnerGrinder && OwnerGrinder != InOwner)
+    {
+        OwnerGrinder->OnGrindProgress.RemoveDynamic(this, &AGrinderDrawerActor::OnGrinderGrindProgress);
+    }
     OwnerGrinder = InOwner;
     MountRef = MountComp;
+    if (DrawerMesh) { DrawerMesh->SetSimulatePhysics(false); }
 
     // 将本抽屉的 OnGrinderGrindProgress 回调绑定到主体的 OnGrindProgress，
     // 这样每次主体 ProcessGrinding 产出粉后，抽屉能自动搬粉并刷新可视化。
@@ -131,6 +153,7 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
 
     // 恢复与主体的正常碰撞（初始挂上时保险起见清一次）
     SetIgnoreCollisionWithGrinder(false);
+    OnGrinderGrindProgress(OwnerGrinder->GetCurrentBeanGrams(), OwnerGrinder->GetCurrentGroundGrams());
 }
 
 void AGrinderDrawerActor::ReattachToGrinder()
@@ -171,6 +194,7 @@ void AGrinderDrawerActor::ReattachToGrinder()
 
     // 恢复与主体之间的正常碰撞（拔出期间通过 SetIgnoreCollisionWithGrinder(true) 忽略过）
     SetIgnoreCollisionWithGrinder(false);
+    OnGrinderGrindProgress(OwnerGrinder->GetCurrentBeanGrams(), OwnerGrinder->GetCurrentGroundGrams());
 }
 
 void AGrinderDrawerActor::DetachFromGrinder(UMotionControllerComponent* MotionController)
@@ -371,7 +395,19 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // 只有 Attached 状态下才需要"手驱动滑动"逻辑
+    SanitizeGroundProperties();
+    LastPouredGroundGrams = 0.f;
+    LastAcceptedGroundGrams = 0.f;
+    if(PowderStream)PowderStream->ClearInstances();
+    // 绝不自动触发自由落地/无人持有抽屉的倒粉。
+    if (State == EDrawerState::Detached && GrabComp && GrabComp->IsHeld())
+    {
+        PourGrounds(DeltaTime);
+        UpdatePowderStream(DeltaTime);
+        PourSoundCooldown=FMath::Max(0.f,PourSoundCooldown-DeltaTime);
+        if(LastPouredGroundGrams>0&&GroundPourSound&&PourSoundCooldown<=0){UGameplayStatics::PlaySoundAtLocation(this,GroundPourSound,LastGroundPourOrigin,.5f);PourSoundCooldown=.4f;}
+        return;
+    }
     if (State != EDrawerState::Attached)
     {
         return;
@@ -426,46 +462,147 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
 // 粉 抽取 & 可视化
 //=====================================================================
 
-void AGrinderDrawerActor::OnGrinderGrindProgress(float /*BeanGramsLeft*/, float GroundGramsInGrinder)
+void AGrinderDrawerActor::SanitizeGroundProperties()
 {
-    // 只有 Attached 状态才能接粉：抽屉拔出去了就不再受益，产出会留在研磨器内，
-    // 下次抽屉吸回 (Reattach) 后会因为征月发送的 GroundGramsInGrinder 一直在增而一次性同步。
-    if (State != EDrawerState::Attached || !OwnerGrinder || GroundGramsInGrinder <= KINDA_SMALL_NUMBER)
-    {
-        return;
-    }
+    DrawerCapacityGrams = FMath::IsFinite(DrawerCapacityGrams) ? FMath::Max(DrawerCapacityGrams, 0.f) : 0.f;
+    CurrentGroundGrams = FMath::IsFinite(CurrentGroundGrams) ? FMath::Max(CurrentGroundGrams, 0.f) : 0.f;
+    GroundPourRateGramsPerSecond = FMath::IsFinite(GroundPourRateGramsPerSecond) ? FMath::Max(GroundPourRateGramsPerSecond, 0.f) : 0.f;
+    PourTiltDegrees = FMath::IsFinite(PourTiltDegrees) ? FMath::Clamp(PourTiltDegrees, 0.f, 89.f) : 45.f;
+    GroundPourTraceDistanceCM = FMath::IsFinite(GroundPourTraceDistanceCM) ? FMath::Clamp(GroundPourTraceDistanceCM, 20.f, 40.f) : 40.f;
+    GroundPileDepthCM = FMath::IsFinite(GroundPileDepthCM) ? FMath::Max(GroundPileDepthCM, 0.f) : 1.8f;
+    checkSlow(CurrentGroundGrams >= 0.f && DrawerCapacityGrams >= 0.f);
+}
 
+void AGrinderDrawerActor::OnGrinderGrindProgress(float /*BeanGramsLeft*/, float /*GroundGramsInGrinder*/)
+{
+    SanitizeGroundProperties();
+    // 直接读取真实留存，Attach/Reattach 也调用；满屉不 Drain，不再次广播。
+    if (State != EDrawerState::Attached || !OwnerGrinder) { return; }
     const float Space = FMath::Max(DrawerCapacityGrams - CurrentGroundGrams, 0.f);
-    if (Space <= KINDA_SMALL_NUMBER)
-    {
-        return;
-    }
-
+    if (Space <= 0.f) { return; }
     const float Drawn = OwnerGrinder->DrainGround(Space);
     if (Drawn > 0.f)
     {
-        CurrentGroundGrams = FMath::Min(CurrentGroundGrams + Drawn, DrawerCapacityGrams);
+        // 不用显示/容量 clamp 丢掉已从主体扣除的质量。
+        CurrentGroundGrams += Drawn;
         UpdateGroundPileVisual();
     }
 }
 
+float AGrinderDrawerActor::AddGrounds(float G)
+{
+    SanitizeGroundProperties();
+    if (!FMath::IsFinite(G) || G <= 0.f) { return 0.f; }
+    const float Space = FMath::Max(DrawerCapacityGrams - CurrentGroundGrams, 0.f);
+    const float Before = CurrentGroundGrams;
+    CurrentGroundGrams += FMath::Min(G, Space);
+    UpdateGroundPileVisual();
+    return CurrentGroundGrams - Before;
+}
+
+float AGrinderDrawerActor::RemoveGrounds(float G)
+{
+    SanitizeGroundProperties();
+    if (!FMath::IsFinite(G) || G <= 0.f) { return 0.f; }
+    const float Before = CurrentGroundGrams;
+    CurrentGroundGrams = FMath::Max(0.f, CurrentGroundGrams - FMath::Min(G, CurrentGroundGrams));
+    UpdateGroundPileVisual();
+    return Before - CurrentGroundGrams;
+}
+
+float AGrinderDrawerActor::PourGrounds(float Dt)
+{
+    LastPouredGroundGrams = 0.f;
+    LastAcceptedGroundGrams = 0.f;
+    SanitizeGroundProperties();
+    UWorld* World = GetWorld();
+    if (!World || !DrawerMesh || !GroundPourPoint || !FMath::IsFinite(Dt) || Dt <= 0.f || CurrentGroundGrams <= 0.f)
+    {
+        return 0.f;
+    }
+    const FVector Down = -FVector::UpVector;
+    const float UpDot = static_cast<float>(FVector::DotProduct(DrawerMesh->GetUpVector(), FVector::UpVector));
+    // UE 的 ForwardVector 是 +X，这里的口沿方向明确取网格局部 +Y。
+    const FVector TipAxis = DrawerMesh->GetComponentQuat().RotateVector(FVector::YAxisVector);
+    const float TipDown = static_cast<float>(FVector::DotProduct(TipAxis, Down));
+    const float Threshold = FMath::Cos(FMath::DegreesToRadians(PourTiltDegrees));
+    if (UpDot >= Threshold || TipDown <= 0.3f) { return 0.f; }
+    const FVector Origin = GroundPourPoint->GetComponentLocation();
+    const FVector End = Origin + Down * GroundPourTraceDistanceCM;
+    if (Origin.ContainsNaN() || End.ContainsNaN()) { return 0.f; }
+    const double Want = static_cast<double>(GroundPourRateGramsPerSecond) * Dt * FMath::Clamp(TipDown, 0.f, 1.f);
+    const float Requested = static_cast<float>(FMath::Min(Want, static_cast<double>(CurrentGroundGrams)));
+    if (Requested <= 0.f) { return 0.f; }
+
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(GrinderGroundPour), false, this);
+    Params.AddIgnoredActor(GetOwner());
+    if (OwnerGrinder) { Params.AddIgnoredActor(OwnerGrinder); }
+    for (TActorIterator<APawn> It(World); It; ++It) { Params.AddIgnoredActor(*It); }
+    // 本帧最早物理障碍先决定可达距离。不是先选一个最近 Actor 再隔空找入口。
+    FHitResult PhysicalHit;
+    const bool bBlocked = World->LineTraceSingleByChannel(PhysicalHit, Origin, End, ECC_Visibility, Params);
+    const double ObstacleDistance = bBlocked ? PhysicalHit.Distance : GroundPourTraceDistanceCM;
+    AHandDripperActor* Target = nullptr;
+    FVector EntryHit = End;
+    double NearestDistance = GroundPourTraceDistanceCM + 1.0;
+    for (TActorIterator<AHandDripperActor> It(World); It; ++It)
+    {
+        AHandDripperActor* Dripper = *It;
+        if (!IsValid(Dripper) || !Dripper->PourEntryPoint || !FMath::IsFinite(Dripper->PourEntryRadius) || Dripper->PourEntryRadius <= 0.f)
+        {
+            continue;
+        }
+        const FTransform EntryTransform = Dripper->PourEntryPoint->GetComponentTransform();
+        const FVector Center = EntryTransform.GetLocation();
+        const FVector Normal = Dripper->PourEntryPoint->GetUpVector();
+        if (Center.ContainsNaN() || Normal.ContainsNaN() || EntryTransform.GetScale3D().GetAbs().GetMin() <= UE_SMALL_NUMBER) { continue; }
+        const double StartAbove = FVector::DotProduct(Origin - Center, Normal);
+        const double Approach = FVector::DotProduct(Down, Normal);
+        if (StartAbove <= 0.0 || Approach >= -UE_SMALL_NUMBER) { continue; }
+        const double Distance = -StartAbove / Approach;
+        if (Distance < 0.0 || Distance > GroundPourTraceDistanceCM || Distance >= NearestDistance) { continue; }
+        const FVector Hit = Origin + Down * Distance;
+        const FVector LocalHit = EntryTransform.InverseTransformPosition(Hit);
+        const double Radius = Dripper->PourEntryRadius;
+        if (LocalHit.ContainsNaN() || LocalHit.X * LocalHit.X + LocalHit.Y * LocalHit.Y > Radius * Radius) { continue; }
+        if (bBlocked && ObstacleDistance + 0.01 < Distance) { continue; }
+        // 即使最近入口拒收，也不穿透它改投第二个滤杯。
+        Target = Dripper;
+        EntryHit = Hit;
+        NearestDistance = Distance;
+    }
+    LastGroundPourOrigin = Origin;
+    LastGroundPourEnd = Target ? EntryHit : (bBlocked ? PhysicalHit.ImpactPoint : End);
+    const float Dropped = RemoveGrounds(Requested);
+    float Accepted = 0.f;
+    if (Target && Dropped > 0.f && Target->CanReceiveGrounds())
+    {
+        const float Result = Target->AddGrounds(Dropped, EntryHit);
+        Accepted = FMath::IsFinite(Result) ? FMath::Clamp(Result, 0.f, Dropped) : 0.f;
+    }
+    SpilledGroundGrams += static_cast<double>(Dropped) - Accepted;
+    LastPouredGroundGrams = Dropped;
+    LastAcceptedGroundGrams = Accepted;
+    return Dropped;
+}
+
+void AGrinderDrawerActor::UpdatePowderStream(float Dt)
+{
+    if(!PowderStream)return;PowderStream->ClearInstances();
+    if(LastPouredGroundGrams<=0||!FMath::IsFinite(Dt))return;
+    PowderVisualAge+=FMath::Max(0.f,Dt);
+    for(int I=0;I<24;++I){const float T=FMath::Frac(PowderVisualAge*2.3f+I/24.f);FVector P=FMath::Lerp(LastGroundPourOrigin,LastGroundPourEnd,T);P.X+=FMath::Sin(I*2.1f)*.35;P.Y+=FMath::Cos(I*2.7f)*.35;PowderStream->AddInstance(FTransform(FQuat::Identity,P,FVector(.0017)),true);}
+}
 void AGrinderDrawerActor::UpdateGroundPileVisual()
 {
-    if (!GroundPileMesh)
-    {
-        return;
-    }
-    const float Ratio = (DrawerCapacityGrams > KINDA_SMALL_NUMBER)
-        ? FMath::Clamp(CurrentGroundGrams / DrawerCapacityGrams, 0.f, 1.f)
-        : 0.f;
-    if (Ratio <= 0.001f)
-    {
-        GroundPileMesh->SetVisibility(false);
-        return;
-    }
-    GroundPileMesh->SetVisibility(true);
-    FVector NewScale = GroundPileInitialScale;
-    NewScale.Z = GroundPileInitialScale.Z * Ratio;
-    GroundPileMesh->SetRelativeScale3D(NewScale);
+    if (!GroundPileMesh) { return; }
+    const float Ratio = DrawerCapacityGrams > 0.f ? FMath::Clamp(CurrentGroundGrams / DrawerCapacityGrams, 0.f, 1.f) : 0.f;
+    FVector Location = GroundPileInitialLocation;
+    FVector Scale = GroundPileInitialScale;
+    if (bTranslateGroundPile) { Location.Z -= GroundPileDepthCM * (1.f - Ratio); }
+    else { Scale.Z *= Ratio; }
+    GroundPileMesh->SetRelativeLocation(Location);
+    GroundPileMesh->SetRelativeScale3D(Scale);
+    GroundPileMesh->SetVisibility(CurrentGroundGrams > 0.f);
 }
 

@@ -7,6 +7,7 @@
 #include "GrinderDrawerActor.generated.h"
 
 class UStaticMeshComponent;
+class UInstancedStaticMeshComponent;
 class USceneComponent;
 class UGrabComponent;
 class UMotionControllerComponent;
@@ -60,6 +61,14 @@ public:
      */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
     TObjectPtr<UStaticMeshComponent> GroundPileMesh;
+
+    /** 实际出粉口，局部 +Y 是倾倒方向；蓝图按真实口沿摆放。 */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
+    TObjectPtr<USceneComponent> GroundPourPoint;
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Drawer|Feedback") TObjectPtr<UInstancedStaticMeshComponent> PowderStream;
+    float PowderVisualAge=0,PourSoundCooldown=0;
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Drawer|Feedback") TObjectPtr<USoundBase> GroundPourSound;
+    void UpdatePowderStream(float Dt);
 
     /** 抓取组件（EGrabType::Custom） */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drawer|Components")
@@ -119,6 +128,22 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Grind", meta = (ClampMin = "0.0"))
     float DrawerCapacityGrams;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour", meta = (ClampMin = "0.0"))
+    float GroundPourRateGramsPerSecond = 8.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+    float PourTiltDegrees = 45.f;
+
+    /** 每次查询从实际出粉口沿世界向下，禁止远距离吸粉。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour", meta = (ClampMin = "20.0", ClampMax = "40.0"))
+    float GroundPourTraceDistanceCM = 40.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Grind")
+    bool bTranslateGroundPile = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Grind", meta = (ClampMin = "0.0"))
+    float GroundPileDepthCM = 1.8f;
+
     //=====================================================================
     // 运行时
     //=====================================================================
@@ -150,7 +175,24 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     float CurrentGroundGrams;
 
-    /** GroundPileMesh 在编辑器里配好的初始 RelativeScale3D，运行时在此基础上缩 Z */
+    /** 离开抽屉但未被最近滤杯接纳的粉量，包括未命中、湿粉/满杯拒收。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    double SpilledGroundGrams = 0.0;
+
+    /** 本次实际出粉/接纳量与路径；表现端只能读取，不参与重量结算。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    float LastPouredGroundGrams = 0.f;
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    float LastAcceptedGroundGrams = 0.f;
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    FVector LastGroundPourOrigin = FVector::ZeroVector;
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    FVector LastGroundPourEnd = FVector::ZeroVector;
+
+    UPROPERTY(Transient)
+    FVector GroundPileInitialLocation = FVector::ZeroVector;
+
+    /** GroundPileMesh 原始缩放；位移模式始终保持网格形状。 */
     UPROPERTY(Transient)
     FVector GroundPileInitialScale;
 
@@ -184,7 +226,22 @@ public:
     UFUNCTION()
     void OnGrinderGrindProgress(float BeanGramsLeft, float GroundGramsInGrinder);
 
+    UFUNCTION(BlueprintCallable, Category = "Drawer|Grind")
+    float AddGrounds(float G);
+
+    UFUNCTION(BlueprintCallable, Category = "Drawer|Grind")
+    float RemoveGrounds(float G);
+
+    /** 返回实际离开抽屉的克数。无需持有/状态前提，但仍须倾斜；Tick 仅 Detached 且持有时调用。 */
+    UFUNCTION(BlueprintCallable, Category = "Drawer|Pour")
+    float PourGrounds(float Dt);
+
+    UFUNCTION(BlueprintPure, Category = "Drawer|Grind")
+    float GetGroundsGrams() const { return CurrentGroundGrams; }
+
 protected:
+    void SanitizeGroundProperties();
+
     UFUNCTION()
     void HandleGrabbed();
 

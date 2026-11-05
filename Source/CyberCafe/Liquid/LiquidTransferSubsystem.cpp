@@ -117,12 +117,16 @@ double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double
 {
     if(!IsValid(Source)||!FMath::IsFinite(ML)||ML<=0||Position.ContainsNaN()||Velocity.ContainsNaN()||Gravity.ContainsNaN())return 0;
     Source->InitializeLiquidState();
-    const FLinearColor Color=Source->LiquidColor;
+    FLinearColor Color=Source->LiquidColor;
     UMaterialInterface* Material=Source->LiquidMaterialAsset;
     if (Source->IsLiquidFrozen() || Source->IsBroken()) return 0;
     FLiquidComposition Composition;
     const double Actual=Source->DebitVolumeInternal(ML, &Composition);
     if(Actual<=0)return 0;
+    Source->PrepareTransferredLiquid(Composition,Color);
+    Material=Source->GetTransferredMaterial(Composition);
+    if(!FMath::IsFinite(Composition.Total())||FMath::Abs(Composition.Total()-Actual)>1.e-6||!FMath::IsFinite(Color.R)||!FMath::IsFinite(Color.G)||!FMath::IsFinite(Color.B)||!FMath::IsFinite(Color.A))
+    {SpilledML+=Actual;Source->NotifyLiquidState();return Actual;}
     if(Packets.Num()>=MaxPackets)
     {
         SpilledML+=Actual;Source->NotifyLiquidState();return Actual;
