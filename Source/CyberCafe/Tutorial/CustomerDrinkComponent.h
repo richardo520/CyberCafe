@@ -20,6 +20,7 @@ public:
  UFUNCTION(BlueprintPure) double GetConsumedML() const{return ConsumedML;}
  UFUNCTION(BlueprintPure) float GetElapsedSeconds() const{return Elapsed;}
  UFUNCTION(BlueprintPure) ALiquidContainerActor* GetDrinkingCup() const{return ActiveCup.Get();}
+ UFUNCTION(BlueprintPure,Category="Customer|Diagnostics") FString GetLastStartFailureReason() const{return LastStartFailureReason;}
  UPROPERTY(EditAnywhere,BlueprintReadWrite) bool bEnabled=false;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) TObjectPtr<UCustomerDrinkMotion> Motion;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) TObjectPtr<UAnimSequence> IdleAnimation;
@@ -31,6 +32,7 @@ private:
  UPROPERTY(Transient) TWeakObjectPtr<AServingSpotActor> ActiveSpot;
  UPROPERTY(Transient) TWeakObjectPtr<USkeletalMeshComponent> Mesh;
  TSet<TWeakObjectPtr<ALiquidContainerActor>> UsedCups;
+ FString LastStartFailureReason;
  FTransform OriginalCupTransform,StartMeshTransform;
  FVector StartOffset=FVector::ZeroVector;
  uint32 OrderSerial=0;float Elapsed=0;double ConsumedML=0;bool bActive=false,bSipPlayed=false,bFinishing=false;

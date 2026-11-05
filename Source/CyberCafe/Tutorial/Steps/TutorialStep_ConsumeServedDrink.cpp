@@ -37,8 +37,11 @@ void UTutorialStep_ConsumeServedDrink::EnterStep(ATutorialDirector* InDirector)
         if(!Component->BeginDrink(Cup,Spot))
         {
             Component->OnDrinkEnded.RemoveDynamic(this,&UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
-            // Keep the accepted cup visible if animation can't be started.
-            CompletedText=FText::FromString(TEXT("这次先把杯子留在这里吧。"));
+            // Keep the cup, but report why the action was rejected instead of
+            // silently presenting this failure as a successful tasting.
+            UE_LOG(LogTemp,Warning,TEXT("[CustomerDrink] Consume step could not start: director=%s reason=%s"),
+                *GetNameSafe(InDirector),*Component->GetLastStartFailureReason());
+            CompletedText=FText::FromString(TEXT("饮品已收到，但品尝动作未启动；杯子会留在这里。"));
             World->GetTimerManager().SetTimer(AfterDrinkTimer,this,&UTutorialStep_ConsumeServedDrink::HandleStepFinish,FMath::Max(.001f,AfterDrinkDelay),false);
         }
         return;

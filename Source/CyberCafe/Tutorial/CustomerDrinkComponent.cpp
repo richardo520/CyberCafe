@@ -22,11 +22,27 @@ bool UCustomerDrinkComponent::StillOwnsAcceptedCup() const
 }
 bool UCustomerDrinkComponent::BeginDrink(ALiquidContainerActor* Cup,AServingSpotActor* Spot)
 {
- if(!bEnabled||bActive||bFinishing||!IsValid(Motion)||!Motion->IsValidMotion()||!IsValid(GetOwner())||GetOwner()->IsActorBeingDestroyed()||!IsValid(Cup)||!IsValid(Spot)||Cup->IsActorBeingDestroyed()||Spot->IsActorBeingDestroyed()||Cup->GetWorld()!=GetWorld()||Spot->GetWorld()!=GetWorld()||!Cast<ACupActor>(Cup)||Cup->IsHeld()||(Cup->GrabComp&&Cup->GrabComp->IsPulled())||Cup->IsBroken()||!Cup->IsLiquidFrozen()||Cup->CustomerConsumer.IsValid()||Cup->bCustomerPerformanceClaimed||UsedCups.Contains(Cup))return false;
- if(Spot->GetServedCup()!=Cup||!Spot->HasBeenServed()||!Spot->GetLastValidation().bAccepted||Spot->GetOrderSerial()!=Spot->GetAcceptedOrderSerial())return false;
- auto* M=GetOwner()->FindComponentByClass<USkeletalMeshComponent>();if(!M||!M->GetSkeletalMeshAsset()||M->GetSkeletalMeshAsset()->GetSkeleton()!=Motion->Animation->GetSkeleton()||Cup->ContainerMesh->GetStaticMesh()!=Motion->SupportedCupMesh)return false;
- const FTransform TM=M->GetComponentTransform();if(TM.ContainsNaN()||!TM.GetScale3D().Equals(FVector::OneVector,.01)||!Cup->GetActorScale3D().Equals(FVector::OneVector,.01))return false;
- const FVector Expected=(Motion->Sample(0)*TM).GetLocation();const FVector Offset=Cup->GetActorLocation()-Expected;if(Offset.Size()>Motion->MaxStartOffsetCM)return false;
+ LastStartFailureReason.Reset();
+ const auto Reject=[this,Cup,Spot](const FString& Reason)
+ {
+  LastStartFailureReason=Reason;
+  UE_LOG(LogTemp,Log,TEXT("[CustomerDrink] Start rejected: %s; owner=%s cup=%s spot=%s"),*Reason,*GetNameSafe(GetOwner()),*GetNameSafe(Cup),*GetNameSafe(Spot));
+  return false;
+ };
+ if(!bEnabled)return Reject(TEXT("customer-disabled"));
+ if(bActive||bFinishing)return Reject(TEXT("customer-busy"));
+ if(!IsValid(Motion)||!Motion->IsValidMotion())return Reject(TEXT("invalid-motion"));
+ if(!IsValid(GetOwner())||GetOwner()->IsActorBeingDestroyed()||!IsValid(Cup)||!IsValid(Spot)||Cup->IsActorBeingDestroyed()||Spot->IsActorBeingDestroyed())return Reject(TEXT("missing-or-destroyed-actor"));
+ if(Cup->GetWorld()!=GetWorld()||Spot->GetWorld()!=GetWorld())return Reject(TEXT("wrong-world"));
+ if(!Cast<ACupActor>(Cup)||Cup->IsHeld()||(Cup->GrabComp&&Cup->GrabComp->IsPulled())||Cup->IsBroken()||!Cup->IsLiquidFrozen())return Reject(TEXT("cup-not-ready"));
+ if(Cup->CustomerConsumer.IsValid()||Cup->bCustomerPerformanceClaimed||UsedCups.Contains(Cup))return Reject(TEXT("cup-already-claimed"));
+ if(Spot->GetServedCup()!=Cup||!Spot->HasBeenServed()||!Spot->GetLastValidation().bAccepted||Spot->GetOrderSerial()!=Spot->GetAcceptedOrderSerial())return Reject(TEXT("unaccepted-or-stale-order"));
+ auto* M=GetOwner()->FindComponentByClass<USkeletalMeshComponent>();
+ if(!M||!M->GetSkeletalMeshAsset()||M->GetSkeletalMeshAsset()->GetSkeleton()!=Motion->Animation->GetSkeleton()||!Cup->ContainerMesh||Cup->ContainerMesh->GetStaticMesh()!=Motion->SupportedCupMesh)return Reject(TEXT("unsupported-mesh-or-skeleton"));
+ const FTransform TM=M->GetComponentTransform();
+ if(TM.ContainsNaN()||!TM.GetScale3D().Equals(FVector::OneVector,.01)||!Cup->GetActorScale3D().Equals(FVector::OneVector,.01))return Reject(TEXT("unsupported-scale"));
+ const FVector Expected=(Motion->Sample(0)*TM).GetLocation();const FVector Offset=Cup->GetActorLocation()-Expected;
+ if(Offset.Size()>Motion->MaxStartOffsetCM)return Reject(FString::Printf(TEXT("cup-start-offset: %.3fcm > %.3fcm"),Offset.Size(),Motion->MaxStartOffsetCM));
  UsedCups.Remove(TWeakObjectPtr<ALiquidContainerActor>());UsedCups.Add(Cup);
  ActiveCup=Cup;ActiveSpot=Spot;Mesh=M;OrderSerial=Spot->GetOrderSerial();OriginalCupTransform=Cup->GetActorTransform();StartMeshTransform=TM;StartOffset=Offset;Elapsed=0;ConsumedML=0;bSipPlayed=false;bActive=true;
  Cup->bCustomerPerformanceClaimed=true;Cup->CustomerConsumer=this;Cup->CustomerSipBudgetML=FMath::Min(static_cast<double>(Motion->SipVolumeML),Cup->GetPreciseVolumeML());
@@ -34,7 +50,9 @@ bool UCustomerDrinkComponent::BeginDrink(ALiquidContainerActor* Cup,AServingSpot
  if(auto* Single=M->GetSingleNodeInstance())Single->SetPlaying(false);
  M->SetPosition(0,false);
  if(Cup->GrabComp){Cup->GrabComp->GrabType=EGrabType::None;Cup->GrabComp->SetActive(false);}Cup->ContainerMesh->SetSimulatePhysics(false);Cup->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);Cup->StopPouring();
- SetComponentTickEnabled(true);return true;
+ SetComponentTickEnabled(true);
+ UE_LOG(LogTemp,Log,TEXT("[CustomerDrink] Started: owner=%s cup=%s order=%u duration=%.3f animation=%s"),*GetNameSafe(GetOwner()),*GetNameSafe(Cup),OrderSerial,Motion->Duration(),*GetPathNameSafe(Motion->Animation.Get()));
+ return true;
 }
 void UCustomerDrinkComponent::TickComponent(float Dt,ELevelTick Tick,FActorComponentTickFunction* F)
 {
@@ -87,6 +105,7 @@ void UCustomerDrinkComponent::Finish(bool Completed,bool Broadcast)
   if(C->CustomerConsumer.Get()==this){C->CustomerConsumer.Reset();C->CustomerSipBudgetML=0;}
  }
  if(auto* M=Mesh.Get()){M->SetMorphTarget(TEXT("Blink"),0);if(IdleAnimation){M->SetAnimationMode(EAnimationMode::AnimationSingleNode);M->PlayAnimation(IdleAnimation,true);}else M->SetPosition(0,false);}
+ UE_LOG(LogTemp,Log,TEXT("[CustomerDrink] Ended: owner=%s cup=%s completed=%d accepted=%d elapsed=%.3f consumedML=%.6f"),*GetNameSafe(GetOwner()),*GetNameSafe(C),Completed?1:0,Owns?1:0,Elapsed,Removed);
  ActiveCup.Reset();ActiveSpot.Reset();Mesh.Reset();
  if(Broadcast)OnDrinkEnded.Broadcast(C,Completed&&Owns,Removed);
 }

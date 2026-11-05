@@ -3,6 +3,9 @@
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
+#include "Tutorial/Steps/TutorialStep_WaitForServe.h"
+#include "Tutorial/Steps/TutorialStep_ConsumeServedDrink.h"
+#include "Tutorial/CustomerDrinkComponent.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
@@ -123,6 +126,24 @@ void ATutorialDirector::HandleStepCompleted(UTutorialStep* CompletedStep)
     CompletedStep->OnStepCompleted.RemoveDynamic(this, &ATutorialDirector::HandleStepCompleted);
     UNarrativeSubsystem* N = GetWorld() ? GetWorld()->GetSubsystem<UNarrativeSubsystem>() : nullptr;
     if (N) N->SetInputHintEnabled(false);
+    // @trace BC-04: a validated first-customer serve is a gameplay transition,
+    // not a text-presentation gate. A replacement HUD line can suppress the old
+    // typewriter completion forever; it must never suppress the drink action.
+    const int32 NextIndex = CurrentStepIndex + 1;
+    const bool bAutomaticCustomerDrink = Cast<UTutorialStep_WaitForServe>(CompletedStep) &&
+        Steps.IsValidIndex(NextIndex) && Cast<UTutorialStep_ConsumeServedDrink>(Steps[NextIndex]) &&
+        IsValid(NPCRef) && NPCRef->CustomerDrink && NPCRef->CustomerDrink->bEnabled;
+    if (bAutomaticCustomerDrink)
+    {
+        const int32 CompletedIndex = CurrentStepIndex;
+        UE_LOG(LogTemp, Log, TEXT("[CustomerDrink] Accepted serve schedules automatic tasting; director=%s cup=%s delay=%.3f"),
+            *GetName(), *GetNameSafe(LastServedCup.Get()), CheerDuration);
+        if (N && !CompletedStep->CompletedText.IsEmpty()) ShowNarrative(CompletedStep->CompletedText);
+        // A Blueprint text hook may synchronously skip or restart this director.
+        if (CurrentStepIndex == CompletedIndex && Steps.IsValidIndex(CurrentStepIndex) &&
+            Steps[CurrentStepIndex] == CompletedStep && CompletedStep->IsCompleted()) ScheduleAfterCheer();
+        return;
+    }
     if (!CompletedStep->CompletedText.IsEmpty() && N)
     {
         bWaitingForFeedback = true;
