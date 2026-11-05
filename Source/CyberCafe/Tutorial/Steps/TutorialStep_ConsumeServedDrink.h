@@ -9,7 +9,8 @@
 /**
  * UTutorialStep_ConsumeServedDrink
  *
- * 教学最后的"客人喝掉饮品"演出 Step（纯表现层）：
+ * 最后品尝步骤：配置 CustomerDrink 的 NPC 等待实际动作完成，并保留原杯。
+ * 未配置的旧 NPC 保留下列延时表现行为：
  *   1) 进入时拿 Director->LastServedCup
  *   2) 等 PreDrinkDelay 秒（代表 NPC 走过来端起、品尝的间隔）
  *   3) 让杯子 SetActorHiddenInGame(true) + 关闭碰撞（可选 Destroy）
@@ -56,6 +57,10 @@ protected:
     void HandleStepFinish();
 
 private:
+    UFUNCTION() void HandleCustomerDrinkEnded(class ALiquidContainerActor* Cup,bool Completed,double ConsumedML);
+    UPROPERTY(Transient) TWeakObjectPtr<class UCustomerDrinkComponent> DrinkingComponent;
+    UPROPERTY(Transient) TWeakObjectPtr<class ALiquidContainerActor> OwnedDrinkCup;
+    bool bActiveCustomerStep=false,bUsesCustomerPerformance=false;
     FTimerHandle PreDrinkTimer;
     FTimerHandle AfterDrinkTimer;
 };

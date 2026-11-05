@@ -754,16 +754,19 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         {
             TestTrue(Label + TEXT("：PanelMaterial 为 Unlit"), Display->PanelMaterial->GetShadingModels().HasOnlyShadingModel(MSM_Unlit));
         }
-        TestEqual(Label + TEXT("：当前教学顾客 ID"), Display->CustomerId, FName(TEXT("TutorialGuide")));
+        // @trace BC-01. Instance now represents the user-approved first guest;
+        // reusable BP defaults remain the original tutorial guide.
+        const bool bFirstCustomerInstance = Display == SavedDisplay;
+        TestEqual(Label + TEXT("：顾客 ID 与实例用途一致"), Display->CustomerId, FName(bFirstCustomerInstance ? TEXT("BarGirl_FirstCustomer") : TEXT("TutorialGuide")));
         const FString Name = Display->CustomerName.ToString();
-        TestEqual(Label + TEXT("：顾客名来自当前教学导演"), Name, SavedDirector->DialogueSpeakerName.ToString());
-        TestTrue(Label + TEXT("：顾客名是当前向导"), Name.Contains(TEXT("向导")));
+        TestEqual(Label + TEXT("：实例客人或通用默认身份明确"), Name, FString(bFirstCustomerInstance ? TEXT("BarGirl") : TEXT("咖啡馆向导")));
+        if (bFirstCustomerInstance) TestEqual(Label + TEXT("：第一客人名字与对话导演一致"), Name, SavedDirector->DialogueSpeakerName.ToString());
         TestFalse(Label + TEXT("：顾客名无旧阿岚"), Name.Contains(TEXT("阿岚")));
         TestEqual(Label + TEXT("：真实教学备注两条"), Display->CustomerNotes.Num(), 2);
         if (Display->CustomerNotes.IsValidIndex(1))
         {
-            TestEqual(Label + TEXT("：备注说明当前教学客人"), Display->CustomerNotes[0].ToString(), FString(TEXT("教学客人")));
-            TestEqual(Label + TEXT("：备注不虚构顾客喜好"), Display->CustomerNotes[1].ToString(), FString(TEXT("喜好尚未了解")));
+            TestEqual(Label + TEXT("：备注说明当前客人用途"), Display->CustomerNotes[0].ToString(), FString(bFirstCustomerInstance ? TEXT("第一位客人") : TEXT("教学客人")));
+            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("这次点一杯拿铁") : TEXT("喜好尚未了解")));
         }
         for (const FText& Note : Display->CustomerNotes)
         {

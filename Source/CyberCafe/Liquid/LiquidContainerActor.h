@@ -530,6 +530,13 @@ public:
 
 protected:
     friend class ULiquidTransferSubsystem;
+    friend class UCustomerDrinkComponent;
+    // @trace BC-03. Only the owning performance component can debit a frozen
+    // served cup. Frozen state stays set; consumption is not emitted or spilled.
+    double ConsumeForCustomer(class UCustomerDrinkComponent* Consumer,double RequestedML);
+    UPROPERTY(Transient) TWeakObjectPtr<class UCustomerDrinkComponent> CustomerConsumer;
+    double CustomerSipBudgetML=0;
+    bool bCustomerPerformanceClaimed=false;
     double DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition = nullptr);
     double CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition = nullptr);
     void NotifyLiquidState();

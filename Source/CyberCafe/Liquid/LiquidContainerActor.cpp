@@ -23,6 +23,7 @@
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Tutorial/CustomerDrinkComponent.h"
 
 ALiquidContainerActor::ALiquidContainerActor()
 {
@@ -273,6 +274,15 @@ void ALiquidContainerActor::FreezeLiquidForServing()
     StopPouring();
 }
 
+double ALiquidContainerActor::ConsumeForCustomer(UCustomerDrinkComponent* Consumer,double RequestedML)
+{
+    if(!IsValid(Consumer)||CustomerConsumer.Get()!=Consumer||Consumer->GetDrinkingCup()!=this||!Consumer->IsDrinking()||!bLiquidFrozen||bBroken||IsActorBeingDestroyed()||!FMath::IsFinite(RequestedML)||RequestedML<=0||CustomerSipBudgetML<=0)return 0;
+    auto* S=GetWorld()?GetWorld()->GetSubsystem<ULiquidTransferSubsystem>():nullptr;if(!S)return 0;
+    const double Actual=DebitVolumeInternal(FMath::Min(RequestedML,CustomerSipBudgetML));
+    CustomerSipBudgetML-=Actual;S->RecordRemoved(Actual);
+    // Caller commits its counters before notifying external liquid subscribers.
+    return Actual;
+}
 double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition)
 {
     InitializeLiquidState();
@@ -356,7 +366,7 @@ float ALiquidContainerActor::AddIngredientLiquid(float DeltaML, FName Ingredient
 
 float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
 {
-    if (bBroken) return 0;
+    if (bBroken || bLiquidFrozen) return 0;
     const double Actual = DebitVolumeInternal(DeltaML);
     if (Actual <= 0) return 0;
     if (GetWorld())

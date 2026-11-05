@@ -4,12 +4,15 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Tutorial/CustomerDrinkComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 ATutorialNPC::ATutorialNPC()
 {
     // 本 NPC 不需要每帧 Tick（无气泡 Billboard、无自定义运动）
     // 后续真要加"眼神朝向玩家"时再在蓝图或子类里 bCanEverTick=true 并实现
     PrimaryActorTick.bCanEverTick = false;
+    CustomerDrink=CreateDefaultSubobject<UCustomerDrinkComponent>(TEXT("CustomerDrink"));
 
     // Capsule 碰撞策略：
     //   - 对 WorldStatic/WorldDynamic：Block，保证 Character 能站在地面上（不穿地）
@@ -35,4 +38,19 @@ ATutorialNPC::ATutorialNPC()
     HeadAnchor->SetupAttachment(GetCapsuleComponent());
     // Capsule 中心在角色腰部，+100 大约到头顶上方一点；蓝图里可微调
     HeadAnchor->SetRelativeLocation(FVector(0.f, 0.f, 100.f));
+}
+void ATutorialNPC::BeginPlay()
+{
+    Super::BeginPlay();
+    if(CustomerDrink&&CustomerDrink->bEnabled)
+    {
+        // First customer is a fixed standing bar patron; no gravity-driven drift
+        // may invalidate the calibrated mesh-relative cup trajectory.
+        GetCharacterMovement()->DisableMovement();
+        GetMesh()->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+        GetMesh()->bEnableUpdateRateOptimizations=false;
+        if(CustomerDrink->IdleAnimation)GetMesh()->PlayAnimation(CustomerDrink->IdleAnimation,true);
+        HeadAnchor->AttachToComponent(GetMesh(),FAttachmentTransformRules::SnapToTargetNotIncludingScale,TEXT("head"));
+        HeadAnchor->SetRelativeLocation(FVector::ZeroVector);HeadAnchor->SetRelativeScale3D(FVector(.01));
+    }
 }
