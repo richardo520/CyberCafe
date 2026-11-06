@@ -19,8 +19,12 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float MaxFlowMLPerSecond=28;
  UPROPERTY(BlueprintReadOnly) float CurrentFlowMLPerSecond=0;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Kettle|Ribbon",meta=(ClampMin="0.0",Units="cm")) float KettleRibbonThicknessCM=.25f;
+ // Coordinates are authored in the actual ContainerMesh frame, not the FX frame.
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Kettle|Spout") FVector KettleSpoutLocal=FVector(17.f,0.f,16.f);
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Kettle|Spout") FVector KettleSpoutForwardLocal=FVector(.9486833f,0.f,.3162278f);
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Kettle|Water") FLinearColor WaterStreamColor=FLinearColor(.72f,.84f,.90f,1.f);
+ UFUNCTION(BlueprintPure,Category="Kettle|Spout") FTransform GetKettleSpoutWorldTransform() const;
 protected:
- const FVector KettleSpoutLocal=FVector(16.8f,0.f,13.f);
  void UpdateKettleRibbon(bool bEmissionPositive);
  virtual void StopPouring() override;
 };

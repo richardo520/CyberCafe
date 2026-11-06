@@ -32,7 +32,7 @@ constexpr float StepSeconds = .02f;
 constexpr int32 SourceFrames = 10;
 const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
 const TCHAR* RibbonPath = TEXT("/Game/LiquidMaterials_VFXPack/Effects/P_Ribbon.P_Ribbon");
-const FVector SpoutLocal(16.8f, 0.f, 13.f);
+const FVector SpoutLocal(17.f, 0.f, 16.f);
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)
 {
@@ -120,7 +120,8 @@ bool CheckConfiguration(FAutomationTestBase& Test, FEvidence& Evidence,
     const bool bOriginal = Test.TestTrue(TEXT("PourFX 直接绑定原 P_Ribbon，非副本或替代粒子"),
         K->PourFX->GetAsset() == OriginalRibbon);
     Near(Test, TEXT("细水柱宽度为 0.25cm"), K->KettleRibbonThicknessCM, .25);
-    Near(Test, TEXT("Ribbon 强度为 0.35"), K->FlowStrength, .35);
+    Near(Test, TEXT("Ribbon 强度为1消除出生点厚度偏移"), K->FlowStrength, 1);
+    Near(Test, TEXT("Offset为0消除原水柱起点回退"),K->PourRibbonOffset,0);
     Near(Test, TEXT("最大业务流速保持 28mL/s"), K->MaxFlowMLPerSecond, 28);
     Near(Test, TEXT("倾倒阈值保持 40 度"), K->PourTiltDegrees, 40);
     Test.TestFalse(TEXT("壶不启用瓶杯基类倒液"), K->bCanPour);
@@ -347,11 +348,11 @@ void ContinuousFrames(FAutomationTestBase& Test, FEvidence& Evidence, FNativeWor
         Near(Test, TEXT("逐帧累计扣量正确"), K->GetPreciseVolumeML(), Before - Frame * .28);
         Test.TestTrue(TEXT("Ribbon 起点始终来自固定 local 壶嘴"),
             K->PourFX->GetComponentLocation().Equals(K->GetActorTransform().TransformPosition(SpoutLocal), Tolerance));
-        Test.TestTrue(TEXT("Ribbon 方向跟随 Actor，保持单位缩放"),
-            K->PourFX->GetComponentQuat().Equals(K->GetActorQuat(), Tolerance)
+        Test.TestTrue(TEXT("Ribbon 方向跟随实测壶嘴法线，保持单位缩放"),
+            K->PourFX->GetComponentQuat().Equals(K->GetKettleSpoutWorldTransform().GetRotation(), Tolerance)
             && K->PourFX->GetRelativeScale3D().Equals(FVector::OneVector, Tolerance));
         CheckFloatOverride(Test, K->PourFX.Get(), TEXT("User.Thickness"), .25f);
-        CheckFloatOverride(Test, K->PourFX.Get(), TEXT("User.FlowStrength"), .35f);
+        CheckFloatOverride(Test, K->PourFX.Get(), TEXT("User.FlowStrength"), 1.f);
         CheckWaterJet(Test, K);
         CheckBalance(Test, T.Transfer());
         Capture(Evidence, TEXT("continuousWorldTick"), T, K);
