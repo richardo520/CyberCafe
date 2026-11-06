@@ -18,5 +18,9 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float PourTiltDegrees=40;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float MaxFlowMLPerSecond=28;
  UPROPERTY(BlueprintReadOnly) float CurrentFlowMLPerSecond=0;
- float FlowAge=0;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Kettle|Ribbon",meta=(ClampMin="0.0",Units="cm")) float KettleRibbonThicknessCM=.25f;
+protected:
+ const FVector KettleSpoutLocal=FVector(16.8f,0.f,13.f);
+ void UpdateKettleRibbon(bool bEmissionPositive);
+ virtual void StopPouring() override;
 };

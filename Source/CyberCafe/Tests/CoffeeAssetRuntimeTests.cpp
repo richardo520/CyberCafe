@@ -563,7 +563,10 @@ bool FCoffeeRealSavedGroundsWaterReceiverTest::RunTest(const FString&)
         const FLiquidBalance B = S->GetBalance();
         SawWaterPackets |= B.PacketCount > 0 && D->DrippedML == 0;
         SawCoffeePackets |= B.PacketCount > 0 && D->DrippedML > 0;
-        SawJet |= K->WaterJet->GetInstanceCount() > 0;
+        // The kettle now drives the shared thin Ribbon rather than 20 sphere drops.
+        // FX assets are disabled in this logical world, so observe its continuous
+        // driver state; dedicated KettleRibbon tests verify the saved asset/params.
+        SawJet |= K->bIsPouring && K->CurrentFlowMLPerSecond > 0 && K->WaterJet->GetInstanceCount() == 0;
         PeakPackets = FMath::Max(PeakPackets, B.PacketCount); PeakStorage = FMath::Max(PeakStorage, D->GetPreciseVolumeML());
         if (D->GetIngredientVolumeML(Water) > 0 && FirstWetTime < 0) FirstWetTime = T.World->GetTimeSeconds();
         if (D->DrippedML > 0 && FirstDripTime < 0) FirstDripTime = T.World->GetTimeSeconds();
@@ -576,7 +579,7 @@ bool FCoffeeRealSavedGroundsWaterReceiverTest::RunTest(const FString&)
         CheckBalance(*this, S);
         if (Frame % 25 == 0) Capture(Evidence, TEXT("actualLiquidWorldTick"), T, D, Cup, K, G, Drawer);
     }
-    TestTrue(TEXT("真实观察到清水包、闷蒸、滴流包与水柱展示"), SawWaterPackets && SawBloom && SawCoffeePackets && SawJet);
+    TestTrue(TEXT("真实观察到清水包、闷蒸、滴流包与连续Ribbon驱动状态"), SawWaterPackets && SawBloom && SawCoffeePackets && SawJet);
     TestTrue(TEXT("真实世界时钟至少闷蒸8秒才滴流"), FirstWetTime >= 0 && FirstDripTime - FirstWetTime >= 7.98);
     TestTrue(TEXT("实际储水没有越过120mL"), PeakStorage > 90 && PeakStorage <= D->MaxVolumeML + LiquidTolerance);
     Near(*this, TEXT("真实水壶最终零库存"), K->GetPreciseVolumeML(), 0);
