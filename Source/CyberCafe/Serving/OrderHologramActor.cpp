@@ -52,6 +52,8 @@ AOrderHologramActor::AOrderHologramActor()
         if(I==0)MenuModeZone=Zone;else if(I==1)MenuPreviousZone=Zone;else MenuNextZone=Zone;
         auto* Key=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("MenuKey%d"),I));Key->SetupAttachment(Root);Key->SetStaticMesh(Cube.Object);Key->SetRelativeLocation(MenuPositions[I]-FVector(0,0,.38));Key->SetRelativeScale3D(FVector(.038,.038,.004));Key->SetCollisionEnabled(ECollisionEnabled::NoCollision);Key->SetCastShadow(false);MenuKeys.Add(Key);
         auto* Label=CreateDefaultSubobject<UTextRenderComponent>(*FString::Printf(TEXT("MenuLabel%d"),I));Label->SetupAttachment(Root);Label->SetRelativeLocation(MenuPositions[I]-FVector(1.2,1.4,.1));Label->SetRelativeRotation(FRotator(90,90,0));Label->SetWorldSize(.6f);Label->SetText(FText::FromString(MenuNames[I]));Label->SetTextRenderColor(FColor(80,230,215));MenuLabels.Add(Label);
+        Key->SetVisibility(false);Key->SetHiddenInGame(true);
+        Label->SetVisibility(false);Label->SetHiddenInGame(true);Label->SetText(FText::GetEmpty());
     }
     DisplayWidgetClass=UOrderHologramWidget::StaticClass();CustomerName=NSLOCTEXT("Hologram","Guide","咖啡馆向导");
 }
@@ -72,9 +74,11 @@ void AOrderHologramActor::OnConstruction(const FTransform& Transform)
     if(ShellMaterial){BaseMesh->SetMaterial(0,ShellMaterial);ButtonMesh->SetMaterial(0,ShellMaterial);}
     if(SignalMaterial){StatusLamp->SetMaterial(0,SignalMaterial);EmitterMesh->SetMaterial(0,SignalMaterial);}
     if(DisplayWidgetClass)Panel->SetWidgetClass(DisplayWidgetClass);
-    const bool HasMenu=IsValid(RecipeMenu)&&RecipeMenu->IsValidMenu();
-    for(const auto& Key:MenuKeys){Key->SetVisibility(HasMenu);if(ShellMaterial)Key->SetMaterial(0,ShellMaterial);}
-    for(const auto& Label:MenuLabels)Label->SetVisibility(HasMenu);
+    // Retain serialized subobjects only for backwards-compatible asset loading.
+    // They have no visible geometry and are not sampled by input anymore.
+    for(const auto& Key:MenuKeys){Key->SetVisibility(false);Key->SetHiddenInGame(true);Key->SetCollisionEnabled(ECollisionEnabled::NoCollision);}
+    for(const auto& Label:MenuLabels){Label->SetVisibility(false);Label->SetHiddenInGame(true);Label->SetText(FText::GetEmpty());}
+    for(auto* Zone:{MenuModeZone.Get(),MenuPreviousZone.Get(),MenuNextZone.Get()}){Zone->SetCollisionEnabled(ECollisionEnabled::NoCollision);Zone->SetGenerateOverlapEvents(false);}
 }
 void AOrderHologramActor::BeginPlay()
 {
@@ -131,7 +135,12 @@ bool AOrderHologramActor::SelectRecipeByPinyin(FName Index)
     const int32 Found=RecipeMenu->FindPinyinIndex(Index);if(Found==INDEX_NONE)return false;
     SelectedMenuIndex=Found;bRecipeMenuMode=true;SetOpen(true,true);return true;
 }
-void AOrderHologramActor::PressButton(){ButtonPressRemaining=.15f;SetOpen(!bOpen,true);}
+void AOrderHologramActor::PressButton()
+{
+    ButtonPressRemaining=.15f;
+    if(!bOpen&&bOpenOnRecipePage&&IsValid(RecipeMenu)&&RecipeMenu->IsValidMenu())bRecipeMenuMode=true;
+    SetOpen(!bOpen,true);
+}
 void AOrderHologramActor::SetOpen(bool Value,bool ByPlayer)
 {
     bOpen=Value;bPlayerOpened=Value&&ByPlayer;if(ByPlayer||!Value)CloseRemaining=-1;
@@ -179,50 +188,93 @@ void AOrderHologramActor::Tick(float Dt)
 }
 bool AOrderHologramActor::ProcessTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked,bool Holding)
 {
-    if(!Tracked||(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)||Point.ContainsNaN())return false;
+    if(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)return false;
+    if(!Tracked||Point.ContainsNaN())
+    {
+        bool& Outside=Hand==EControllerHand::Left?bLeftOutside:bRightOutside;
+        (Hand==EControllerHand::Left?bLeftNeedsExit:bRightNeedsExit)|=bTouchLatched&&!Outside;
+        Outside=true;
+        if(bLeftOutside&&bRightOutside)bTouchLatched=false;
+        return false;
+    }
     const FVector Local=ButtonZone->GetComponentTransform().InverseTransformPosition(Point);
     const FVector Extent=ButtonZone->GetUnscaledBoxExtent();const FVector Outer=Extent+FVector(FMath::Max(0.f,TouchRearmMarginCM));
     const bool Outside=FMath::Abs(Local.X)>Outer.X||FMath::Abs(Local.Y)>Outer.Y||FMath::Abs(Local.Z)>Outer.Z;
+    bool& NeedsExit=Hand==EControllerHand::Left?bLeftNeedsExit:bRightNeedsExit;
+    if(Outside)NeedsExit=false;else if(NeedsExit)return false;
     if(Holding&&!Outside)return false;
     (Hand==EControllerHand::Left?bLeftOutside:bRightOutside)=Outside;
     if(bLeftOutside&&bRightOutside)bTouchLatched=false;
     const bool Inside=FMath::Abs(Local.X)<=Extent.X&&FMath::Abs(Local.Y)<=Extent.Y&&FMath::Abs(Local.Z)<=Extent.Z;
     if(Inside&&!Holding&&!bTouchLatched){bTouchLatched=true;PressButton();return true;}return false;
 }
+TArray<int32> AOrderHologramActor::GetVisibleMenuIndices() const
+{
+    TArray<int32> Rows;if(!IsValid(RecipeMenu))return Rows;
+    for(int32 I=0;I<RecipeMenu->Entries.Num();++I)
+    {
+        const bool Coffee=RecipeMenu->Entries[I].Category.ToString().Contains(TEXT("咖啡"));
+        if(MenuFilter==0||(MenuFilter==1&&Coffee)||(MenuFilter==2&&!Coffee))Rows.Add(I);
+    }
+    return Rows;
+}
+bool AOrderHologramActor::ActivateScreenAction(int32 Action)
+{
+    if(!bOpen||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
+    bool Accepted=false;
+    if(Action==0){bRecipeMenuMode=false;Accepted=true;}
+    else if(Action==1){bRecipeMenuMode=true;Accepted=true;}
+    else if(Action==2&&IsValid(CurrentRecipe))
+    {
+        const int32 Found=RecipeMenu->Entries.IndexOfByPredicate([this](const FDrinkMenuEntry& E){return E.Recipe==CurrentRecipe;});
+        if(Found!=INDEX_NONE){SelectedMenuIndex=Found;MenuFilter=0;bRecipeMenuMode=true;Accepted=true;}
+    }
+    else if(bRecipeMenuMode&&Action>=10&&Action<=12){MenuFilter=Action-10;Accepted=true;}
+    else if(bRecipeMenuMode&&Action>=100&&Action<110)
+    {
+        const TArray<int32> Rows=GetVisibleMenuIndices();const int32 Row=Action-100;
+        if(Rows.IsValidIndex(Row)){SelectedMenuIndex=Rows[Row];Accepted=true;}
+    }
+    if(!Accepted)return false;
+    LastScreenAction=Action;SetOpen(true,true);
+    // No active recipe, order serial or history is changed by viewing UI.
+    OnMenuInteractionNative.Broadcast(this);return true;
+}
 bool AOrderHologramActor::ProcessMenuTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked,bool Holding)
 {
-    if(!Tracked||Point.ContainsNaN()||(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
-    UBoxComponent* Zones[]={MenuModeZone.Get(),MenuPreviousZone.Get(),MenuNextZone.Get()};
-    bool Triggered=false;
-    for(int32 I=0;I<4;++I)
+    if(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)return false;
+    if(!Tracked||Point.ContainsNaN())
     {
-        bool Inside=false,Outside=true;int32 Row=INDEX_NONE;
-        if(I<3)
+        bool& Outside=Hand==EControllerHand::Left?bScreenLeftOutside:bScreenRightOutside;
+        (Hand==EControllerHand::Left?bScreenLeftNeedsExit:bScreenRightNeedsExit)|=bScreenTouchLatched&&!Outside;
+        Outside=true;
+        if(bScreenLeftOutside&&bScreenRightOutside)bScreenTouchLatched=false;
+        return false;
+    }
+    bool Outside=true;int32 Hit=INDEX_NONE;
+    if(bOpen&&AnimationValue>.95f&&IsValid(RecipeMenu)&&RecipeMenu->IsValidMenu())
+    {
+        const FVector P=Panel->GetComponentTransform().InverseTransformPosition(Point);const FVector2D Pixel(600-P.Y,375-P.Z);
+        TArray<int32> Actions={0,1};
+        if(bRecipeMenuMode){Actions.Append({10,11,12});for(int32 I=0;I<GetVisibleMenuIndices().Num();++I)Actions.Add(100+I);}
+        else if(IsValid(CurrentRecipe))Actions.Add(2);
+        for(int32 Action:Actions)
         {
-            const FVector P=Zones[I]->GetComponentTransform().InverseTransformPosition(Point);const FVector E=Zones[I]->GetUnscaledBoxExtent();const FVector Outer=E+FVector(1.f);
-            Inside=FMath::Abs(P.X)<=E.X&&FMath::Abs(P.Y)<=E.Y&&FMath::Abs(P.Z)<=E.Z;
-            Outside=FMath::Abs(P.X)>Outer.X||FMath::Abs(P.Y)>Outer.Y||FMath::Abs(P.Z)>Outer.Z;
-        }
-        else if(bOpen&&bRecipeMenuMode&&AnimationValue>.95f)
-        {
-            // UWidgetComponent: local -Y is screen right, +Z is screen up.
-            const FVector P=Panel->GetComponentTransform().InverseTransformPosition(Point);
-            const double X=600-P.Y,Y=375-P.Z;
-            Inside=FMath::Abs(P.X)<=24&&X>=28&&X<=342&&Y>=134&&Y<614;
-            Outside=FMath::Abs(P.X)>44||X<10||X>360||Y<116||Y>632;
-            if(Inside)Row=FMath::FloorToInt((Y-134)/48);
-        }
-        (Hand==EControllerHand::Left?MenuLeftOutside[I]:MenuRightOutside[I])=Outside;
-        if(MenuLeftOutside[I]&&MenuRightOutside[I])MenuTouchLatched[I]=false;
-        if(Inside&&!Holding&&!MenuTouchLatched[I]&&!Triggered)
-        {
-            MenuTouchLatched[I]=true;
-            if(I==0)Triggered=ToggleRecipeMenu();else if(I<3)Triggered=BrowseRecipeMenu(I==1?-1:1);else if(RecipeMenu->Entries.IsValidIndex(Row))Triggered=SelectRecipeByPinyin(RecipeMenu->Entries[Row].PinyinIndex);
+            const FIntRect Rect=UOrderHologramWidget::GetScreenActionRect(Action);
+            const bool Near=FMath::Abs(P.X)<=44&&Pixel.X>=Rect.Min.X-18&&Pixel.X<=Rect.Max.X+18&&Pixel.Y>=Rect.Min.Y-18&&Pixel.Y<=Rect.Max.Y+18;
+            if(Near)Outside=false;
+            if(FMath::Abs(P.X)<=24&&Pixel.X>=Rect.Min.X&&Pixel.X<Rect.Max.X&&Pixel.Y>=Rect.Min.Y&&Pixel.Y<Rect.Max.Y)Hit=Action;
         }
     }
-    // Broadcast after the complete touch loop: subscribers may advance/exit a step.
-    if(Triggered)OnMenuInteractionNative.Broadcast(this);
-    return Triggered;
+    bool& NeedsExit=Hand==EControllerHand::Left?bScreenLeftNeedsExit:bScreenRightNeedsExit;
+    if(Outside)NeedsExit=false;else if(NeedsExit)return false;
+    (Hand==EControllerHand::Left?bScreenLeftOutside:bScreenRightOutside)=Outside;
+    if(bScreenLeftOutside&&bScreenRightOutside)bScreenTouchLatched=false;
+    if(Hit!=INDEX_NONE&&!Holding&&!bScreenTouchLatched)
+    {
+        bScreenTouchLatched=true;return ActivateScreenAction(Hit);
+    }
+    return false;
 }
 void AOrderHologramActor::PollHands()
 {
@@ -230,7 +282,12 @@ void AOrderHologramActor::PollHands()
     AVRPawn* Pawn=TouchPawn.Get();if(!Pawn)return;
     auto Sample=[&](EControllerHand Hand,UMotionControllerComponent* Grip,USkeletalMeshComponent* Mesh,FName Bone,UGrabComponent* Held)
     {
-        if(!Grip||!Grip->IsTracked())return;
+        if(!Grip||!Grip->IsTracked())
+        {
+            ProcessTouchSample(Hand,FVector::ZeroVector,false,false);
+            ProcessMenuTouchSample(Hand,FVector::ZeroVector,false,false);
+            return;
+        }
         FVector Point=Grip->GetComponentLocation()+Grip->GetForwardVector()*4.f;
         if(Mesh&&Mesh->DoesSocketExist(Bone))Point=Mesh->GetSocketLocation(Bone);
         const bool Holding=IsValid(Held)&&Held->IsHeld();

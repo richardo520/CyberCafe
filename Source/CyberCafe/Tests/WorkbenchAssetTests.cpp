@@ -15,8 +15,10 @@
 #include "GrabComponent.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
+#include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
+#include "Serving/DrinkRecipe.h"
 #include "Serving/OrderHologramActor.h"
 #include "Serving/ServingSpotActor.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
@@ -45,6 +47,9 @@ namespace WorkbenchAssetTests
 constexpr float StepSeconds = .01f;
 constexpr double VolumeTolerance = 1.e-6;
 const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* PrimaryCupClassPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* PrimaryCupMeshPath = TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup");
+const TCHAR* PrimaryCupProfilePath = TEXT("/Game/VRTemplate/MenuIngredients/Breakage/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
 struct FVariant { const TCHAR* Label; const TCHAR* ClassPath; };
 const FVariant Variants[] = {
     {TEXT("Bottle01"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle01/BP_Bottle01.BP_Bottle01_C")},
@@ -107,7 +112,7 @@ bool SaveRows(FAutomationTestBase& Test, const TCHAR* FileName, const TCHAR* Gro
         *(Directory / FileName), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM));
 }
 
-AGlassRecoveryActor* SavedManager(FAutomationTestBase& Test, UWorld*& Map)
+AGlassRecoveryActor* SavedManager(FAutomationTestBase& Test, UWorld*& Map, TArray<FString>* Rows = nullptr)
 {
     Map = LoadObject<UWorld>(nullptr, MapPath);
     if (!Test.TestNotNull(TEXT("只读加载保存地图，不启动原地图世界"), Map)
@@ -115,12 +120,23 @@ AGlassRecoveryActor* SavedManager(FAutomationTestBase& Test, UWorld*& Map)
     AGlassRecoveryActor* Result = nullptr;
     int32 Count = 0;
     for (AActor* A : Map->PersistentLevel->Actors)
+    {
+        if (!A) continue;
         if (AGlassRecoveryActor* M = Cast<AGlassRecoveryActor>(A))
         {
-            ++Count;
-            if (A->GetFName() == TEXT("GlassRecovery_Tutorial")) Result = M;
+            const bool bTutorialManager = A->GetFName() == TEXT("GlassRecovery_Tutorial");
+            if (bTutorialManager) { ++Count; Result = M; }
+            FRow Row; Row.Text(TEXT("stage"), TEXT("savedRecoveryManager"));
+            Row.Text(TEXT("manager"), M->GetPathName()); Row.Text(TEXT("managerClass"), M->GetClass()->GetPathName());
+            Row.Bool(TEXT("countedTutorialManager"), bTutorialManager);
+            Row.Text(TEXT("prototypeCup"), GetPathNameSafe(M->PrototypeCup.Get()));
+            Row.Text(TEXT("cupProfile"), GetPathNameSafe(M->CupProfile.Get()));
+            Row.Number(TEXT("restoreTargetCount"), M->RestoreTargets.Num());
+            if (Rows) Rows->Add(Row.Json()); else Test.AddInfo(Row.Json());
         }
-    Test.TestEqual(TEXT("保存地图只有一个恢复经理"), Count, 1);
+        Test.TestFalse(TEXT("退场的原第一杯实例不再留在地图"), A->GetFName() == TEXT("BP_Cup01_C_1"));
+    }
+    Test.TestEqual(TEXT("命名 GlassRecovery_Tutorial 唯一，独立菜单经理不计入"), Count, 1);
     Test.TestNotNull(TEXT("原 GlassRecovery_Tutorial 存在"), Result);
     return Result;
 }
@@ -289,7 +305,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
     }
     TestEqual(TEXT("实际发现全十一份保存 profile"), Profiles.Num(), 11);
     TestEqual(TEXT("实际发现八十八块独立保存碎片"), Shards.Num(), 88);
-    UWorld* Map = nullptr; auto* Manager = SavedManager(*this, Map);
+    UWorld* Map = nullptr; auto* Manager = SavedManager(*this, Map, &Rows);
     if (!Manager) return false;
     const bool bBegunBefore = Map->HasBegunPlay();
     TestTrue(TEXT("保存经理使用统一恢复模式"), Manager->bUnifiedRestore);
@@ -305,10 +321,18 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         Targets.Add(Target.Get());
     }
     TestEqual(TEXT("六个保存目标互不重复"), Targets.Num(), 6);
-    TestTrue(TEXT("六项包括原杯与奶瓶"), Targets.Contains(Manager->PrototypeCup.Get()) && Targets.Contains(Manager->PrototypeBottle.Get()));
-    TestEqual(TEXT("原杯身份保留"), GetNameSafe(Manager->PrototypeCup.Get()), FString(TEXT("BP_Cup01_C_1")));
+    ALiquidContainerActor* PrimaryCup = Manager->PrototypeCup.Get();
+    if (!TestNotNull(TEXT("从指定经理 PrototypeCup 读取第一杯"), PrimaryCup)) return false;
+    TestTrue(TEXT("六项包括新首杯与原奶瓶"), Targets.Contains(PrimaryCup) && Targets.Contains(Manager->PrototypeBottle.Get()));
+    TestEqual(TEXT("第一杯实例为批准的新 Highball"), PrimaryCup->GetName(), FString(TEXT("BP_MenuCup_Highball_C_1")));
+    TestEqual(TEXT("第一杯 class 精确匹配 Highball"), PrimaryCup->GetClass()->GetPathName(), FString(PrimaryCupClassPath));
+    TestEqual(TEXT("第一杯网格精确匹配 Highball"), GetPathNameSafe(PrimaryCup->ContainerMesh->GetStaticMesh().Get()), FString(PrimaryCupMeshPath));
+    TestTrue(TEXT("第一杯根网格及缩放保持批准的 1.1"), PrimaryCup->GetRootComponent() == PrimaryCup->ContainerMesh.Get()
+        && PrimaryCup->ContainerMesh->GetRelativeScale3D().Equals(FVector(1.1), .0001));
+    TestEqual(TEXT("第一杯容量为 300mL"), PrimaryCup->MaxVolumeML, 300.f);
+    TestEqual(TEXT("第一杯自身 profile 精确匹配 Highball"), GetPathNameSafe(PrimaryCup->GlassBreakProfile.Get()), FString(PrimaryCupProfilePath));
     TestEqual(TEXT("原奶瓶身份保留"), GetNameSafe(Manager->PrototypeBottle.Get()), FString(TEXT("BP_Bottle04_Milk_Tutorial")));
-    TestEqual(TEXT("原杯 profile 保留"), GetPathNameSafe(Manager->CupProfile.Get()), ProfilePath(Variants[6]));
+    TestEqual(TEXT("经理首杯 profile 精确匹配 Highball"), GetPathNameSafe(Manager->CupProfile.Get()), FString(PrimaryCupProfilePath));
     TestEqual(TEXT("奶瓶 profile 保留"), GetPathNameSafe(Manager->BottleProfile.Get()), ProfilePath(Variants[3]));
     ATutorialDirector* Director = nullptr; AOrderHologramActor* Hologram = nullptr; AIceStationActor* Station = nullptr;
     int32 Directors = 0, Holograms = 0, Stations = 0, Grinders = 0;
@@ -327,6 +351,13 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
     TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     const TCHAR* Names[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"), TEXT("TutorialStep_ShowMessage_2"),
         TEXT("TutorialStep_ShowMessage_3"), TEXT("TutorialStep_WaitForServe_0"), TEXT("TutorialStep_ConsumeServedDrink_0")};
+    // 变更文案精确采用 menu_ui_implementation/applied.json.step_texts，未变更三步保留原字。
+    const TCHAR* Hints[] = {TEXT("你就是新来的店长？我叫时零。\n这儿能坐吗？柱梯口挤得连转身都难。"),
+        TEXT("先来杯冰拿铁吧，咖啡和牛奶一半一半。\n一只手拿稳瓶身，另一只手抓住瓶盖，向上拔开。"),
+        TEXT("空杯在你左手边，先用那只直筒杯。\n这儿卡在上下城中间，往上赶的、往下赶的，都从门口过。"),
+        TEXT("够不到就别硬探身子，瓶子又不会跑。\n【操作提示】左手 X / 右手 A：远程抓取。"),
+        TEXT("冰拿铁：直筒杯，冰块 3 块（1 铲）。\n咖啡 100 mL＋牛奶 100 mL。照菜单上的瓶子慢慢倒，看杯旁的 mL 读数。\n做好后放到吧台前的交付位置，再松手。不合适可拿回调整。"),
+        TEXT("时零准备尝一口，稍等一下。")};
     const int32 OriginalStepIndices[] = {0, 1, 2, 3, 6, 7};
     for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(OriginalStepIndices[I]); ++I)
     {
@@ -336,6 +367,10 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         TestTrue(TEXT("旧步骤仍归属原导演"), Step->GetOuter() == Director);
         const FString Type = I < 4 ? TEXT("TutorialStep_ShowMessage") : (I == 4 ? TEXT("TutorialStep_WaitForServe") : TEXT("TutorialStep_ConsumeServedDrink"));
         TestEqual(TEXT("旧步骤类型保留"), Step->GetClass()->GetPathName(), TEXT("/Script/CyberCafe.") + Type);
+        TestEqual(TEXT("步骤提示精确匹配批准的冰拿铁基线"), Step->HintText.ToString(), FString(Hints[I]));
+        const FString Completed = I < 4 ? TEXT("") : (I == 4
+            ? TEXT("冰拿铁已收下。") : TEXT("嗯，奶没盖住咖啡味。\n我今天不赶柱梯。再坐一会儿，可以吧？"));
+        TestEqual(TEXT("步骤完成文本精确匹配批准基线"), Step->CompletedText.ToString(), Completed);
     }
     for (int32 MenuIndex = 4; MenuIndex <= 5 && Director->Steps.IsValidIndex(MenuIndex); ++MenuIndex)
     {
@@ -347,6 +382,10 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
             ? TEXT("/Script/CyberCafe.TutorialStep_ShowMessage") : TEXT("/Script/CyberCafe.TutorialStep_WaitForRecipeMenu")));
         TestTrue(TEXT("新增菜单步骤内联归属原导演"), Step->GetOuter() == Director);
         TestFalse(TEXT("新增菜单步骤提示文本非空"), Step->HintText.IsEmpty());
+        TestEqual(TEXT("菜单步骤提示精确匹配 applied.json"), Step->HintText.ToString(), FString(MenuIndex == 4
+            ? TEXT("来杯冰拿铁吧。开菜单，点它就能看怎么做。") : TEXT("打开屏幕，点“饮品配方”里的冰拿铁。")));
+        TestEqual(TEXT("菜单步骤完成文本精确匹配批准基线"), Step->CompletedText.ToString(), FString(MenuIndex == 4
+            ? TEXT("") : TEXT("对，就照这份来。先放一铲冰。")));
     }
     auto* Wait = Director->Steps.IsValidIndex(6) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[6].Get()) : nullptr;
     if (TestNotNull(TEXT("原 Step[6] 上菜步骤"), Wait))
@@ -354,13 +393,31 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         TestTrue(TEXT("旧全息引用保持"), Wait->OrderHologram.Get() == Hologram);
         TestEqual(TEXT("原拿铁配方引用保持"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
         TestEqual(TEXT("原上菜点引用保持"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+        if (!TestNotNull(TEXT("原拿铁配方有效"), Wait->RequiredRecipe.Get()) || !TestNotNull(TEXT("原服务位存在"), Wait->RequiredSpot.Get())
+            || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
+        TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
+        TestEqual(TEXT("拿铁杯 class 精确匹配 Highball"), GetPathNameSafe(Wait->RequiredRecipe->AcceptedCupClass.Get()), FString(PrimaryCupClassPath));
+        TestEqual(TEXT("冰拿铁要求三块冰"), Wait->RequiredRecipe->ExpectedIceCount, 3);
+        TestEqual(TEXT("冰拿铁目标仍为 200mL"), Wait->RequiredRecipe->TargetVolumeML, 200.0);
+        TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
+        TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+        TestTrue(TEXT("原 NPC 位置不变"), Director->NPCRef->GetActorLocation().Equals(FVector(-9, 48, 82), .001));
     }
     TestTrue(TEXT("冰站仍引用经理冰铲"), Station->Scoop.Get() == Manager->RestoreScoop.Get());
     TestNotNull(TEXT("原冰桶引用存在"), Station->Bucket.Get()); TestNotNull(TEXT("原练习杯引用存在"), Station->Cup.Get());
-    if (Station->Cup) TestEqual(TEXT("原冰站练习杯仍为 Cup03"), Station->Cup->GetClass()->GetPathName(), FString(Variants[8].ClassPath));
+    if (Station->Cup)
+    {
+        TestEqual(TEXT("原冰站练习杯仍为 Cup03"), Station->Cup->GetClass()->GetPathName(), FString(Variants[8].ClassPath));
+        TestEqual(TEXT("冰站仍引用 IceCup_Practice"), Station->Cup->GetName(), FString(TEXT("IceCup_Practice")));
+        TestTrue(TEXT("冰站练习杯独立于新恢复首杯"), Station->Cup.Get() != PrimaryCup);
+    }
     TestEqual(TEXT("只读加载没有启动或推进原地图世界"), Map->HasBegunPlay(), bBegunBefore);
-    // 全部旧文本、变换及配置的 prevbaselineHash 差分由外部主流程复核，不伪造基线。
+    // 旧资产 SHA、其他变换及配置的 prevbaselineHash 差分仍由外部主流程复核，不伪造基线。
     FRow Row; Row.Text(TEXT("map"), Map->GetPathName()); Row.Text(TEXT("manager"), Manager->GetPathName());
+    Row.Text(TEXT("primaryCup"), PrimaryCup->GetPathName()); Row.Text(TEXT("primaryCupClass"), PrimaryCup->GetClass()->GetPathName());
+    Row.Text(TEXT("primaryCupMesh"), GetPathNameSafe(PrimaryCup->ContainerMesh->GetStaticMesh().Get()));
+    Row.Text(TEXT("primaryCupProfile"), GetPathNameSafe(Manager->CupProfile.Get()));
+    Row.Number(TEXT("primaryCupCapacityML"), PrimaryCup->MaxVolumeML);
     Row.Number(TEXT("targetCount"), Targets.Num()); Row.Number(TEXT("oldStepCount"), Director->Steps.Num()); Rows.Add(Row.Json());
     return SaveRows(*this, TEXT("saved_profiles_map.json"), TEXT("SavedAllProfilesShapeAndRestoreMap"), TEXT("readOnlySavedAssets"), Rows);
 }

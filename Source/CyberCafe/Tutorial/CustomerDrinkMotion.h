@@ -12,6 +12,8 @@ class CYBERCAFE_API UCustomerDrinkMotion:public UDataAsset
 public:
  UPROPERTY(EditAnywhere,BlueprintReadOnly) TObjectPtr<UAnimSequence> Animation;
  UPROPERTY(EditAnywhere,BlueprintReadOnly) TObjectPtr<UStaticMesh> SupportedCupMesh;
+ // Exact opt-in scale for the authored mesh; defaults keep legacy scale-1 checks.
+ UPROPERTY(EditAnywhere,BlueprintReadOnly) FVector SupportedCupScale=FVector::OneVector;
  UPROPERTY(EditAnywhere,BlueprintReadOnly) float SampleRate=30;
  UPROPERTY(EditAnywhere,BlueprintReadOnly) TArray<FTransform> CupSamples;
  UPROPERTY(EditAnywhere,BlueprintReadOnly) float GraspTime=1.55f;

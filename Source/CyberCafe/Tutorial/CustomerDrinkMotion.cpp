@@ -2,7 +2,7 @@
 #include "Animation/AnimSequence.h"
 bool UCustomerDrinkMotion::IsValidMotion() const
 {
- if(!Animation||!SupportedCupMesh||!FMath::IsFinite(SampleRate)||SampleRate<=0||CupSamples.Num()<2)return false;
+ if(!Animation||!SupportedCupMesh||!FMath::IsFinite(SampleRate)||SampleRate<=0||CupSamples.Num()<2||SupportedCupScale.ContainsNaN()||SupportedCupScale.GetMin()<=0)return false;
  const float D=Duration();if(!FMath::IsFinite(D)||D<=0||FMath::Abs(D-Animation->GetPlayLength())>.05f)return false;
  if(!(0<=GraspTime&&GraspTime<SipStart&&SipStart<SipEnd&&SipEnd<ReleaseTime&&ReleaseTime<D)||!FMath::IsFinite(SipVolumeML)||SipVolumeML<=0||!FMath::IsFinite(MaxStartOffsetCM)||MaxStartOffsetCM<0)return false;
  for(const auto& T:CupSamples)if(T.ContainsNaN()||!T.GetScale3D().Equals(FVector::OneVector,.001))return false;

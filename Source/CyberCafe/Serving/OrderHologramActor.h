@@ -75,6 +75,12 @@ public:
     UFUNCTION(BlueprintPure,Category="Hologram|Menu") int32 GetSelectedMenuIndex() const {return SelectedMenuIndex;}
     const FDrinkMenuEntry* GetSelectedMenuEntry() const;
     bool ProcessMenuTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked=true,bool Holding=false);
+    // Same actions and rectangles drive visible UMG buttons and tracked fingertip input.
+    bool ActivateScreenAction(int32 Action);
+    TArray<int32> GetVisibleMenuIndices() const;
+    int32 GetMenuFilter() const {return MenuFilter;}
+    int32 GetLastScreenAction() const {return LastScreenAction;}
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Menu") bool bOpenOnRecipePage=true;
     // @trace MT-01. Emitted only for accepted hand input, never for scripted selection.
     FHologramMenuInteraction OnMenuInteractionNative;
     UFUNCTION(BlueprintCallable,Category="Hologram") void PressButton();
@@ -103,9 +109,10 @@ private:
     UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> MenuLabels;
     bool bRecipeMenuMode=false;
     int32 SelectedMenuIndex=0;
-    bool MenuTouchLatched[4]={false,false,false,false};
-    bool MenuLeftOutside[4]={true,true,true,true};
-    bool MenuRightOutside[4]={true,true,true,true};
+    int32 MenuFilter=0,LastScreenAction=INDEX_NONE;
+    bool bScreenTouchLatched=false,bScreenLeftOutside=true,bScreenRightOutside=true;
+    bool bScreenLeftNeedsExit=false,bScreenRightNeedsExit=false;
+    bool bLeftNeedsExit=false,bRightNeedsExit=false;
     UPROPERTY(Transient) TObjectPtr<UDrinkRecipe> CurrentRecipe;
     UPROPERTY(Transient) TWeakObjectPtr<AServingSpotActor> CurrentSpot;
     UPROPERTY(Transient) TWeakObjectPtr<ATutorialNPC> CurrentCustomer;

@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Liquid/CupActor.h"
+#include "Liquid/IceInteraction.h"
 #include "UI/LiquidVolumeWidget.h"
 #include "Components/WidgetComponent.h"
 #include "Kismet/GameplayStatics.h"
@@ -32,6 +33,9 @@ ACupActor::ACupActor()
     bAcceptLiquidFromOthers = true;   // 杯子默认可接液
 
     // 抓取行为默认继承基类(Snap)，用户可在蓝图子类里改
+
+    // 常驻冰组件沿用原内腔默认值；各杯子类独立配置几何，不写液量。
+    CupIce = CreateDefaultSubobject<UCupIceComponent>(TEXT("CupIce"));
 
     // ------------------------------------------------------------------
     // 容量 UI 组件：3D Widget（World Space），挂在 Root 上方

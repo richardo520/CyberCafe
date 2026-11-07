@@ -177,7 +177,9 @@ private:
     UPROPERTY(Transient) FDrinkValidationResult LastValidation;
     UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> LastAttemptCup;
     int32 LastAttemptRevision = -1;
+    int32 LastAttemptIceRevision = -1;
     int32 ObservedRevision = -1;
+    int32 ObservedIceRevision = -1;
     uint32 OrderSerial = 0;
     uint32 AcceptedOrderSerial = 0;
     float StableElapsed = 0;

@@ -45,23 +45,14 @@ void UTutorialStep_WaitForRecipeMenu::ShowProgress(const FText& Text)
 void UTutorialStep_WaitForRecipeMenu::HandleMenuInteraction(AOrderHologramActor* Screen)
 {
     if(!bActive||IsCompleted()||Screen!=SubscribedScreen.Get()||!Screen->IsPanelOpen())return;
-    if(Screen->IsRecipeMenuMode())
+    if(!Screen->IsRecipeMenuMode())return;
+    bOpenedMenu=true;
+    // A page tab or retained/scripted default selection is not a drink click.
+    if(Screen->GetLastScreenAction()<100||Screen->GetLastScreenAction()>=110)return;
+    const auto* Entry=Screen->GetSelectedMenuEntry();
+    if(Entry&&Entry->PinyinIndex==RequiredPinyinIndex)
     {
-        bOpenedMenu=true;
-        const auto* Entry=Screen->GetSelectedMenuEntry();
-        if(Entry&&Entry->PinyinIndex==RequiredPinyinIndex)
-        {
-            bViewedRecipe=true;
-            ShowProgress(FText::Format(NSLOCTEXT("TutorialMenu","Return","找到 {0} 了。看右侧的原料和 mL，然后再触碰底座 MENU，切回订单页。"),FText::FromName(RequiredPinyinIndex)));
-        }
-        else
-            ShowProgress(FText::Format(NSLOCTEXT("TutorialMenu","Find","用底座 PREV / NEXT 翻查，或直接触碰屏幕左侧的 {0}。找到后看右侧配方，再用 MENU 切回订单页。"),FText::FromName(RequiredPinyinIndex)));
-        return;
+        bViewedRecipe=true;Unsubscribe();MarkCompleted();
     }
-    if(bOpenedMenu&&bViewedRecipe)
-    {
-        Unsubscribe();MarkCompleted();
-    }
-    else
-        ShowProgress(FText::Format(NSLOCTEXT("TutorialMenu","Incomplete","还没查到 {0}。再触碰 MENU，找到它的配方后再回来。"),FText::FromName(RequiredPinyinIndex)));
+    else ShowProgress(NSLOCTEXT("TutorialMenu","ClickDrink","点一下冰拿铁，看看用哪只杯子和哪些原料。"));
 }

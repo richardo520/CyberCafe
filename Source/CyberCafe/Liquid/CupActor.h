@@ -8,6 +8,7 @@
 
 class UWidgetComponent;
 class ULiquidVolumeWidget;
+class UCupIceComponent;
 
 /**
  * ACupActor
@@ -26,6 +27,9 @@ class CYBERCAFE_API ACupActor : public ALiquidContainerActor
 
 public:
     ACupActor();
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Liquid|Ice")
+    TObjectPtr<UCupIceComponent> CupIce;
 
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaTime) override;

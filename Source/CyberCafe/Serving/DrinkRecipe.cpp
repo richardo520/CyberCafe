@@ -2,6 +2,7 @@
 #include "Serving/DrinkRecipe.h"
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/CupActor.h"
+#include "Liquid/IceInteraction.h"
 
 UDrinkRecipe::UDrinkRecipe()
 {
@@ -15,6 +16,14 @@ FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
 {
     FDrinkValidationResult R;R.RecipeId=RecipeId;
     auto Fail=[&](EDrinkValidationReason Reason,const FString& Text){R.Reason=Reason;R.Feedback=FText::FromString(Text);return R;};
+    if(IsValid(Cup))
+    {
+        if(const UCupIceComponent* Ice=Cup->FindComponentByClass<UCupIceComponent>())
+        {
+            R.IceCount=Ice->GetIceCount();
+            R.IceRevision=Ice->GetPreparationRevision();
+        }
+    }
     if(IsValid(Cup)&&Cup->IsBroken())
     {
         R.LiquidRevision=Cup->GetLiquidRevision();
@@ -23,6 +32,8 @@ FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
     double MinSum=0,MaxSum=0;TSet<FName> Ids;
     if(RecipeId.IsNone()||!FMath::IsFinite(TargetVolumeML)||!FMath::IsFinite(MinVolumeML)||!FMath::IsFinite(MaxVolumeML)||MinVolumeML<=0||MinVolumeML>TargetVolumeML||TargetVolumeML>MaxVolumeML||Rules.IsEmpty())
         return Fail(EDrinkValidationReason::InvalidRecipe,TEXT("当前订单配置有误，请检查配方。"));
+    if(ExpectedIceCount!=-1&&ExpectedIceCount!=0&&ExpectedIceCount!=3)
+        return Fail(EDrinkValidationReason::InvalidRecipe,TEXT("当前订单的冰块配置有误，仅支持不校验、无冰或3块冰。"));
     for(const auto& Rule:Rules)
     {
         if(Rule.IngredientId.IsNone()||Rule.IngredientId==TEXT("Unknown")||Ids.Contains(Rule.IngredientId)||!FMath::IsFinite(Rule.MinFraction)||!FMath::IsFinite(Rule.MaxFraction)||Rule.MinFraction<0||Rule.MinFraction>Rule.MaxFraction||Rule.MaxFraction>1)
@@ -57,5 +68,12 @@ FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
         if(F<Rule.MinFraction-1.e-9||F>Rule.MaxFraction+1.e-9)
             return Fail(EDrinkValidationReason::WrongRatio,TEXT("配比还没对上。照订单调整；杯子太满时先倒掉一些。"));
     }
-    R.bAccepted=true;R.Reason=EDrinkValidationReason::Accepted;R.Feedback=FText::FromString(TEXT("饮品份量和配比符合订单。"));return R;
+    if(ExpectedIceCount>=0&&R.IceCount<ExpectedIceCount)
+        return Fail(EDrinkValidationReason::WrongIce,FString::Printf(TEXT("冰块不足：订单需要 %d 块，杯中只有 %d 块。请补齐冰块，再送来。"),ExpectedIceCount,R.IceCount));
+    if(ExpectedIceCount>=0&&R.IceCount>ExpectedIceCount)
+        return Fail(EDrinkValidationReason::WrongIce,ExpectedIceCount==0
+            ? FString::Printf(TEXT("这杯要求无冰，杯中有 %d 块冰。倒空后重做，或换一只空杯。"),R.IceCount)
+            : FString::Printf(TEXT("冰块太多：订单需要 %d 块，杯中有 %d 块。倒出多余冰块，必要时重新调制。"),ExpectedIceCount,R.IceCount));
+    R.bAccepted=true;R.Reason=EDrinkValidationReason::Accepted;
+    R.Feedback=FText::FromString(ExpectedIceCount<0?TEXT("饮品份量和配比符合订单。"):TEXT("饮品份量、配比和冰块数量符合订单。"));return R;
 }

@@ -208,8 +208,16 @@ ACupActor* UCupIceComponent::GetCup() const
     return Cast<ACupActor>(GetOwner());
 }
 
+int32 UCupIceComponent::GetPreparationRevision() const
+{
+    // 查询前同步失效成员；只有实际移除才推进版本，不随查询或 Tick 空转。
+    const_cast<UCupIceComponent*>(this)->RemoveIce(nullptr);
+    return PreparationRevision;
+}
+
 int32 UCupIceComponent::GetIceCount() const
 {
+    const_cast<UCupIceComponent*>(this)->RemoveIce(nullptr);
     int32 Count = 0;
     for (const TObjectPtr<AIceCubeActor>& Item : IceCubes)
     {
@@ -253,7 +261,9 @@ bool UCupIceComponent::TryAccept(AIceCubeActor* Ice, const FVector& Previous, co
     Ice->SetLifeSpan(0.f);
     Ice->AttachToComponent(Cup->ContainerMesh.Get(), FAttachmentTransformRules::KeepWorldTransform);
     Ice->SetActorLocation(Entry.TransformPosition(LocalPosition), false, nullptr, ETeleportType::TeleportPhysics);
+    const int32 PreviousCount = IceCubes.Num();
     IceCubes.AddUnique(Ice);
+    if (IceCubes.Num() != PreviousCount) ++PreparationRevision;
     if (IsValid(ClinkSound.Get()) && SoundCooldown <= 0.f)
     {
         UGameplayStatics::PlaySoundAtLocation(this, ClinkSound.Get(), Current, 0.65f);
@@ -264,12 +274,13 @@ bool UCupIceComponent::TryAccept(AIceCubeActor* Ice, const FVector& Previous, co
 
 void UCupIceComponent::RemoveIce(AIceCubeActor* Ice)
 {
-    IceCubes.RemoveAll([this, Ice](const TObjectPtr<AIceCubeActor>& Item)
+    const int32 RemovedCount = IceCubes.RemoveAll([this, Ice](const TObjectPtr<AIceCubeActor>& Item)
     {
         const AIceCubeActor* Existing = Item.Get();
         return !IsValid(Existing) || Existing == Ice || Existing->IsActorBeingDestroyed()
             || Existing->State != EIceState::InCup || Existing->CupIce.Get() != this;
     });
+    if (RemovedCount > 0) ++PreparationRevision;
 }
 
 void UCupIceComponent::ReleaseAll()
@@ -289,6 +300,8 @@ void UCupIceComponent::ReleaseAll()
     }
     const TArray<TObjectPtr<AIceCubeActor>> Releasing = MoveTemp(IceCubes);
     IceCubes.Reset();
+    // 先记成员变化，再进入释放回调；空杯重复释放和回调里的 RemoveIce 不重复计数。
+    if (!Releasing.IsEmpty()) ++PreparationRevision;
     for (const TObjectPtr<AIceCubeActor>& Item : Releasing)
     {
         AIceCubeActor* Ice = Item.Get();
@@ -905,6 +918,8 @@ void AIceStationActor::BeginPlay()
         if (!Component) return;
         Cup->AddInstanceComponent(Component);
     }
+    // A station is an explicit per-instance geometry override, including legacy
+    // practice cups. Unbound menu cups keep their authored per-class cavity.
     Component->InteriorRadiusCM = CupInteriorRadiusCM;
     Component->InteriorDepthCM = CupInteriorDepthCM;
     Component->ClinkSound = ClinkSound;

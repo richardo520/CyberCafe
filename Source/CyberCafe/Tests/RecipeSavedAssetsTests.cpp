@@ -12,6 +12,7 @@
 #include "Serving/ServingSpotActor.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
+#include "Tests/TutorialMenuTestHelpers.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Misc/Paths.h"
@@ -33,6 +34,13 @@ bool FRecipeSavedAssetsTest::RunTest(const FString&)
     TestEqual(TEXT("Coffee is explicit, not material inference"),MapCoffee->InitialIngredientId,FName(TEXT("Coffee")));
     TestEqual(TEXT("Milk is explicit"),MapMilk->InitialIngredientId,FName(TEXT("Milk")));
     TestFalse(TEXT("No premature serving before order step"),MapStep->RequiredSpot->bAcceptSubmissions);
+    UDrinkRecipe* Recipe=MapStep->RequiredRecipe.Get();
+    UClass* CupClass=Recipe->AcceptedCupClass.Get();
+    if(!TestNotNull(TEXT("保存配方指定真实杯类"),CupClass)||!TestTrue(TEXT("保存杯类派生自 ACupActor"),CupClass->IsChildOf(ACupActor::StaticClass())))return false;
+    TestEqual(TEXT("保存配方 ID 仍为 Latte"),Recipe->RecipeId,FName(TEXT("Latte")));
+    TestEqual(TEXT("保存配方显示名为冰拿铁"),Recipe->DisplayName.ToString(),FString(TEXT("冰拿铁")));
+    TestEqual(TEXT("保存配方要求三块冰"),Recipe->ExpectedIceCount,3);
+    TestEqual(TEXT("保存配方目标仍为 200 mL"),Recipe->TargetVolumeML,200.0);
     UWorld::InitializationValues IV;
     IV.AllowAudioPlayback(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
     UWorld* W=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::SM5,&IV);
@@ -44,8 +52,8 @@ bool FRecipeSavedAssetsTest::RunTest(const FString&)
     Coffee->InitialIngredientId=MapCoffee->InitialIngredientId;Coffee->bStartCapped=false;
     Milk->InitialIngredientId=MapMilk->InitialIngredientId;Milk->bStartCapped=false;
     Coffee->bCanPour=false;Milk->bCanPour=false;
-    UClass* CupClass=LoadClass<ACupActor>(nullptr,TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C"));
     ACupActor* Cup=W->SpawnActor<ACupActor>(CupClass,FVector::ZeroVector,FRotator::ZeroRotator,Params);Cup->bCanPour=false;
+    TestTrue(TEXT("真实杯使用保存 AcceptedCupClass 且属于夹具 World"),Cup->GetClass()==CupClass&&Cup->GetWorld()==W);
     for(ALiquidContainerActor* A:{static_cast<ALiquidContainerActor*>(Coffee),static_cast<ALiquidContainerActor*>(Milk),static_cast<ALiquidContainerActor*>(Cup)}) A->ContainerMesh->SetSimulatePhysics(false);
     AServingSpotActor* Spot=W->SpawnActor<AServingSpotActor>();Spot->bAcceptSubmissions=false;
     ATutorialDirector* Director=W->SpawnActor<ATutorialDirector>();Director->bAutoStart=false;
@@ -62,7 +70,10 @@ bool FRecipeSavedAssetsTest::RunTest(const FString&)
     TestNull(TEXT("Rejected cup not sent to consume step"),Director->LastServedCup.Get());
     S->EmitVolume(Milk,100,Mouth+FVector(0,0,10),FVector(0,0,-50),FVector::ZeroVector);S->Simulate(.3);
     TestTrue(TEXT("Milk packet carries explicit 100 mL"),FMath::Abs(Cup->GetIngredientVolumeML(TEXT("Milk"))-100)<.00001);
+    TestTrue(TEXT("同 World 三块真实冰穿杯口验收"),TutorialMenuTestHelpers::AddIce(Cup,3));
     TestTrue(TEXT("Real saved recipe accepts mixed cup"),Spot->TrySubmitCup(Cup));
+    TestEqual(TEXT("真实验收快照恰好三块冰"),Spot->GetLastValidation().IceCount,3);
+    TestTrue(TEXT("加冰不改权威液量 200 mL"),FMath::Abs(Cup->GetPreciseVolumeML()-200)<.00001);
     TestTrue(TEXT("Success completes teaching"),Step->IsCompleted());
     TestEqual(TEXT("Success shares correct cup"),Director->LastServedCup.Get(),static_cast<AActor*>(Cup));
     TestTrue(TEXT("All native volume entries remain balanced"),FMath::Abs(S->GetBalance().ErrorML)<.00001);

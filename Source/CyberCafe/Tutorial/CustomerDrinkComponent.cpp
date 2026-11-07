@@ -40,7 +40,7 @@ bool UCustomerDrinkComponent::BeginDrink(ALiquidContainerActor* Cup,AServingSpot
  auto* M=GetOwner()->FindComponentByClass<USkeletalMeshComponent>();
  if(!M||!M->GetSkeletalMeshAsset()||M->GetSkeletalMeshAsset()->GetSkeleton()!=Motion->Animation->GetSkeleton()||!Cup->ContainerMesh||Cup->ContainerMesh->GetStaticMesh()!=Motion->SupportedCupMesh)return Reject(TEXT("unsupported-mesh-or-skeleton"));
  const FTransform TM=M->GetComponentTransform();
- if(TM.ContainsNaN()||!TM.GetScale3D().Equals(FVector::OneVector,.01)||!Cup->GetActorScale3D().Equals(FVector::OneVector,.01))return Reject(TEXT("unsupported-scale"));
+ if(TM.ContainsNaN()||!TM.GetScale3D().Equals(FVector::OneVector,.01)||!Cup->GetActorScale3D().Equals(Motion->SupportedCupScale,.01))return Reject(TEXT("unsupported-scale"));
  const FVector Expected=(Motion->Sample(0)*TM).GetLocation();const FVector Offset=Cup->GetActorLocation()-Expected;
  if(Offset.Size()>Motion->MaxStartOffsetCM)return Reject(FString::Printf(TEXT("cup-start-offset: %.3fcm > %.3fcm"),Offset.Size(),Motion->MaxStartOffsetCM));
  UsedCups.Remove(TWeakObjectPtr<ALiquidContainerActor>());UsedCups.Add(Cup);

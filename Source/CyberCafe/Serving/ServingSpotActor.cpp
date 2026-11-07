@@ -7,9 +7,20 @@
 // @trace RC-03 RC-05
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/CupActor.h"
+#include "Liquid/IceInteraction.h"
 #include "GrabComponent.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
 #include "Engine/World.h"
+
+namespace
+{
+    int32 GetServingSpotCupIcePreparationRevision(const ALiquidContainerActor* Cup)
+    {
+        if (!IsValid(Cup)) return 0;
+        const UCupIceComponent* Ice = Cup->FindComponentByClass<UCupIceComponent>();
+        return Ice ? Ice->GetPreparationRevision() : 0;
+    }
+}
 
 AServingSpotActor::AServingSpotActor()
 {
@@ -59,7 +70,7 @@ void AServingSpotActor::Tick(float DeltaSeconds)
         DetectBox->GetOverlappingActors(Overlapping, ALiquidContainerActor::StaticClass());
         for (AActor* A : Overlapping)
             if (ALiquidContainerActor* C = Cast<ALiquidContainerActor>(A); IsCupAcceptable(C) && IsInServingArea(C))
-            { CandidateCup = C; ObservedRevision = -1; StableElapsed = 0; break; }
+            { CandidateCup = C; ObservedRevision = -1; ObservedIceRevision = -1; StableElapsed = 0; break; }
     }
     ALiquidContainerActor* Cup = CandidateCup.Get();
     if (!Cup)
@@ -67,15 +78,20 @@ void AServingSpotActor::Tick(float DeltaSeconds)
         return;
     }
 
-    if (Cup->IsBroken() || !IsInServingArea(Cup)) { CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1; return; }
+    if (Cup->IsBroken() || !IsInServingArea(Cup)) { CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1; ObservedIceRevision = -1; return; }
     // Picking up re-arms the submission; never force a release to serve a cup.
     if (Cup->IsHeld())
-    { StableElapsed = 0; ObservedRevision = -1; if (LastAttemptCup.Get() == Cup) LastAttemptRevision = -1; return; }
+    {
+        StableElapsed = 0; ObservedRevision = -1; ObservedIceRevision = -1;
+        if (LastAttemptCup.Get() == Cup) { LastAttemptRevision = -1; LastAttemptIceRevision = -1; }
+        return;
+    }
     if (!ActiveRecipe) { TrySubmitCup(Cup); return; }
     const int32 Revision = Cup->GetLiquidRevision();
-    if (LastAttemptCup.Get() == Cup && LastAttemptRevision == Revision) return;
-    if (ObservedRevision != Revision || Cup->bIsPouring)
-    { ObservedRevision = Revision; StableElapsed = 0; return; }
+    const int32 IceRevision = GetServingSpotCupIcePreparationRevision(Cup);
+    if (LastAttemptCup.Get() == Cup && LastAttemptRevision == Revision && LastAttemptIceRevision == IceRevision) return;
+    if (ObservedRevision != Revision || ObservedIceRevision != IceRevision || Cup->bIsPouring)
+    { ObservedRevision = Revision; ObservedIceRevision = IceRevision; StableElapsed = 0; return; }
     StableElapsed += FMath::Max(0.f, DeltaSeconds);
     if (StableElapsed >= FMath::Max(0.f, StabilitySeconds)) TrySubmitCup(Cup);
 }
@@ -118,7 +134,7 @@ void AServingSpotActor::HandleDetectBeginOverlap(UPrimitiveComponent* /*Overlapp
     }
 
     // 已经有一个候选且不是当前这只 → 以最后进入的为准（避免卡住）
-    if (CandidateCup.Get() != Cup) { StableElapsed = 0; ObservedRevision = -1; }
+    if (CandidateCup.Get() != Cup) { StableElapsed = 0; ObservedRevision = -1; ObservedIceRevision = -1; }
     CandidateCup = Cup;
 }
 
@@ -137,8 +153,8 @@ void AServingSpotActor::HandleDetectEndOverlap(UPrimitiveComponent* /*Overlapped
     {
         // Multiple components may overlap. Do not cancel while another body remains.
         if (DetectBox && DetectBox->IsOverlappingActor(Cup)) return;
-        CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1;
-        if (LastAttemptCup.Get() == Cup) { LastAttemptCup.Reset(); LastAttemptRevision = -1; }
+        CandidateCup.Reset(); StableElapsed = 0; ObservedRevision = -1; ObservedIceRevision = -1;
+        if (LastAttemptCup.Get() == Cup) { LastAttemptCup.Reset(); LastAttemptRevision = -1; LastAttemptIceRevision = -1; }
     }
 }
 
@@ -154,7 +170,7 @@ void AServingSpotActor::SetActiveRecipe(UDrinkRecipe* Recipe)
 {
     if (bCommitting) return;
     ++OrderSerial; ActiveRecipe = Recipe;
-    LastAttemptCup.Reset(); LastAttemptRevision = -1; ObservedRevision = -1; StableElapsed = 0;
+    LastAttemptCup.Reset(); LastAttemptRevision = -1; LastAttemptIceRevision = -1; ObservedRevision = -1; ObservedIceRevision = -1; StableElapsed = 0;
     if (!bHasBeenServed) LastValidation = FDrinkValidationResult();
 }
 
@@ -162,7 +178,8 @@ void AServingSpotActor::SetSubmissionEnabled(bool bEnabled)
 {
     if (bCommitting) return;
     bAcceptSubmissions = bEnabled;
-    ++OrderSerial; StableElapsed = 0; ObservedRevision = -1;
+    LastAttemptCup.Reset(); LastAttemptRevision = -1; LastAttemptIceRevision = -1;
+    ++OrderSerial; StableElapsed = 0; ObservedRevision = -1; ObservedIceRevision = -1;
 }
 
 bool AServingSpotActor::HasAcceptedCup(const ALiquidContainerActor* Cup, FName RecipeId) const
@@ -182,16 +199,16 @@ bool AServingSpotActor::TrySubmitCup(ALiquidContainerActor* Cup)
     const FDrinkValidationResult Result = Recipe->Evaluate(Cup);
     Cup = SubmissionCup.Get();
     if (!IsValid(this) || !Cup || CommittingCup != SubmissionCup) return false;
-    const bool bNewAttempt = LastAttemptCup.Get() != Cup || LastAttemptRevision != Result.LiquidRevision;
-    LastAttemptCup = Cup; LastAttemptRevision = Result.LiquidRevision;
+    const bool bNewAttempt = LastAttemptCup.Get() != Cup || LastAttemptRevision != Result.LiquidRevision || LastAttemptIceRevision != Result.IceRevision;
+    LastAttemptCup = Cup; LastAttemptRevision = Result.LiquidRevision; LastAttemptIceRevision = Result.IceRevision;
     LastValidation = Result;
     if (!Result.bAccepted)
     {
         if (bNewAttempt) OnDrinkValidated.Broadcast(this, Cup, Result);
         return false;
     }
-    // No asynchronous bool or old timer may lock a changed cup/changed order.
-    if (Serial != OrderSerial || Recipe != ActiveRecipe || !bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || !IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision) return false;
+    // 冻结前复核结果快照：旧计时器或回调中的补冰/换冰不能锁定已改变的杯子。
+    if (Serial != OrderSerial || Recipe != ActiveRecipe || !bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || Cup->IsLiquidFrozen() || Cup->bIsPouring || !IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision || GetServingSpotCupIcePreparationRevision(Cup) != Result.IceRevision) return false;
     Cup->FreezeLiquidForServing();
     Cup = SubmissionCup.Get();
     if (!IsValid(this) || !Cup || CommittingCup != SubmissionCup) return false;
@@ -286,11 +303,13 @@ void AServingSpotActor::ForgetRestoredContainers(const TArray<ALiquidContainerAc
         CandidateCup.Reset();
         StableElapsed=0;
         ObservedRevision=-1;
+        ObservedIceRevision=-1;
     }
     if(RestoredCups.Contains(LastAttemptCup))
     {
         LastAttemptCup.Reset();
         LastAttemptRevision=-1;
+        LastAttemptIceRevision=-1;
         if(!LastValidation.bAccepted)LastValidation=FDrinkValidationResult();
     }
     // 即使在吸附/失败回调中恢复，也不得继续提交被忘记的旧杯。
@@ -303,6 +322,6 @@ void AServingSpotActor::ResetServing()
     AcceptedOrderSerial = 0;
     bHasBeenServed = false;
     ServedCup.Reset();
-    CandidateCup.Reset(); LastAttemptCup.Reset(); LastAttemptRevision = -1;
-    LastValidation = FDrinkValidationResult(); ObservedRevision = -1; StableElapsed = 0; ++OrderSerial;
+    CandidateCup.Reset(); LastAttemptCup.Reset(); LastAttemptRevision = -1; LastAttemptIceRevision = -1;
+    LastValidation = FDrinkValidationResult(); ObservedRevision = -1; ObservedIceRevision = -1; StableElapsed = 0; ++OrderSerial;
 }

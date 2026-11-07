@@ -11,6 +11,7 @@
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
+#include "Tests/TutorialMenuTestHelpers.h"
 #include "UI/Narrative/NarrativeHUDActor.h"
 #include "UI/Narrative/NarrativeWidget.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
@@ -766,7 +767,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         if (Display->CustomerNotes.IsValidIndex(1))
         {
             TestEqual(Label + TEXT("：备注只记录公开称呼"), Display->CustomerNotes[0].ToString(), FString(bFirstCustomerInstance ? TEXT("称呼：时零") : TEXT("教学客人")));
-            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("首杯：原味拿铁；咖啡与牛奶对半") : TEXT("喜好尚未了解")));
+            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("首杯：冰拿铁；咖啡与牛奶对半，加3块冰") : TEXT("喜好尚未了解")));
         }
         if (bFirstCustomerInstance && Display->CustomerNotes.IsValidIndex(2))
             TestEqual(Label + TEXT("：备注只记录本次来意"), Display->CustomerNotes[2].ToString(), FString(TEXT("本次：想在店里坐一会儿")));
@@ -789,13 +790,40 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     UDrinkRecipe* Recipe = LoadObject<UDrinkRecipe>(nullptr,
         TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("加载已保存真实 DA_Latte 配方"), Recipe)) return false;
+    UClass* CupClass = Recipe->AcceptedCupClass.Get();
+    if (!TestNotNull(TEXT("保存 DA_Latte 指定真实杯类"), CupClass) ||
+        !TestTrue(TEXT("保存杯类派生自 ACupActor"), CupClass->IsChildOf(ACupActor::StaticClass()))) return false;
+    TestEqual(TEXT("保存配方 ID 仍为 Latte"), Recipe->RecipeId, FName(TEXT("Latte")));
+    TestEqual(TEXT("保存配方显示名为冰拿铁"), Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
+    TestEqual(TEXT("保存配方要求三块冰"), Recipe->ExpectedIceCount, 3);
     AServingSpotActor* Spot = T.Spot(Recipe);
     Spot->SetSubmissionEnabled(false);
-    ACupActor* Cup = T.Cup(Spot, 100.f, 100.f);
+    const FVector CupPosition = Spot->DetectBox->GetComponentTransform().TransformPosition(FVector(1, 1, 1));
+    const FTransform CupTransform(FRotator::ZeroRotator, CupPosition);
+    ACupActor* Cup = T.World->SpawnActorDeferred<ACupActor>(CupClass,
+        CupTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+    if (!TestNotNull(TEXT("生成保存 AcceptedCupClass 的真实杯"), Cup)) return false;
+    Cup->bCanPour = false;
+    Cup->bEnableSplash = false;
+    Cup->LiquidFXTemplate = nullptr;
+    Cup->SplashEffectTemplate = nullptr;
+    Cup->LiquidFX->SetAutoActivate(false);
+    Cup->LiquidFX->SetAsset(nullptr);
+    Cup->PourFX->SetAutoActivate(false);
+    Cup->PourFX->SetAsset(nullptr);
+    Cup->ContainerMesh->SetSimulatePhysics(false);
+    Cup->FinishSpawning(CupTransform);
+    Cup->ContainerMesh->SetSimulatePhysics(false);
+    Cup->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    T.Cups.Add(Cup);
     UTutorialStep_WaitForServe* Step = T.WaitStep(Spot, Recipe);
     Step->OrderHologram = T.Hologram;
     T.BeginPlay();
     if (!CheckFixture(*this, T, Spot)) return false;
+    TestTrue(TEXT("保存配方杯类与 World 一致"), Cup->GetClass() == CupClass && Cup->GetWorld() == T.World);
+    if (!TestEqual(TEXT("真实杯接收 Coffee 100 mL"), Cup->AddIngredientLiquid(100.f, CoffeeId, FLinearColor::Red), 100.f) ||
+        !TestEqual(TEXT("真实杯接收 Milk 100 mL"), Cup->AddIngredientLiquid(100.f, MilkId, FLinearColor::White), 100.f) ||
+        !TestTrue(TEXT("同 World 三块真实冰穿杯口验收"), TutorialMenuTestHelpers::AddIce(Cup, 3))) return false;
     UOrderHologramWidget* Widget = T.Hologram->GetDisplayWidget();
     if (!TestNotNull(TEXT("BeginPlay 自动生成实际 DisplayWidget，未手动 SetWidget"), Widget)) return false;
     TestTrue(TEXT("实际运行控件类就是已保存 WBP"), Widget->GetClass() == SavedWidgetClass);
@@ -821,7 +849,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     const FString InitialHistoryText = Widget->GetHistoryText().ToString();
     const bool bAutoPending = T.Hologram->IsPending();
     const bool bAutoOpen = T.Hologram->IsPanelOpen();
-    TestTrue(TEXT("真实 WBP 订单文本含拿铁"), OrderText.Contains(TEXT("拿铁")));
+    TestTrue(TEXT("真实 WBP 订单文本含冰拿铁"), OrderText.Contains(TEXT("冰拿铁")));
     TestTrue(TEXT("真实 WBP 订单文本含目标 200"), OrderText.Contains(TEXT("200")));
     TestTrue(TEXT("真实 WBP 订单文本含成分 100"), OrderText.Contains(TEXT("100")));
     TestTrue(TEXT("真实 WBP 订单文本含咖啡"), OrderText.Contains(TEXT("咖啡")));
@@ -832,13 +860,14 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     const double RuntimePanelWidthCM = T.Hologram->Panel->GetDrawSize().X * T.Hologram->Panel->GetRelativeScale3D().Y;
     TestTrue(TEXT("运行 BP 展开后实际面板中心 (0,0,55)"), RuntimePanelCenter.Equals(FVector(0, 0, 55), .00001));
     TestTrue(TEXT("运行 BP 实际面板宽度 60 cm"), FMath::Abs(RuntimePanelWidthCM - 60.0) < VolumeTolerance);
-    if (!TestTrue(TEXT("真实 100+100 杯通过 TrySubmitCup 成功"), Spot->TrySubmitCup(Cup))) return false;
+    if (!TestTrue(TEXT("真实 100+100 加三块冰杯通过 TrySubmitCup 成功"), Spot->TrySubmitCup(Cup))) return false;
     const FDrinkValidationResult Result = Spot->GetLastValidation();
+    TestEqual(TEXT("保存配方真实验收快照恰好三块冰"), Result.IceCount, 3);
     const FString HistoryText = Widget->GetHistoryText().ToString();
     TestTrue(TEXT("真实 DA_Latte 提交同步完成 WaitStep"), Step->IsCompleted());
     CheckDelivered(*this, TEXT("真实保存 BP 收到交付"), T.Hologram, true, 1);
     CheckRecord(*this, TEXT("真实保存 BP 的交付快照"), T.Hologram, 0, Recipe, Result);
-    TestTrue(TEXT("实际 WBP 历史含拿铁"), HistoryText.Contains(TEXT("拿铁")));
+    TestTrue(TEXT("实际 WBP 历史含冰拿铁"), HistoryText.Contains(TEXT("冰拿铁")));
     TestTrue(TEXT("实际 WBP 历史含实际 200"), HistoryText.Contains(TEXT("200")));
     TestFalse(TEXT("实际 WBP 交付后不再显示空历史"), HistoryText.Contains(TEXT("暂无本局交付")));
     TestFalse(TEXT("实际 WBP 历史不虚构刚刚好评价"), HistoryText.Contains(TEXT("刚刚好")));
@@ -945,10 +974,16 @@ bool FHologramTouchHoldingOutsideRearmTest::RunTest(const FString&)
         TestTrue(Label + TEXT("：第一手首次进区触发关闭"), T.Hologram->ProcessTouchSample(First, Inside));
         TestFalse(Label + TEXT("：第二手进区不连跳并记录尚未退出"), T.Hologram->ProcessTouchSample(Second, Inside));
         CheckPending(*this, Label + TEXT("首轮锁存关闭"), T.Hologram, false, 0);
-        TestFalse(Label + TEXT("：第二手持物但未 tracked 的 far 不确认退出"),
+        TestFalse(Label + TEXT("：第二手持物但失去追踪不触发开关"),
             T.Hologram->ProcessTouchSample(Second, Far, false, true));
         TestFalse(Label + TEXT("：第一手真实 far 仅确认自己退出"), T.Hologram->ProcessTouchSample(First, Far));
-        TestFalse(Label + TEXT("：另一手未追踪的 far 不能导致重臂"), T.Hologram->ProcessTouchSample(First, Inside));
+        TestTrue(Label + TEXT("：另一手失追不堵住仍有效手的重新进入"), T.Hologram->ProcessTouchSample(First, Inside));
+        CheckPending(*this, Label + TEXT("有效手在另一手失追后可展开"), T.Hologram, true, 0);
+        // A second real outside/inside stroke restores the closed state for the
+        // original holding/exit checks below; no state flags or API toggles.
+        TestFalse(Label + TEXT("：有效手再次真实退出"), T.Hologram->ProcessTouchSample(First, Far));
+        TestTrue(Label + TEXT("：有效手再次进入可关闭"), T.Hologram->ProcessTouchSample(First, Inside));
+        CheckPending(*this, Label + TEXT("真实再次触摸关闭"), T.Hologram, false, 0);
         TestFalse(Label + TEXT("：另一手 tracked 持物 far 应确认 outside 而不触发"),
             T.Hologram->ProcessTouchSample(Second, Far, true, true));
         TestFalse(Label + TEXT("：持物另一手退出但第一手仍在区内，不得重臂"),

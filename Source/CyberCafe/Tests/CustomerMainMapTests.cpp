@@ -19,6 +19,7 @@
 #include "UI/Narrative/NarrativeWidget.h"
 #include "Serving/ServingSpotActor.h"
 #include "Liquid/CupActor.h"
+#include "Liquid/GlassRecoveryActor.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -93,6 +94,7 @@ struct FRun
     bool bSawDrinking = false;
     bool bClockValid = true;
     bool bCupAnimationMatches = true;
+    bool bIceAdded = false;
 
     FRun(FAutomationTestBase& InTest, const TCHAR* InCase) : Test(InTest), CaseName(InCase)
     {
@@ -140,7 +142,7 @@ struct FRun
     {
         if (OutputDir.IsEmpty()) return;
         const FString Json = TEXT("{\"measurementSource\":\"saved-entire-map-real-world-tick\",\"notAPassCertificate\":true,\"case\":")
-            + JsonString(CaseName) + TEXT(",\"liquidFixture\":\"empty saved Cup01 + public Coffee100 Milk100; not VR pouring\",\"stages\":[\n")
+            + JsonString(CaseName) + TEXT(",\"liquidFixture\":\"empty saved Highball + public Coffee100 Milk100 + three real ice; not VR pouring\",\"stages\":[\n")
             + FString::Join(Stages, TEXT(",\n")) + TEXT("\n]}\n");
         if (!IFileManager::Get().MakeDirectory(*OutputDir, true) ||
             !FFileHelper::SaveStringToFile(Json, *(OutputDir / (CaseName + TEXT(".json"))),
@@ -310,21 +312,34 @@ struct FRun
             }
             if (UTutorialStep_ConsumeServedDrink* S = Cast<UTutorialStep_ConsumeServedDrink>(Step)) Consume = S;
             if (UTutorialStep_Grab* S = Cast<UTutorialStep_Grab>(Step))
-                if (ACupActor* Candidate = Cast<ACupActor>(S->RequiredActor.Get())) Cup = Candidate;
-        }
-        if (!Cup) for (const auto& A : World->PersistentLevel->Actors)
-            if (ACupActor* Candidate = Cast<ACupActor>(A.Get()))
-                if (Candidate->GetClass()->GetName().Contains(TEXT("BP_Cup01")))
+                if (ACupActor* Candidate = Cast<ACupActor>(S->RequiredActor.Get()))
                 {
-                    if (Cup) return Fail(TEXT("多个 Cup01 且步骤未指定真实杯，不能任意选择"));
+                    if (Cup && Cup != Candidate) return Fail(TEXT("保存 Grab 步骤指定多个教学杯，不能任意选择"));
                     Cup = Candidate;
                 }
-        if (!Need(Wait && Consume && Cup && IsValid(Wait->RequiredSpot) && IsValid(Wait->RequiredRecipe), TEXT("保存步骤/真实 Cup01/Spot/配方引用缺失"))) return false;
+        }
+        AGlassRecoveryActor* Recovery = Cast<AGlassRecoveryActor>(ByName.FindRef(TEXT("GlassRecovery_Tutorial")));
+        if (!Need(IsValid(Recovery) && Recovery->GetWorld() == World && IsValid(Recovery->PrototypeCup),
+            TEXT("原恢复经理或 PrototypeCup 未重映射至副本"))) return false;
+        ACupActor* PrototypeCup = Cast<ACupActor>(Recovery->PrototypeCup.Get());
+        if (!Cup) Cup = PrototypeCup;
+        if (!Need(Wait && Consume && IsValid(Cup) && Cup == PrototypeCup && IsValid(Wait->RequiredSpot) && IsValid(Wait->RequiredRecipe),
+            TEXT("保存步骤/原恢复经理唯一教学杯/Spot/配方引用缺失或不一致"))) return false;
+        if (!Need(Recovery->RestoreTargets.Num() == 6, TEXT("保存 RestoreTargets 不再是六个目标"))) return false;
+        int32 CupTargetCount = 0;
+        for (const auto& Target : Recovery->RestoreTargets)
+        {
+            if (!Need(IsValid(Target.Get()) && Target->GetWorld() == World, TEXT("保存恢复目标失效或仍指向源地图"))) return false;
+            if (Target.Get() == Cup) ++CupTargetCount;
+        }
+        if (!Need(CupTargetCount == 1, TEXT("保存恢复目标未唯一引用新的教学杯"))) return false;
         Spot = Wait->RequiredSpot.Get();
         SavedSpotTM = Spot->GetActorTransform();
         if (!Need(Cup->GetWorld() == World && Spot->GetWorld() == World && Wait->GetOuter() == Director && Consume->GetOuter() == Director,
             TEXT("保存杯/Spot/Instanced Steps 仍指向源地图"))) return false;
-        if (!Need(Cup->GetClass()->GetName().Contains(TEXT("BP_Cup01")), TEXT("步骤引用不是保存 Cup01"))) return false;
+        UClass* HighballClass = LoadClass<ACupActor>(nullptr,
+            TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C"));
+        if (!Need(IsValid(HighballClass) && Cup->GetClass() == HighballClass, TEXT("恢复经理教学杯不是保存 Highball 类"))) return false;
         if (!Need(Drink()->bEnabled && IsValid(Drink()->Motion) && Drink()->Motion->IsValidMotion() && IsValid(Drink()->Motion->Animation),
             TEXT("保存 NPC 未启用或真实喝饮 Motion 无效；禁止夹具修补"))) return false;
         if (!Need(Mesh()->GetSkeletalMeshAsset() && Mesh()->GetSkeletalMeshAsset()->GetSkeleton() == Drink()->Motion->Animation->GetSkeleton(),
@@ -357,6 +372,7 @@ struct FRun
         // unregistered identity transforms. This still catches runtime NPC drift.
         SavedNPCTM = NPC->GetActorTransform();
         SavedSpotTM = Spot->GetActorTransform();
+        if (!Need(Cup->GetActorScale3D().Equals(FVector(1.1), .00001), TEXT("保存 Highball 根缩放不是批准的 1.1；不由夹具修补"))) return false;
         World->GetWorldSettings()->MinUndilatedFrameTime = 0.f;
         Reason = TEXT("NotifyBeginPlay 前");
         Record(TEXT("BeginPlay 前"));
@@ -410,7 +426,8 @@ struct FRun
         const float Elapsed = C->GetElapsedSeconds();
         if (IsValid(Cup) && Elapsed >= 2.5f && Elapsed < 4.f)
         {
-            const FTransform Expected = C->Motion->Sample(Elapsed) * M->GetComponentTransform();
+            FTransform Expected = C->Motion->Sample(Elapsed) * M->GetComponentTransform();
+            Expected.SetScale3D(AcceptedCupTM.GetScale3D());
             bCupAnimationMatches &= Cup->GetActorTransform().Equals(Expected, .05);
         }
     }
@@ -421,6 +438,12 @@ struct FRun
         ++GFrameCounter;
         World->Tick(LEVELTICK_All, FrameSeconds);
         if (!RuntimeValid()) return false;
+        if (bIceAdded)
+        {
+            UCupIceComponent* Ice = Cup->FindComponentByClass<UCupIceComponent>();
+            if (!Need(IsValid(Ice) && Ice->GetIceCount() == 3, TEXT("真实 Tick 路径未保留三块杯内冰"))) return false;
+            if (!Need(Cup->GetActorScale3D().Equals(FVector(1.1), .00001), TEXT("真实 Tick 路径破坏了 Highball 根缩放 1.1"))) return false;
+        }
         ObserveMotion();
         return true;
     }
@@ -460,10 +483,26 @@ struct FRun
                     {
                         if (!Need(!MenuStep->WasUnavailable() && MenuStep->OrderHologram &&
                             MenuStep->OrderHologram->GetWorld() == World, TEXT("保存菜单步骤未指向副本真实屏幕"))) return false;
-                        if (!Need(TutorialMenuTestHelpers::FindAndReturn(MenuStep->OrderHologram, MenuStep->RequiredPinyinIndex),
-                            TEXT("真实手采样未打开菜单、查配方并返回"))) return false;
+                        AOrderHologramActor* Screen = MenuStep->OrderHologram.Get();
+                        if (!Need(IsValid(Screen->ButtonZone) && IsValid(Screen->Panel) && MenuStep->RequiredPinyinIndex == FName(TEXT("BNT")),
+                            TEXT("保存菜单缺真实开屏按钮/面板或教学索引不是 BNT"))) return false;
+                        if (!Screen->IsPanelOpen())
+                        {
+                            const FTransform PowerZone = Screen->ButtonZone->GetComponentTransform();
+                            const FVector Away = PowerZone.TransformPosition(FVector(100, 100, 100));
+                            Screen->ProcessTouchSample(EControllerHand::Left, Away);
+                            Screen->ProcessTouchSample(EControllerHand::Right, Away);
+                            if (!Need(Screen->ProcessTouchSample(EControllerHand::Left, PowerZone.GetLocation()) && Screen->IsPanelOpen(),
+                                TEXT("真实 power 触摸未打开屏幕"))) return false;
+                        }
+                        if (Screen->Panel->GetRelativeScale3D().Z < Screen->Panel->GetRelativeScale3D().Y * .999f)
+                            for (int32 I = 0; I < 20; ++I) if (!Tick()) return false;
+                        if (!Need(Screen->IsPanelOpen() && Screen->Panel->GetRelativeScale3D().Z >= Screen->Panel->GetRelativeScale3D().Y * .999f,
+                            TEXT("真实 World Tick 后菜单展开动画仍未完成"))) return false;
+                        if (!Need(TutorialMenuTestHelpers::FindRecipe(Screen, FName(TEXT("BNT"))),
+                            TEXT("真实屏内 drinkRow 手采样未查看冰拿铁配方"))) return false;
                         if (!Need(MenuStep->IsCompleted(), TEXT("真实菜单操作未完成教学门槛"))) return false;
-                        Reason = TEXT("真实MENU/NEXT手采样查YWNT并返回，未跳过教学");
+                        Reason = TEXT("真实 power 开屏及屏内 drinkRow 触摸查看 BNT，无需返回，未跳过教学");
                         Record(TEXT("菜单教学完成"));
                     }
                 }
@@ -483,17 +522,22 @@ struct FRun
     bool FillAndPlace()
     {
         if (!RuntimeValid()) return false;
-        if (!Need(IsValid(Cup) && !Cup->IsBroken() && !Cup->IsLiquidFrozen() && !Cup->IsHeld(), TEXT("保存 Cup01 已破碎/冻结/被持有，禁止强制改 Grab 状态"))) return false;
-        if (!Need(FMath::Abs(Cup->GetPreciseVolumeML()) < VolumeTolerance, TEXT("保存 Cup01 非空，不清空或修改初始液量"))) return false;
+        if (!Need(IsValid(Cup) && !Cup->IsBroken() && !Cup->IsLiquidFrozen() && !Cup->IsHeld(), TEXT("保存 Highball 已破碎/冻结/被持有，禁止强制改 Grab 状态"))) return false;
+        if (!Need(FMath::Abs(Cup->GetPreciseVolumeML()) < VolumeTolerance, TEXT("保存 Highball 非空，不清空或修改初始液量"))) return false;
         if (!Need(Cup->AddIngredientLiquid(100.f, TEXT("Coffee"), FLinearColor::Red) == 100.f,
             TEXT("公共 fixture 未接收 Coffee100，不扩容或改 recipe")) || !RuntimeValid()) return false;
         if (!Need(Cup->AddIngredientLiquid(100.f, TEXT("Milk"), FLinearColor::White) == 100.f,
             TEXT("公共 fixture 未接收 Milk100，不扩容或改 recipe")) || !RuntimeValid()) return false;
+        if (!Need(TutorialMenuTestHelpers::AddIce(Cup, 3), TEXT("同 World 真实三块冰未穿杯口验收")) || !RuntimeValid()) return false;
+        bIceAdded = true;
+        UCupIceComponent* Ice = Cup->FindComponentByClass<UCupIceComponent>();
+        if (!Need(IsValid(Ice) && Ice->GetIceCount() == 3, TEXT("上菜夹具未恰好加入三块冰"))) return false;
         // Public placement fixture is deliberately slower than glass break speed.
         // A one-frame 42cm teleport incorrectly looks like a >2000cm/s impact in
         // the full scene (the old isolated fixture had no table to hit).
         const FTransform From = Cup->GetActorTransform();
-        const FTransform To = Spot->GetActorTransform();
+        FTransform To = Spot->GetActorTransform();
+        To.SetScale3D(From.GetScale3D());
         for (int32 I = 1; I <= 16; ++I)
         {
             FTransform T;
@@ -503,7 +547,7 @@ struct FRun
         }
         Cup->ContainerMesh->UpdateOverlaps();
         Spot->DetectBox->UpdateOverlaps();
-        Reason = TEXT("玩家放置真实保存 Cup01；200mL fixture，NPC/Spot 未移动");
+        Reason = TEXT("玩家放置真实保存 Highball；200mL 加三块冰，根缩放仍 1.1，NPC/Spot 未移动");
         Record(TEXT("放杯"));
         return Need(FMath::Abs(Cup->GetPreciseVolumeML() - 200.) < VolumeTolerance, TEXT("上菜前未保有 200mL"));
     }
@@ -593,6 +637,8 @@ struct FRun
         bOK &= Test.TestTrue(TEXT("结束回调完整且仍是原杯"), Probe->bEndedCompleted && Probe->EndedCup.Get() == Cup);
         bOK &= Test.TestTrue(TEXT("200mL 自动喝掉20，剩180"), FMath::Abs(Drink()->GetConsumedML() - 20.) < VolumeTolerance &&
             FMath::Abs(Cup->GetPreciseVolumeML() - 180.) < VolumeTolerance && FMath::Abs(Probe->EndedConsumedML - 20.) < VolumeTolerance);
+        bOK &= Test.TestTrue(TEXT("新冰拿铁喝饮后仍保留3块实体冰"), Cup->CupIce && Cup->CupIce->GetIceCount() == 3);
+        bOK &= Test.TestTrue(TEXT("新杯根缩放仍为原1.1"), Cup->GetActorScale3D().Equals(FVector(1.1), .001));
         bOK &= Test.TestTrue(TEXT("两种成分各剩90mL"), FMath::Abs(Cup->GetIngredientVolumeML(TEXT("Coffee")) - 90.) < VolumeTolerance &&
             FMath::Abs(Cup->GetIngredientVolumeML(TEXT("Milk")) - 90.) < VolumeTolerance);
         bOK &= Test.TestTrue(TEXT("原杯身份始终不替换、冻结、可见并返回服务位"), Spot->GetServedCup() == Cup && Director->LastServedCup == Cup &&

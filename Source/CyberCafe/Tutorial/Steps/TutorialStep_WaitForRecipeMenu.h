@@ -13,7 +13,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tutorial|Menu")
     TObjectPtr<AOrderHologramActor> OrderHologram;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tutorial|Menu")
-    FName RequiredPinyinIndex=TEXT("YWNT");
+    FName RequiredPinyinIndex=TEXT("BNT");
     virtual void EnterStep(ATutorialDirector* InDirector) override;
     virtual void ExitStep() override;
     UFUNCTION(BlueprintPure, Category="Tutorial|Menu") bool HasOpenedMenu() const {return bOpenedMenu;}

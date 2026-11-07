@@ -35,12 +35,14 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Ice") int32 MaxCupIce=6;
  UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Ice") TObjectPtr<USoundBase> ClinkSound;
  UFUNCTION(BlueprintPure) int32 GetIceCount() const;
+ UFUNCTION(BlueprintPure) int32 GetPreparationRevision() const;
  bool TryAccept(AIceCubeActor* Ice,const FVector& Previous,const FVector& Current);
  void ReleaseAll();
  void RemoveIce(AIceCubeActor* Ice);
  UFUNCTION(BlueprintPure) ACupActor* GetCup() const;
 private:
  UPROPERTY() TArray<TObjectPtr<AIceCubeActor>> IceCubes;
+ UPROPERTY(Transient) int32 PreparationRevision=0;
  FVector PreviousCupPosition=FVector::ZeroVector;
  float Age=0,SoundCooldown=0;
 };
