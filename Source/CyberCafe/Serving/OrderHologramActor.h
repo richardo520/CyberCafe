@@ -18,6 +18,8 @@ class AVRPawn;
 class UDrinkMenuData;
 class UTextRenderComponent;
 struct FDrinkMenuEntry;
+class AOrderHologramActor;
+DECLARE_MULTICAST_DELEGATE_OneParam(FHologramMenuInteraction, AOrderHologramActor*);
 USTRUCT(BlueprintType)
 struct FHologramDeliveryRecord
 {
@@ -73,6 +75,8 @@ public:
     UFUNCTION(BlueprintPure,Category="Hologram|Menu") int32 GetSelectedMenuIndex() const {return SelectedMenuIndex;}
     const FDrinkMenuEntry* GetSelectedMenuEntry() const;
     bool ProcessMenuTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked=true,bool Holding=false);
+    // @trace MT-01. Emitted only for accepted hand input, never for scripted selection.
+    FHologramMenuInteraction OnMenuInteractionNative;
     UFUNCTION(BlueprintCallable,Category="Hologram") void PressButton();
     // Called after the teaching step has established the spot's final OrderSerial.
     UFUNCTION(BlueprintCallable,Category="Hologram") bool BeginOrder(UDrinkRecipe* Recipe,AServingSpotActor* Spot,ATutorialNPC* Customer,FText Name);

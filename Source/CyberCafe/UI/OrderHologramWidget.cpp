@@ -251,7 +251,7 @@ void UOrderHologramWidget::BuildWidgetTree()
     MenuMetadata=MakeText(TEXT("MenuCupVolume"),28,Cyan,false);AddFixed(Details,MenuMetadata,48);
     MenuDescription=MakeText(TEXT("MenuDrinkDescription"),26,SecondaryInk,true);AddFixed(Details,MenuDescription,82);
     MenuIngredientLines=MakeText(TEXT("MenuIngredientsML"),34,Ink,true);AddFixed(Details,MenuIngredientLines,180);
-    auto* Method=MakeText(TEXT("MenuPourMethod"),24,SecondaryInk,true);Method->SetText(LOCTEXT("Method","按上方顺序逐项倒入；以 mL 和成分比例为准。\n原型无需摇壶 / 拉花 / 分层。"));AddFixed(Details,Method,76);
+    auto* Method=MakeText(TEXT("MenuPourMethod"),24,SecondaryInk,true);Method->SetText(LOCTEXT("Method","按上方顺序逐项倒入，看杯旁的 mL 读数。\n照配方调好即可，不需要摇壶、拉花或分层。"));AddFixed(Details,Method,76);
     MenuTolerance=MakeText(TEXT("MenuAcceptanceRange"),22,SecondaryInk,true);AddFixed(Details,MenuTolerance,128);
     MenuFooter=MakeText(TEXT("MenuCurrentOrderHint"),22,Cyan,true);AddFixed(Details,MenuFooter,104);
     PageSwitcher->SetActiveWidgetIndex(0);

@@ -11,6 +11,8 @@
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
 #include "Tutorial/Steps/TutorialStep_Grab.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
+#include "Tutorial/Steps/TutorialStep_WaitForRecipeMenu.h"
+#include "Tests/TutorialMenuTestHelpers.h"
 #include "Tutorial/Steps/TutorialStep_ConsumeServedDrink.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
 #include "UI/Narrative/NarrativeHUDActor.h"
@@ -327,9 +329,15 @@ struct FRun
             TEXT("保存 NPC 未启用或真实喝饮 Motion 无效；禁止夹具修补"))) return false;
         if (!Need(Mesh()->GetSkeletalMeshAsset() && Mesh()->GetSkeletalMeshAsset()->GetSkeleton() == Drink()->Motion->Animation->GetSkeleton(),
             TEXT("保存 Mesh/Animation Skeleton 不匹配"))) return false;
-        if (!Need(Director->Steps.Num() == 6 && Cast<UTutorialStep_ShowMessage>(Director->Steps[0]) &&
+        if (!Need(Director->Steps.Num() == 8 && Cast<UTutorialStep_ShowMessage>(Director->Steps[0]) &&
             Cast<UTutorialStep_ShowMessage>(Director->Steps[1]) && Cast<UTutorialStep_ShowMessage>(Director->Steps[2]) &&
             Cast<UTutorialStep_ShowMessage>(Director->Steps[3]), TEXT("保存教学前四步不是已核对的四条 ShowMessage，停止并报告"))) return false;
+        if (!Need(IsValid(Director->Steps[4].Get()) &&
+            Director->Steps[4]->GetClass()->GetPathName() == TEXT("/Script/CyberCafe.TutorialStep_ShowMessage") &&
+            Director->Steps[4]->GetOuter() == Director, TEXT("保存 Step[4] 菜单提示不是原生 ShowMessage 或未内联归属副本导演"))) return false;
+        if (!Need(IsValid(Director->Steps[5].Get()) &&
+            Director->Steps[5]->GetClass()->GetPathName() == TEXT("/Script/CyberCafe.TutorialStep_WaitForRecipeMenu") &&
+            Director->Steps[5]->GetOuter() == Director, TEXT("保存 Step[5] 菜单实操不是原生 WaitForRecipeMenu 或未内联归属副本导演"))) return false;
 
         Probe = World->SpawnActor<ACustomerDrinkTestProbe>();
         if (!Need(IsValid(Probe), TEXT("无法创建现有真实委托探针"))) return false;
@@ -445,6 +453,19 @@ struct FRun
                 {
                     if (!Need(IsValid(Grab->RequiredActor) && Grab->RequiredActor->GetWorld() == World, TEXT("Grab 缺真实地图 RequiredActor"))) return false;
                     Events->OnAnyObjectGrabbed.Broadcast(Grab->RequiredActor.Get(), EControllerHand::Right);
+                }
+                if (auto* MenuStep = Cast<UTutorialStep_WaitForRecipeMenu>(Step))
+                {
+                    if (!MenuStep->IsCompleted() && MenuStep->GetDirector() == Director)
+                    {
+                        if (!Need(!MenuStep->WasUnavailable() && MenuStep->OrderHologram &&
+                            MenuStep->OrderHologram->GetWorld() == World, TEXT("保存菜单步骤未指向副本真实屏幕"))) return false;
+                        if (!Need(TutorialMenuTestHelpers::FindAndReturn(MenuStep->OrderHologram, MenuStep->RequiredPinyinIndex),
+                            TEXT("真实手采样未打开菜单、查配方并返回"))) return false;
+                        if (!Need(MenuStep->IsCompleted(), TEXT("真实菜单操作未完成教学门槛"))) return false;
+                        Reason = TEXT("真实MENU/NEXT手采样查YWNT并返回，未跳过教学");
+                        Record(TEXT("菜单教学完成"));
+                    }
                 }
                 if (UTutorialStep_ShowMessage* Message = Cast<UTutorialStep_ShowMessage>(Step))
                     if (Message->bAllowSkipByInput && SinceInput >= .2f)

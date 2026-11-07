@@ -422,22 +422,34 @@ bool FCoffeeSavedAssetsAndSystemsTest::RunTest(const FString&)
     TestTrue(TEXT("原冰站与RESET仍共享原冰铲"), Ice->Scoop && Ice->Scoop.Get() == Reset->RestoreScoop.Get());
     TestTrue(TEXT("原冰桶及冰杯引用保留"), Ice->Bucket && Ice->Cup && Ice->Cup.Get() != MapCup);
     if (Ice->Cup) TestEqual(TEXT("原冰杯仍为原Cup03"), Ice->Cup->GetClass()->GetPathName(), FString(CupPath));
-    TestEqual(TEXT("旧教学仍严格六步"), Director->Steps.Num(), 6);
+    TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     const TCHAR* Names[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"), TEXT("TutorialStep_ShowMessage_2"),
         TEXT("TutorialStep_ShowMessage_3"), TEXT("TutorialStep_WaitForServe_0"), TEXT("TutorialStep_ConsumeServedDrink_0")};
-    for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(I); ++I)
+    const int32 OriginalStepIndices[] = {0, 1, 2, 3, 6, 7};
+    for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(OriginalStepIndices[I]); ++I)
     {
-        UTutorialStep* Step = Director->Steps[I].Get(); if (!TestNotNull(TEXT("原教学步骤对象"), Step)) continue;
+        UTutorialStep* Step = Director->Steps[OriginalStepIndices[I]].Get(); if (!TestNotNull(TEXT("原教学步骤对象"), Step)) continue;
         TestEqual(TEXT("六步原顺序及名称"), Step->GetName(), FString(Names[I]));
         TestTrue(TEXT("原步骤仍归属旧导演"), Step->GetOuter() == Director);
         const FString Type = I < 4 ? TEXT("TutorialStep_ShowMessage") : (I == 4 ? TEXT("TutorialStep_WaitForServe") : TEXT("TutorialStep_ConsumeServedDrink"));
         TestEqual(TEXT("原步骤类型保留"), Step->GetClass()->GetPathName(), TEXT("/Script/CyberCafe.") + Type);
-        FRow Row; Row.Text(TEXT("stage"), TEXT("savedOldStep")); Row.Number(TEXT("index"), I);
+        FRow Row; Row.Text(TEXT("stage"), TEXT("savedOldStep")); Row.Number(TEXT("index"), OriginalStepIndices[I]);
         Row.Text(TEXT("path"), Step->GetPathName()); Row.Text(TEXT("hint"), Step->HintText.ToString());
         Row.Text(TEXT("completed"), Step->CompletedText.ToString()); Evidence.Add(Row);
     }
-    auto* Wait = Director->Steps.IsValidIndex(4) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[4].Get()) : nullptr;
-    if (!TestNotNull(TEXT("旧拿铁上菜步骤"), Wait) || !TestNotNull(TEXT("原拿铁配方"), Wait->RequiredRecipe.Get())) return false;
+    for (int32 MenuIndex = 4; MenuIndex <= 5 && Director->Steps.IsValidIndex(MenuIndex); ++MenuIndex)
+    {
+        UTutorialStep* Step = Director->Steps[MenuIndex].Get();
+        if (!TestNotNull(TEXT("新增菜单步骤实例有效"), Step)) return false;
+        TestEqual(TEXT("新增菜单步骤名称与索引一致"), Step->GetName(), FString(MenuIndex == 4
+            ? TEXT("TutorialStep_ShowMessage_Menu_0") : TEXT("TutorialStep_WaitForRecipeMenu_0")));
+        TestEqual(TEXT("新增菜单步骤采用指定原生类型"), Step->GetClass()->GetPathName(), FString(MenuIndex == 4
+            ? TEXT("/Script/CyberCafe.TutorialStep_ShowMessage") : TEXT("/Script/CyberCafe.TutorialStep_WaitForRecipeMenu")));
+        TestTrue(TEXT("新增菜单步骤内联归属原导演"), Step->GetOuter() == Director);
+        TestFalse(TEXT("新增菜单步骤提示文本非空"), Step->HintText.IsEmpty());
+    }
+    auto* Wait = Director->Steps.IsValidIndex(6) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[6].Get()) : nullptr;
+    if (!TestNotNull(TEXT("旧拿铁 Step[6] 上菜步骤"), Wait) || !TestNotNull(TEXT("原拿铁配方"), Wait->RequiredRecipe.Get())) return false;
     TestTrue(TEXT("原上菜全息引用不变"), Wait->OrderHologram.Get() == Holo);
     TestEqual(TEXT("原配方路径不变"), Wait->RequiredRecipe->GetPathName(), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
     TestEqual(TEXT("原上菜点不变"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));

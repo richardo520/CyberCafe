@@ -723,18 +723,18 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     {
         if (ATutorialDirector* Candidate = Cast<ATutorialDirector>(Actor))
         {
-            if (Candidate->Steps.IsValidIndex(4) &&
-                Cast<UTutorialStep_WaitForServe>(Candidate->Steps[4].Get()))
+            if (Candidate->Steps.IsValidIndex(6) &&
+                Cast<UTutorialStep_WaitForServe>(Candidate->Steps[6].Get()))
             {
                 TestNull(TEXT("已保存地图的目标教学导演唯一"), SavedDirector);
                 SavedDirector = Candidate;
             }
         }
     }
-    if (!TestNotNull(TEXT("从 PersistentLevel 找到 Step[4] 教学导演"), SavedDirector)) return false;
-    UTutorialStep_WaitForServe* SavedStep = Cast<UTutorialStep_WaitForServe>(SavedDirector->Steps[4].Get());
+    if (!TestNotNull(TEXT("从 PersistentLevel 找到 Step[6] 教学导演"), SavedDirector)) return false;
+    UTutorialStep_WaitForServe* SavedStep = Cast<UTutorialStep_WaitForServe>(SavedDirector->Steps[6].Get());
     AOrderHologramActor* SavedDisplay = SavedStep->OrderHologram.Get();
-    if (!TestNotNull(TEXT("Step[4] 已保存 OrderHologram 引用"), SavedDisplay)) return false;
+    if (!TestNotNull(TEXT("Step[6] 已保存 OrderHologram 引用"), SavedDisplay)) return false;
     TestTrue(TEXT("保存的全息引用属于 L_Cafe PersistentLevel"), SavedDisplay->GetLevel() == SavedWorld->PersistentLevel);
     UClass* SavedActorClass = LoadClass<AOrderHologramActor>(nullptr,
         TEXT("/Game/VRTemplate/Blueprints/Serving/BP_OrderHologram.BP_OrderHologram_C"));
@@ -759,15 +759,17 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         const bool bFirstCustomerInstance = Display == SavedDisplay;
         TestEqual(Label + TEXT("：顾客 ID 与实例用途一致"), Display->CustomerId, FName(bFirstCustomerInstance ? TEXT("BarGirl_FirstCustomer") : TEXT("TutorialGuide")));
         const FString Name = Display->CustomerName.ToString();
-        TestEqual(Label + TEXT("：实例客人或通用默认身份明确"), Name, FString(bFirstCustomerInstance ? TEXT("BarGirl") : TEXT("咖啡馆向导")));
+        TestEqual(Label + TEXT("：实例客人或通用默认身份明确"), Name, FString(bFirstCustomerInstance ? TEXT("时零") : TEXT("咖啡馆向导")));
         if (bFirstCustomerInstance) TestEqual(Label + TEXT("：第一客人名字与对话导演一致"), Name, SavedDirector->DialogueSpeakerName.ToString());
         TestFalse(Label + TEXT("：顾客名无旧阿岚"), Name.Contains(TEXT("阿岚")));
-        TestEqual(Label + TEXT("：真实教学备注两条"), Display->CustomerNotes.Num(), 2);
+        TestEqual(Label + TEXT("：公开备注条数与实例用途一致"), Display->CustomerNotes.Num(), bFirstCustomerInstance ? 3 : 2);
         if (Display->CustomerNotes.IsValidIndex(1))
         {
-            TestEqual(Label + TEXT("：备注说明当前客人用途"), Display->CustomerNotes[0].ToString(), FString(bFirstCustomerInstance ? TEXT("第一位客人") : TEXT("教学客人")));
-            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("这次点一杯拿铁") : TEXT("喜好尚未了解")));
+            TestEqual(Label + TEXT("：备注只记录公开称呼"), Display->CustomerNotes[0].ToString(), FString(bFirstCustomerInstance ? TEXT("称呼：时零") : TEXT("教学客人")));
+            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("首杯：原味拿铁；咖啡与牛奶对半") : TEXT("喜好尚未了解")));
         }
+        if (bFirstCustomerInstance && Display->CustomerNotes.IsValidIndex(2))
+            TestEqual(Label + TEXT("：备注只记录本次来意"), Display->CustomerNotes[2].ToString(), FString(TEXT("本次：想在店里坐一会儿")));
         for (const FText& Note : Display->CustomerNotes)
         {
             TestFalse(Label + TEXT("：保存备注无旧阿岚"), Note.ToString().Contains(TEXT("阿岚")));

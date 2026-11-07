@@ -324,20 +324,32 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         || !TestNotNull(TEXT("原冰站存在"), Station)) return false;
     TestEqual(TEXT("原导演唯一"), Directors, 1); TestEqual(TEXT("原全息唯一"), Holograms, 1); TestEqual(TEXT("冰站唯一"), Stations, 1);
     TestTrue(TEXT("BeanGrinder 仍存在"), Grinders > 0);
-    TestEqual(TEXT("旧步骤仍为六步"), Director->Steps.Num(), 6);
+    TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     const TCHAR* Names[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"), TEXT("TutorialStep_ShowMessage_2"),
         TEXT("TutorialStep_ShowMessage_3"), TEXT("TutorialStep_WaitForServe_0"), TEXT("TutorialStep_ConsumeServedDrink_0")};
-    for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(I); ++I)
+    const int32 OriginalStepIndices[] = {0, 1, 2, 3, 6, 7};
+    for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(OriginalStepIndices[I]); ++I)
     {
-        auto* Step = Director->Steps[I].Get();
+        auto* Step = Director->Steps[OriginalStepIndices[I]].Get();
         if (!TestNotNull(TEXT("旧步骤内联对象有效"), Step)) continue;
         TestEqual(TEXT("旧步骤名称和顺序保留"), Step->GetName(), FString(Names[I]));
         TestTrue(TEXT("旧步骤仍归属原导演"), Step->GetOuter() == Director);
         const FString Type = I < 4 ? TEXT("TutorialStep_ShowMessage") : (I == 4 ? TEXT("TutorialStep_WaitForServe") : TEXT("TutorialStep_ConsumeServedDrink"));
         TestEqual(TEXT("旧步骤类型保留"), Step->GetClass()->GetPathName(), TEXT("/Script/CyberCafe.") + Type);
     }
-    auto* Wait = Director->Steps.IsValidIndex(4) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[4].Get()) : nullptr;
-    if (TestNotNull(TEXT("原上菜步骤"), Wait))
+    for (int32 MenuIndex = 4; MenuIndex <= 5 && Director->Steps.IsValidIndex(MenuIndex); ++MenuIndex)
+    {
+        UTutorialStep* Step = Director->Steps[MenuIndex].Get();
+        if (!TestNotNull(TEXT("新增菜单步骤实例有效"), Step)) return false;
+        TestEqual(TEXT("新增菜单步骤名称与索引一致"), Step->GetName(), FString(MenuIndex == 4
+            ? TEXT("TutorialStep_ShowMessage_Menu_0") : TEXT("TutorialStep_WaitForRecipeMenu_0")));
+        TestEqual(TEXT("新增菜单步骤采用指定原生类型"), Step->GetClass()->GetPathName(), FString(MenuIndex == 4
+            ? TEXT("/Script/CyberCafe.TutorialStep_ShowMessage") : TEXT("/Script/CyberCafe.TutorialStep_WaitForRecipeMenu")));
+        TestTrue(TEXT("新增菜单步骤内联归属原导演"), Step->GetOuter() == Director);
+        TestFalse(TEXT("新增菜单步骤提示文本非空"), Step->HintText.IsEmpty());
+    }
+    auto* Wait = Director->Steps.IsValidIndex(6) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[6].Get()) : nullptr;
+    if (TestNotNull(TEXT("原 Step[6] 上菜步骤"), Wait))
     {
         TestTrue(TEXT("旧全息引用保持"), Wait->OrderHologram.Get() == Hologram);
         TestEqual(TEXT("原拿铁配方引用保持"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));

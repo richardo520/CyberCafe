@@ -27,8 +27,8 @@ bool FRecipeSavedAssetsTest::RunTest(const FString&)
     ABottleActor* MapMilk=FindObject<ABottleActor>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_Bottle04_Milk_Tutorial"));
     ATutorialDirector* MapDirector=FindObject<ATutorialDirector>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialDirecter_C_0"));
     if(!TestNotNull(TEXT("Saved coffee identity"),MapCoffee)||!TestNotNull(TEXT("Saved milk bottle"),MapMilk)||!TestNotNull(TEXT("Original director retained"),MapDirector))return false;
-    if(!TestEqual(TEXT("Six original steps"),MapDirector->Steps.Num(),6))return false;
-    UTutorialStep_WaitForServe* MapStep=Cast<UTutorialStep_WaitForServe>(MapDirector->Steps[4]);
+    if(!TestEqual(TEXT("菜单插入后恰好八步"),MapDirector->Steps.Num(),8))return false;
+    UTutorialStep_WaitForServe* MapStep=Cast<UTutorialStep_WaitForServe>(MapDirector->Steps[6]);
     if(!TestNotNull(TEXT("Order step"),MapStep)||!TestNotNull(TEXT("Saved recipe reference"),MapStep->RequiredRecipe.Get()))return false;
     TestEqual(TEXT("Coffee is explicit, not material inference"),MapCoffee->InitialIngredientId,FName(TEXT("Coffee")));
     TestEqual(TEXT("Milk is explicit"),MapMilk->InitialIngredientId,FName(TEXT("Milk")));

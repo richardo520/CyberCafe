@@ -220,6 +220,8 @@ bool AOrderHologramActor::ProcessMenuTouchSample(EControllerHand Hand,const FVec
             if(I==0)Triggered=ToggleRecipeMenu();else if(I<3)Triggered=BrowseRecipeMenu(I==1?-1:1);else if(RecipeMenu->Entries.IsValidIndex(Row))Triggered=SelectRecipeByPinyin(RecipeMenu->Entries[Row].PinyinIndex);
         }
     }
+    // Broadcast after the complete touch loop: subscribers may advance/exit a step.
+    if(Triggered)OnMenuInteractionNative.Broadcast(this);
     return Triggered;
 }
 void AOrderHologramActor::PollHands()
