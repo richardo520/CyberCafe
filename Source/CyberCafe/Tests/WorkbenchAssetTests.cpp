@@ -356,7 +356,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         TEXT("先来杯冰拿铁吧，咖啡和牛奶一半一半。\n一只手拿稳瓶身，另一只手抓住瓶盖，向上拔开。"),
         TEXT("空杯在你左手边，先用那只直筒杯。\n这儿卡在上下城中间，往上赶的、往下赶的，都从门口过。"),
         TEXT("够不到就别硬探身子，瓶子又不会跑。\n【操作提示】左手 X / 右手 A：远程抓取。"),
-        TEXT("冰拿铁：直筒杯，冰块 3 块（1 铲）。\n咖啡 100 mL＋牛奶 100 mL。照菜单上的瓶子慢慢倒，看杯旁的 mL 读数。\n做好后放到吧台前的交付位置，再松手。不合适可拿回调整。"),
+        TEXT("冰拿铁：直筒杯，加冰即可。\n咖啡 100 mL＋牛奶 100 mL。照菜单上的瓶子慢慢倒，看杯旁的 mL 读数。\n做好后放到吧台前的交付位置，再松手。不合适可拿回调整。"),
         TEXT("时零准备尝一口，稍等一下。")};
     const int32 OriginalStepIndices[] = {0, 1, 2, 3, 6, 7};
     for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(OriginalStepIndices[I]); ++I)
@@ -383,7 +383,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         TestTrue(TEXT("新增菜单步骤内联归属原导演"), Step->GetOuter() == Director);
         TestFalse(TEXT("新增菜单步骤提示文本非空"), Step->HintText.IsEmpty());
         TestEqual(TEXT("菜单步骤提示精确匹配 applied.json"), Step->HintText.ToString(), FString(MenuIndex == 4
-            ? TEXT("来杯冰拿铁吧。开菜单，点它就能看怎么做。") : TEXT("打开屏幕，点“饮品配方”里的冰拿铁。")));
+            ? TEXT("菜单上点一下冰拿铁，就能看怎么做。") : TEXT("点一下屏幕里的冰拿铁。")));
         TestEqual(TEXT("菜单步骤完成文本精确匹配批准基线"), Step->CompletedText.ToString(), FString(MenuIndex == 4
             ? TEXT("") : TEXT("对，就照这份来。先放一铲冰。")));
     }
@@ -397,7 +397,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
             || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
         TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
         TestEqual(TEXT("拿铁杯 class 精确匹配 Highball"), GetPathNameSafe(Wait->RequiredRecipe->AcceptedCupClass.Get()), FString(PrimaryCupClassPath));
-        TestEqual(TEXT("冰拿铁要求三块冰"), Wait->RequiredRecipe->ExpectedIceCount, 3);
+        TestEqual(TEXT("旧加冰建议值保留"), Wait->RequiredRecipe->ExpectedIceCount, 3);
         TestEqual(TEXT("冰拿铁目标仍为 200mL"), Wait->RequiredRecipe->TargetVolumeML, 200.0);
         TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
         TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));

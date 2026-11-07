@@ -101,8 +101,11 @@ bool AOrderHologramActor::BeginOrder(UDrinkRecipe* Recipe,AServingSpotActor* Spo
     ++Generation;CloseRemaining=-1;CurrentSpot=Spot;CurrentOrderSerial=Serial;CurrentRecipe=Recipe;CurrentCustomer=Customer;
     if(!Name.IsEmpty())CustomerName=Name;
     bPending=true;bDelivered=false;bAutoOpened=false;
+    // A first-order preview dismissed by the player must not pop back up when
+    // the teaching flow later establishes the actual serving order.
+    const bool RespectPreviewDismissal=bFirstOrderRecipeRevealed&&bFirstOrderPreviewDismissed&&FirstOrderPreviewRecipe.Get()==Recipe;
     // Already open automatically stays automatic, but each new order gets its own close deadline.
-    if(!bOpen){bAutoOpened=true;SetOpen(true,false);}else if(!bPlayerOpened)bAutoOpened=true;
+    if(!bOpen&&!RespectPreviewDismissal){bAutoOpened=true;SetOpen(true,false);}else if(bOpen&&!bPlayerOpened)bAutoOpened=true;
     RefreshDisplay();return true;
 }
 void AOrderHologramActor::CancelOrder(AServingSpotActor* Spot,int64 Serial)
@@ -135,6 +138,17 @@ bool AOrderHologramActor::SelectRecipeByPinyin(FName Index)
     const int32 Found=RecipeMenu->FindPinyinIndex(Index);if(Found==INDEX_NONE)return false;
     SelectedMenuIndex=Found;bRecipeMenuMode=true;SetOpen(true,true);return true;
 }
+bool AOrderHologramActor::RevealFirstOrderRecipe(UDrinkRecipe* Recipe)
+{
+    if(bFirstOrderRecipeRevealed||bPending||!IsValid(Recipe)||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
+    const int32 Found=RecipeMenu->Entries.IndexOfByPredicate([Recipe](const FDrinkMenuEntry& Entry){return Entry.Recipe.Get()==Recipe;});
+    if(Found==INDEX_NONE)return false;
+    bFirstOrderRecipeRevealed=true;FirstOrderPreviewRecipe=Recipe;bFirstOrderPreviewDismissed=false;
+    SelectedMenuIndex=Found;MenuFilter=0;bRecipeMenuMode=true;
+    // Do not broadcast the input delegate: showing a recipe is not the player clicking it.
+    if(!bOpen){bAutoOpened=true;SetOpen(true,false);}else RefreshDisplay();
+    return true;
+}
 void AOrderHologramActor::PressButton()
 {
     ButtonPressRemaining=.15f;
@@ -143,6 +157,7 @@ void AOrderHologramActor::PressButton()
 }
 void AOrderHologramActor::SetOpen(bool Value,bool ByPlayer)
 {
+    if(ByPlayer&&!Value&&bFirstOrderRecipeRevealed)bFirstOrderPreviewDismissed=true;
     bOpen=Value;bPlayerOpened=Value&&ByPlayer;if(ByPlayer||!Value)CloseRemaining=-1;
     if(Value){Panel->SetVisibility(true);Panel->RequestRedraw();}RefreshDisplay();
 }

@@ -15,6 +15,10 @@
 #include "Components/WidgetSwitcher.h"
 #include "Components/TextBlock.h"
 #include "Components/Image.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/SizeBox.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
@@ -123,19 +127,19 @@ bool FMenuSavedData::RunTest(const FString&)
         TestTrue(TEXT("指定杯派生自 ACupActor"), CupClass->IsChildOf(ACupActor::StaticClass()));
         TestTrue(TEXT("指定的是保存菜单杯 BP"), CupClass->GetPathName().StartsWith(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_"))
             && CupClass->GetPathName().EndsWith(TEXT("_C")));
-        TestTrue(TEXT("冰量只能明确为 0 或 3"), E.Recipe->ExpectedIceCount == 0 || E.Recipe->ExpectedIceCount == 3);
+        TestTrue(TEXT("保存冰量字段仍为无冰 0 或旧建议量 3"), E.Recipe->ExpectedIceCount == 0 || E.Recipe->ExpectedIceCount == 3);
         WithoutIce += E.Recipe->ExpectedIceCount == 0 ? 1 : 0;
         WithIce += E.Recipe->ExpectedIceCount == 3 ? 1 : 0;
     }
     TestTrue(TEXT("菜单覆盖无冰饮品"), WithoutIce > 0);
-    TestTrue(TEXT("菜单覆盖三冰饮品"), WithIce > 0);
+    TestTrue(TEXT("菜单覆盖保留旧建议量 3 的需冰饮品"), WithIce > 0);
     const auto& BNT = D->Entries[0];
     TestEqual(TEXT("BNT 仍引用原 DA_Latte"), BNT.Recipe.Get(), LoadObject<UDrinkRecipe>(nullptr,
         TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
     TestEqual(TEXT("RecipeId 仍为 Latte"), BNT.Recipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("菜单显示冰拿铁"), BNT.DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("权威配方显示冰拿铁"), BNT.Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
-    TestEqual(TEXT("冰拿铁要求三块冰"), BNT.Recipe->ExpectedIceCount, 3);
+    TestEqual(TEXT("冰拿铁保留旧建议量 3，不作为精确验收要求"), BNT.Recipe->ExpectedIceCount, 3);
     TestEqual(TEXT("冰拿铁固定 Highball BP"), BNT.Recipe->AcceptedCupClass->GetPathName(),
         FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
     TestEqual(TEXT("未知索引不兜底"), D->FindPinyinIndex(TEXT("NONE")), INDEX_NONE);
@@ -343,9 +347,13 @@ bool FMenuPresentation::RunTest(const FString&)
     auto* IceIcon = Cast<UImage>(Widget->WidgetTree->FindWidget(TEXT("MenuIceIcon")));
     auto* CupName = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("MenuCupName")));
     auto* IceCount = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("MenuIceCount")));
+    auto* IceHint = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("MenuIceHint")));
+    auto* Method = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("MenuPourMethod")));
+    auto* OrderIce = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("OrderIceCount")));
     if (!TestNotNull(TEXT("真实页切换器"), Switch) || !TestNotNull(TEXT("真实杯图"), CupIcon)
         || !TestNotNull(TEXT("真实冰图"), IceIcon) || !TestNotNull(TEXT("真实杯名"), CupName)
-        || !TestNotNull(TEXT("真实冰量文字"), IceCount)) return false;
+        || !TestNotNull(TEXT("真实冰量文字"), IceCount) || !TestNotNull(TEXT("真实冰量提示"), IceHint)
+        || !TestNotNull(TEXT("真实制作方法"), Method) || !TestNotNull(TEXT("真实订单冰量文字"), OrderIce)) return false;
     TestEqual(TEXT("仍恰好两页"), Switch->GetChildrenCount(), 2);
     TestTrue(TEXT("实体电源开屏"), F.TouchPower());
     F.Tick(20);
@@ -362,19 +370,26 @@ bool FMenuPresentation::RunTest(const FString&)
         if (!TestNotNull(TEXT("保存杯型图资源"), E.CupIcon.Get())) return false;
         TestTrue(TEXT("杯型图实际绑定而非仅有文字"), CupIcon->GetBrush().GetResourceObject() == E.CupIcon.Get()
             && CupIcon->GetVisibility() == ESlateVisibility::HitTestInvisible);
-        const FString ExpectedIce = E.Recipe->ExpectedIceCount == 0 ? TEXT("不加冰") : TEXT("冰块 3 块");
-        TestTrue(TEXT("实际配方文字含准确冰量"), Text.Contains(ExpectedIce));
-        TestEqual(TEXT("实际冰量控件精确一致"), IceCount->GetText().ToString(), ExpectedIce);
-        if (E.Recipe->ExpectedIceCount == 3)
+        const FString ExpectedIce = E.Recipe->ExpectedIceCount == 0 ? TEXT("不加冰") : TEXT("加冰即可");
+        TestTrue(TEXT("实际配方文字含同源加冰要求"), Text.Contains(ExpectedIce));
+        TestEqual(TEXT("实际加冰要求控件一致"), IceCount->GetText().ToString(), ExpectedIce);
+        TestFalse(TEXT("菜单不显示精确三冰或一铲硬要求"), Text.Contains(TEXT("冰块 3 块")) || Text.Contains(TEXT("冰块3块"))
+            || Text.Contains(TEXT("1 铲")) || Text.Contains(TEXT("1铲")) || Text.Contains(TEXT("按冰量加冰")));
+        if (E.Recipe->ExpectedIceCount > 0)
         {
             CheckedIce = true;
+            TestEqual(TEXT("真实正数冰量提示不限定块数"), IceHint->GetText().ToString(), FString(TEXT("有冰即可，不限块数")));
+            TestTrue(TEXT("菜单包含有冰即可"), Text.Contains(TEXT("有冰即可，不限块数")));
+            TestTrue(TEXT("真实制作方法先加冰再依次倒入"), Method->GetText().ToString().StartsWith(TEXT("取指定杯并加冰，再依次倒入")));
             if (!TestNotNull(TEXT("保存冰图资源"), S->RecipeMenu->IceIcon.Get())) return false;
-            TestTrue(TEXT("三冰配方显示真实冰图"), IceIcon->GetBrush().GetResourceObject() == S->RecipeMenu->IceIcon.Get()
+            TestTrue(TEXT("需冰配方显示真实冰图"), IceIcon->GetBrush().GetResourceObject() == S->RecipeMenu->IceIcon.Get()
                 && IceIcon->GetVisibility() == ESlateVisibility::HitTestInvisible);
         }
         else
         {
             CheckedNoIce = true;
+            TestEqual(TEXT("真实无冰提示仍为直接加入原料"), IceHint->GetText().ToString(), FString(TEXT("直接加入原料")));
+            TestTrue(TEXT("真实无冰方法仍直接依次倒入"), Method->GetText().ToString().StartsWith(TEXT("取指定杯，依次倒入")));
             TestTrue(TEXT("无冰配方清掉上一杯冰图并隐藏"), IceIcon->GetBrush().GetResourceObject() == nullptr
                 && IceIcon->GetVisibility() == ESlateVisibility::Hidden);
         }
@@ -392,10 +407,185 @@ bool FMenuPresentation::RunTest(const FString&)
                 && Icon->GetVisibility() == ESlateVisibility::HitTestInvisible);
         }
     }
-    TestTrue(TEXT("实际检查了无冰和三冰两种 UI"), CheckedNoIce && CheckedIce);
+    TestTrue(TEXT("实际检查了无冰和需冰两种 UI"), CheckedNoIce && CheckedIce);
+    auto* Spot = F.W->SpawnActor<AServingSpotActor>();
+    for (const auto& E : S->RecipeMenu->Entries)
+    {
+        Spot->SetActiveRecipe(E.Recipe.Get());
+        if (!TestTrue(TEXT("逐款设置真实订单以检查同源冰量标签"), S->BeginOrder(E.Recipe.Get(), Spot, nullptr, FText::GetEmpty()))
+            || !TestTrue(TEXT("真实行点击查看当前订单配方"), TutorialMenuTestHelpers::FindRecipe(S, E.PinyinIndex))) return false;
+        const FString ExpectedIce = E.Recipe->ExpectedIceCount > 0 ? TEXT("加冰即可") : TEXT("不加冰");
+        TestEqual(TEXT("订单冰量标签取当前配方字段"), OrderIce->GetText().ToString(), ExpectedIce);
+        TestEqual(TEXT("订单与配方冰量标签同源"), OrderIce->GetText().ToString(), IceCount->GetText().ToString());
+    }
     TestTrue(TEXT("屏内订单页签切换"), TutorialMenuTestHelpers::TouchAction(S, 0));
     TestEqual(TEXT("原订单 UMG 页恢复"), Switch->GetActiveWidgetIndex(), 0);
     TestTrue(TEXT("原订单文字仍可用"), !Widget->GetOrderText().IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuPalette, "CyberCafe.RecipeMenu.RealUMGDarkPaletteAndButtonStates", RecipeMenuTest::MenuTestFlags)
+bool FMenuPalette::RunTest(const FString&)
+{
+    RecipeMenuTest::World F;
+    if (!TestNotNull(TEXT("保存屏幕"), F.Screen)) return false;
+    F.Begin();
+    auto* S = F.Screen;
+    auto* Widget = S->GetDisplayWidget();
+    if (!TestNotNull(TEXT("真实保存 WBP 实例"), Widget) || !TestNotNull(TEXT("真实 UMG 控件树"), Widget->WidgetTree.Get())
+        || !TestNotNull(TEXT("真实保存菜单"), S->RecipeMenu.Get())) return false;
+    auto* Root = Cast<USizeBox>(Widget->WidgetTree->RootWidget);
+    auto* Body = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("OpaqueBody")));
+    auto* Hint = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("MenuIceHint")));
+    if (!TestNotNull(TEXT("真实固定画布根"), Root) || !TestNotNull(TEXT("真实不透明底板"), Body)
+        || !TestNotNull(TEXT("真实冰量提示"), Hint)) return false;
+    TestEqual(TEXT("根画布宽度仍为 1200"), Root->GetWidthOverride(), 1200.f);
+    TestEqual(TEXT("根画布高度仍为 750"), Root->GetHeightOverride(), 750.f);
+    TestTrue(TEXT("世界屏幕绘制尺寸仍为 1200x750"), S->Panel->GetDrawSize() == FIntPoint(1200, 750));
+    auto* BodySlot = Cast<UCanvasPanelSlot>(Body->Slot);
+    auto* HintSlot = Cast<UCanvasPanelSlot>(Hint->Slot);
+    if (!TestNotNull(TEXT("真实底板 CanvasSlot"), BodySlot) || !TestNotNull(TEXT("真实冰量提示 CanvasSlot"), HintSlot)) return false;
+    TestTrue(TEXT("底板仍覆盖原画布且无位移"), BodySlot->GetPosition().Equals(FVector2D::ZeroVector)
+        && BodySlot->GetSize().Equals(FVector2D(1200.f, 750.f)));
+    TestTrue(TEXT("冰量提示保留原 160x40 尺寸及位置"), HintSlot->GetSize().Equals(FVector2D(160.f, 40.f))
+        && HintSlot->GetPosition().Equals(FVector2D(110.f, 101.f)));
+
+    const FColor Paper(17, 29, 36), Panel(21, 37, 45), Card(32, 52, 61), Ink(227, 237, 234);
+    const FColor Muted(183, 201, 201), Line(66, 90, 100), Teal(128, 213, 197), Accent(42, 75, 80);
+    const FColor SelectedBorder(80, 124, 122), Pressed(53, 93, 96);
+    const TCHAR* Backgrounds[] = { TEXT("OrderColumnBackground"), TEXT("CustomerColumnBackground"),
+        TEXT("MenuCupCardBackground"), TEXT("MenuIceCardBackground"), TEXT("MenuTotalCardBackground"),
+        TEXT("MenuIngredientCard0Background"), TEXT("MenuIngredientCard1Background"), TEXT("MenuIngredientCard2Background") };
+    for (const TCHAR* Name : Backgrounds)
+    {
+        if (!TestNotNull(FString::Printf(TEXT("真实卡片背景 %s"), Name),
+            Cast<UBorder>(Widget->WidgetTree->FindWidget(FName(Name))))) return false;
+    }
+    TArray<UWidget*> Controls;
+    Widget->WidgetTree->GetAllWidgets(Controls);
+    TSet<int32> SelectedActions, UnselectedActions, DisabledActions;
+    const auto CheckDarkBrush = [this](const FString& Name, const FSlateBrush& Brush, const FColor& Expected)
+    {
+        const FLinearColor Color = Brush.TintColor.GetSpecifiedColor();
+        TestTrue(Name + TEXT("：实际 brush sRGB 等于指定暗色"), Color.ToFColor(true) == Expected);
+        TestTrue(Name + TEXT("：实际 brush 不透明且保持暗底"), FMath::IsNearlyEqual(Color.A, 1.f)
+            && (Color.R + Color.G + Color.B) / 3.f < .15f);
+    };
+    const auto CheckPalette = [&]()
+    {
+        int32 BackgroundCount = 0, TextCount = 0, ButtonCount = 0;
+        const TArray<int32> Rows = S->GetVisibleMenuIndices();
+        for (UWidget* Control : Controls)
+        {
+            const FString Name = Control->GetName();
+            if (auto* Border = Cast<UBorder>(Control))
+            {
+                const bool bCard = Name.EndsWith(TEXT("Background"));
+                BackgroundCount += bCard ? 1 : 0;
+                CheckDarkBrush(Name, Border->Background, Name == TEXT("OpaqueBody") ? Panel : (bCard ? Card : Line));
+                TestTrue(Name + TEXT("：边框 brush 调制仍为不透明白色"), Border->GetBrushColor().Equals(FLinearColor::White));
+            }
+            if (auto* Text = Cast<UTextBlock>(Control))
+            {
+                ++TextCount;
+                const FLinearColor Color = Text->GetColorAndOpacity().GetSpecifiedColor();
+                const bool bMuted = Color.Equals(FLinearColor::FromSRGBColor(Muted));
+                TestTrue(Name + TEXT("：实际文字使用浅色 Ink、Muted 或 Teal"), bMuted
+                    || Color.Equals(FLinearColor::FromSRGBColor(Ink)) || Color.Equals(FLinearColor::FromSRGBColor(Teal)));
+                // 检查线性 RGB 亮度；次级文字阈值 0.25，主文字与强调文字阈值 0.35。
+                TestTrue(Name + TEXT("：实际文字保持可读亮度及不透明度"), (Color.R + Color.G + Color.B) / 3.f > (bMuted ? .25f : .35f)
+                    && FMath::IsNearlyEqual(Color.A, 1.f));
+            }
+            if (auto* Button = Cast<URecipeScreenButton>(Control))
+            {
+                ++ButtonCount;
+                const int32 Action = Button->Action;
+                bool bSelected = false;
+                FIntRect ExpectedRect(0, 0, 0, 0);
+                if (Action == 0) { bSelected = !S->IsRecipeMenuMode(); ExpectedRect = FIntRect(230, 14, 410, 76); }
+                else if (Action == 1) { bSelected = S->IsRecipeMenuMode(); ExpectedRect = FIntRect(425, 14, 625, 76); }
+                else if (Action == 2) ExpectedRect = FIntRect(50, 510, 620, 573);
+                else if (Action >= 10 && Action <= 12)
+                {
+                    bSelected = S->GetMenuFilter() == Action - 10;
+                    const int32 X = 24 + (Action - 10) * 84;
+                    ExpectedRect = FIntRect(X, 132, X + 80, 170);
+                }
+                else if (Action >= 100 && Action < 110)
+                {
+                    const int32 Row = Action - 100;
+                    bSelected = Rows.IsValidIndex(Row) && Rows[Row] == S->GetSelectedMenuIndex();
+                    const int32 Y = 184 + Row * 48;
+                    ExpectedRect = FIntRect(24, Y, 278, Y + 46);
+                }
+                TestTrue(Name + TEXT("：原屏幕动作 Rect 不变"), UOrderHologramWidget::GetScreenActionRect(Action) == ExpectedRect);
+                auto* Slot = Cast<UCanvasPanelSlot>(Button->Slot);
+                if (TestNotNull(Name + TEXT("：真实按钮 CanvasSlot"), Slot))
+                {
+                    const FVector2D Origin(0.f, Action <= 1 ? 0.f : 88.f);
+                    TestTrue(Name + TEXT("：真实按钮位置及尺寸仍对应 Rect"), Slot->GetPosition().Equals(
+                        FVector2D(ExpectedRect.Min.X, ExpectedRect.Min.Y) - Origin)
+                        && Slot->GetSize().Equals(FVector2D(ExpectedRect.Width(), ExpectedRect.Height())));
+                }
+                const FButtonStyle& Style = Button->GetStyle();
+                CheckDarkBrush(Name + TEXT(" Normal"), Style.Normal, bSelected ? Accent : Panel);
+                CheckDarkBrush(Name + TEXT(" Hovered"), Style.Hovered, Accent);
+                CheckDarkBrush(Name + TEXT(" Pressed"), Style.Pressed, Pressed);
+                CheckDarkBrush(Name + TEXT(" Disabled"), Style.Disabled, Paper);
+                TestTrue(Name + TEXT("：选中轮廓使用指定色，未选中透明"), Style.Normal.OutlineSettings.Color.GetSpecifiedColor().Equals(
+                    bSelected ? FLinearColor::FromSRGBColor(SelectedBorder) : FLinearColor::Transparent));
+                TestTrue(Name + TEXT("：悬停与按下轮廓仍使用 Line 与 Teal"), Style.Hovered.OutlineSettings.Color.GetSpecifiedColor().Equals(
+                    FLinearColor::FromSRGBColor(Line)) && Style.Pressed.OutlineSettings.Color.GetSpecifiedColor().Equals(FLinearColor::FromSRGBColor(Teal)));
+                TestTrue(Name + TEXT("：按钮调制不使背景或文字变色"), Button->GetBackgroundColor().Equals(FLinearColor::White)
+                    && Button->GetColorAndOpacity().Equals(FLinearColor::White));
+                auto* Label = Cast<UTextBlock>(Button->GetContent());
+                if (TestNotNull(Name + TEXT("：真实按钮文字"), Label))
+                {
+                    TestTrue(Name + TEXT("：选中与未选中文字保持浅色"), Label->GetColorAndOpacity().GetSpecifiedColor().Equals(
+                        FLinearColor::FromSRGBColor(bSelected ? Teal : Ink)));
+                }
+                if (bSelected) SelectedActions.Add(Action);
+                else UnselectedActions.Add(Action);
+                if (!Button->GetIsEnabled()) DisabledActions.Add(Action);
+            }
+        }
+        TestEqual(TEXT("真实检查全部八个卡片背景"), BackgroundCount, 8);
+        TestTrue(TEXT("真实收集全部 UTextBlock，不能空测"), TextCount > 0);
+        TestEqual(TEXT("真实检查全部十六个屏幕按钮"), ButtonCount, 16);
+    };
+
+    TestFalse(TEXT("初始关闭以检查真实 disabled 状态"), S->IsPanelOpen());
+    CheckPalette();
+    for (int32 Pass = 0; Pass < 2; ++Pass)
+    {
+        if (!TestTrue(TEXT("实体电源真实开屏"), F.TouchPower())) return false;
+        F.Tick(20);
+        CheckPalette();
+        for (const auto& Entry : S->RecipeMenu->Entries)
+        {
+            if (!TestTrue(TEXT("逐款真实行点击反复更新 selected/unselected 样式"),
+                TutorialMenuTestHelpers::FindRecipe(S, Entry.PinyinIndex))) return false;
+            CheckPalette();
+        }
+        for (int32 Filter = 1; Filter <= 2; ++Filter)
+        {
+            if (!TestTrue(TEXT("真实切换分类选中状态"), TutorialMenuTestHelpers::TouchAction(S, 10 + Filter))) return false;
+            CheckPalette();
+        }
+        if (!TestTrue(TEXT("真实恢复全部分类"), TutorialMenuTestHelpers::TouchAction(S, 10))) return false;
+        CheckPalette();
+        if (!TestTrue(TEXT("真实切回订单页签"), TutorialMenuTestHelpers::TouchAction(S, 0))) return false;
+        CheckPalette();
+        if (!TestTrue(TEXT("真实切回配方页签"), TutorialMenuTestHelpers::TouchAction(S, 1))) return false;
+        CheckPalette();
+        if (!TestTrue(TEXT("实体电源真实关屏恢复 disabled 状态"), F.TouchPower())) return false;
+        TestFalse(TEXT("关屏状态确实生效"), S->IsPanelOpen());
+        CheckPalette();
+        F.Tick(20);
+    }
+    TestEqual(TEXT("两页签、三分类与十行都检查实际选中样式"), SelectedActions.Num(), 15);
+    TestEqual(TEXT("全部按钮都检查实际未选中样式"), UnselectedActions.Num(), 16);
+    TestEqual(TEXT("全部按钮都检查实际禁用样式"), DisabledActions.Num(), 16);
     return true;
 }
 
@@ -410,7 +600,7 @@ bool FMenuRecipeEvaluate::RunTest(const FString&)
         RecipeMenuTest::World F;
         auto* R = E.Recipe.Get();
         if (!TestNotNull(TEXT("保存配方"), R) || !TestNotNull(TEXT("实际 AcceptedCupClass"), R->AcceptedCupClass.Get())
-            || !TestTrue(TEXT("冰量仅允许 0/3"), R->ExpectedIceCount == 0 || R->ExpectedIceCount == 3)) return false;
+            || !TestTrue(TEXT("保存冰量字段仍为无冰 0 或旧建议量 3"), R->ExpectedIceCount == 0 || R->ExpectedIceCount == 3)) return false;
         auto* C = F.SpawnAcceptedCup(R, FVector(0, 0, 200));
         if (!TestNotNull(TEXT("真实保存杯类生成的杯"), C)) return false;
         F.Begin();
@@ -476,7 +666,7 @@ bool FMenuAcceptedOrder::RunTest(const FString&)
     TestEqual(TEXT("原显示名改为冰拿铁"), Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("固定 Highball BP"), Recipe->AcceptedCupClass->GetPathName(),
         FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
-    TestEqual(TEXT("保存配方要求三块冰"), Recipe->ExpectedIceCount, 3);
+    TestEqual(TEXT("保存配方保留旧建议量 3，不作为精确验收要求"), Recipe->ExpectedIceCount, 3);
     auto* Spot = F.W->SpawnActor<AServingSpotActor>();
     Spot->SetActiveRecipe(Recipe);
     Spot->SetSubmissionEnabled(false);

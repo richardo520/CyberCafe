@@ -84,6 +84,10 @@ public:
     // @trace MT-01. Emitted only for accepted hand input, never for scripted selection.
     FHologramMenuInteraction OnMenuInteractionNative;
     UFUNCTION(BlueprintCallable,Category="Hologram") void PressButton();
+    // First spoken order reveals the recipe before the later serving step owns an OrderSerial.
+    // Session-only and presentation-only: repeated entry must respect a player's dismissal.
+    UFUNCTION(BlueprintCallable,Category="Hologram|Menu") bool RevealFirstOrderRecipe(UDrinkRecipe* Recipe);
+    UFUNCTION(BlueprintPure,Category="Hologram|Menu") bool HasRevealedFirstOrderRecipe() const {return bFirstOrderRecipeRevealed;}
     // Called after the teaching step has established the spot's final OrderSerial.
     UFUNCTION(BlueprintCallable,Category="Hologram") bool BeginOrder(UDrinkRecipe* Recipe,AServingSpotActor* Spot,ATutorialNPC* Customer,FText Name);
     UFUNCTION(BlueprintCallable,Category="Hologram") void CancelOrder(AServingSpotActor* Spot,int64 Serial);
@@ -123,6 +127,8 @@ private:
     uint32 CurrentOrderSerial=0;
     uint64 Generation=0;
     bool bOpen=false,bPlayerOpened=false,bAutoOpened=false,bPending=false,bDelivered=false;
+    UPROPERTY(Transient) TWeakObjectPtr<UDrinkRecipe> FirstOrderPreviewRecipe;
+    bool bFirstOrderRecipeRevealed=false,bFirstOrderPreviewDismissed=false;
     bool bTouchLatched=false,bLeftOutside=true,bRightOutside=true;
     float AnimationValue=0,CloseRemaining=-1,ButtonPressRemaining=0;
 };

@@ -3,6 +3,9 @@
 #include "Tutorial/TutorialStep.h"
 #include "TutorialStep_ShowMessage.generated.h"
 
+class AOrderHologramActor;
+class UDrinkRecipe;
+
 /** NPC line: reveal first, then start reading duration; first press reveals, next press advances. */
 UCLASS(DisplayName = "Step: Show Message")
 class CYBERCAFE_API UTutorialStep_ShowMessage : public UTutorialStep
@@ -24,6 +27,12 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Step|ShowMessage", meta = (ClampMin = "1.0", ClampMax = "120.0"))
     float CharsPerSecond = 30.f;
+
+    // Optional discovery cue on the first spoken order; all other dialogue steps stay unchanged.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Step|ShowMessage|Menu")
+    TObjectPtr<AOrderHologramActor> FirstOrderMenu;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Step|ShowMessage|Menu")
+    TObjectPtr<UDrinkRecipe> FirstOrderRecipe;
 
     virtual void EnterStep(ATutorialDirector* InDirector) override;
     virtual void ExitStep() override;

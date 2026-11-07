@@ -48,7 +48,7 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe") double MaxVolumeML=220;
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe") TArray<FDrinkIngredientRule> Rules;
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe") TSubclassOf<ALiquidContainerActor> AcceptedCupClass;
-    // -1 保留旧配方行为；新菜单仅使用 0（无冰）或 3（冰饮）。
-    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe",meta=(ClampMin="-1",ClampMax="3")) int32 ExpectedIceCount=-1;
+    // -1 不检查冰；0 必须无冰；正数仅表示需要有冰（实际至少 1 块），数值作为建议量，兼容旧资产的 3。
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe",meta=(ClampMin="-1")) int32 ExpectedIceCount=-1;
     UFUNCTION(BlueprintPure,Category="Recipe") FDrinkValidationResult Evaluate(ALiquidContainerActor* Cup) const;
 };

@@ -9,6 +9,11 @@
 #include "Serving/OrderHologramActor.h"
 #include "Serving/DrinkMenuData.h"
 #include "Serving/DrinkRecipe.h"
+#include "Serving/ServingSpotActor.h"
+#include "Liquid/CupActor.h"
+#include "Liquid/IceInteraction.h"
+#include "Components/StaticMeshComponent.h"
+#include "NiagaraComponent.h"
 #include "Tests/TutorialMenuTestHelpers.h"
 #include "UI/OrderHologramWidget.h"
 #include "Components/Image.h"
@@ -110,13 +115,14 @@ bool FTutorialMenuSaved::RunTest(const FString&)
         TestTrue(TEXT("内联 Outer 仍为原导演"), D->Steps[I]->GetOuter() == D);
         TestFalse(TEXT("每步提示可用"), D->Steps[I]->HintText.IsEmpty());
     }
+    auto* FirstOrder = Cast<UTutorialStep_ShowMessage>(D->Steps[1]);
     auto* Intro = Cast<UTutorialStep_ShowMessage>(D->Steps[4]);
     auto* Menu = Cast<UTutorialStep_WaitForRecipeMenu>(D->Steps[5]);
     auto* Serve = Cast<UTutorialStep_WaitForServe>(D->Steps[6]);
-    if (!TestNotNull(TEXT("菜单介绍类型"), Intro) || !TestNotNull(TEXT("真实菜单操作步骤"), Menu)
-        || !TestNotNull(TEXT("原交付步骤"), Serve)) return false;
+    if (!TestNotNull(TEXT("首单对话类型"), FirstOrder) || !TestNotNull(TEXT("菜单介绍类型"), Intro)
+        || !TestNotNull(TEXT("真实菜单操作步骤"), Menu) || !TestNotNull(TEXT("原交付步骤"), Serve)) return false;
     TestEqual(TEXT("批准的新对话全文"), Intro->HintText.ToString(),
-        FString(TEXT("来杯冰拿铁吧。开菜单，点它就能看怎么做。")));
+        FString(TEXT("菜单上点一下冰拿铁，就能看怎么做。")));
     TestTrue(TEXT("介绍保留逐字和输入跳过"), Intro->bUseTypewriter && Intro->bAllowSkipByInput);
     TestEqual(TEXT("必选索引为 BNT"), Menu->RequiredPinyinIndex, FName(TEXT("BNT")));
     if (!TestNotNull(TEXT("保存菜单屏"), Menu->OrderHologram.Get())
@@ -124,6 +130,15 @@ bool FTutorialMenuSaved::RunTest(const FString&)
         || !TestNotNull(TEXT("保存交付配方"), Serve->RequiredRecipe.Get())) return false;
     TestTrue(TEXT("仍使用原地图同一屏幕"), Menu->OrderHologram == Serve->OrderHologram
         && Menu->OrderHologram->GetWorld() == Map);
+    TestEqual(TEXT("首单对话引用精确匹配原菜单屏"), FirstOrder->FirstOrderMenu.Get(), Menu->OrderHologram.Get());
+    TestEqual(TEXT("首单对话引用精确匹配原交付配方"), FirstOrder->FirstOrderRecipe.Get(), Serve->RequiredRecipe.Get());
+    for (int32 I : {0, 2, 3, 4})
+    {
+        auto* Message = Cast<UTutorialStep_ShowMessage>(D->Steps[I]);
+        if (!TestNotNull(TEXT("其余对话仍为 ShowMessage"), Message)) return false;
+        TestNull(TEXT("其余对话不配置首单菜单引用"), Message->FirstOrderMenu.Get());
+        TestNull(TEXT("其余对话不配置首单配方引用"), Message->FirstOrderRecipe.Get());
+    }
     auto* Data = Menu->OrderHologram->RecipeMenu.Get();
     if (!TestNotNull(TEXT("保存菜单数据"), Data) || !TestTrue(TEXT("保存菜单有效"), Data->IsValidMenu())) return false;
     const int32 Index = Data->FindPinyinIndex(TEXT("BNT"));
@@ -138,7 +153,7 @@ bool FTutorialMenuSaved::RunTest(const FString&)
     TestEqual(TEXT("配方显示冰拿铁"), Serve->RequiredRecipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("固定保存 Highball 杯类"), GetPathNameSafe(Serve->RequiredRecipe->AcceptedCupClass.Get()),
         FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
-    TestEqual(TEXT("原配方要求三块冰"), Serve->RequiredRecipe->ExpectedIceCount, 3);
+    TestEqual(TEXT("旧加冰建议值保留"), Serve->RequiredRecipe->ExpectedIceCount, 3);
     TestEqual(TEXT("原目标仍为 200 mL"), Serve->RequiredRecipe->TargetVolumeML, 200.0);
     TestTrue(TEXT("交付后紧接消费步骤"), Cast<UTutorialStep_ConsumeServedDrink>(D->Steps[7]) != nullptr);
     TestEqual(TEXT("时零身份保留"), D->DialogueSpeakerName.ToString(), FString(TEXT("时零")));
@@ -204,7 +219,7 @@ bool FTutorialMenuPhysical::RunTest(const FString&)
     if (!TestNotNull(TEXT("实际显示控件"), Widget) || !TestNotNull(TEXT("实际控件树"), Widget->WidgetTree.Get())) return false;
     const FString Text = Widget->GetMenuText().ToString();
     TestTrue(TEXT("实际冰拿铁文字与冰量"), Text.Contains(TEXT("BNT")) && Text.Contains(TEXT("冰拿铁"))
-        && Text.Contains(TEXT("冰块 3 块")) && Text.Contains(TEXT("200 mL")));
+        && Text.Contains(TEXT("加冰即可")) && Text.Contains(TEXT("200 mL")));
     TestTrue(TEXT("两种原料实际各显示 100 mL"), Text.Contains(TEXT("咖啡液    100 mL"))
         && Text.Contains(TEXT("牛奶    100 mL")));
     const auto* Entry = S->GetSelectedMenuEntry();
@@ -297,6 +312,78 @@ bool FTutorialMenuUnavailable::RunTest(const FString&)
     TestTrue(TEXT("恢复后可完成"), F.Step->IsCompleted());
     TestTrue(TEXT("恢复完成后配方仍打开"), F.Screen->IsPanelOpen() && F.Screen->IsRecipeMenuMode());
     TestEqual(TEXT("恢复过程不伪造交付"), F.Screen->GetDeliveryRecords().Num(), 0);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTutorialFirstOrderReveal, "CyberCafe.TutorialMenu.FirstSpokenOrderAutoRevealAndDismissRespected", TutorialMenuTests::TestOptions)
+bool FTutorialFirstOrderReveal::RunTest(const FString&)
+{
+    TutorialMenuTests::FWorld F;
+    if (!TestNotNull(TEXT("真实屏幕"), F.Screen) || !TestNotNull(TEXT("实际菜单数据"), F.Screen->RecipeMenu.Get())) return false;
+    auto* Recipe = F.Screen->RecipeMenu->Entries[0].Recipe.Get();
+    auto* Intro = NewObject<UTutorialStep_ShowMessage>(F.Director);
+    Intro->FirstOrderMenu = F.Screen; Intro->FirstOrderRecipe = Recipe;
+    Intro->bUseTypewriter = false; Intro->bAllowSkipByInput = false; Intro->Duration = .1f;
+    Intro->HintText = FText::GetEmpty(); F.Director->Steps.Insert(Intro, 0);
+    auto* Spot = F.World->SpawnActor<AServingSpotActor>();
+    Spot->SetActiveRecipe(Recipe); Spot->SetSubmissionEnabled(true);
+    const auto Serial = Spot->GetOrderSerial();
+    const FTransform CupTM(FRotator::ZeroRotator, FVector(200,0,150), TutorialMenuTestHelpers::SceneCupScale(Recipe->AcceptedCupClass.Get()));
+    auto* Cup = F.World->SpawnActorDeferred<ACupActor>(Recipe->AcceptedCupClass.Get(), CupTM, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+    if (!TestNotNull(TEXT("实际固定杯类"), Cup)) return false;
+    Cup->ContainerMesh->SetSimulatePhysics(false); Cup->GlassBreakProfile=nullptr;
+    Cup->LiquidFXTemplate=nullptr; Cup->LiquidFX->SetAsset(nullptr); Cup->PourFX->SetAsset(nullptr);
+    Cup->FinishSpawning(CupTM); Cup->bCanPour=false;
+    TestFalse(TEXT("首句前屏幕未开"), F.Screen->IsPanelOpen());
+    F.Begin();
+    TestTrue(TEXT("真实导演进入点单句自动开屏"), F.Screen->IsPanelOpen() && F.Screen->HasRevealedFirstOrderRecipe());
+    TestTrue(TEXT("展示原冰拿铁配方页"), F.Screen->IsRecipeMenuMode() && F.Screen->GetSelectedMenuEntry()->Recipe.Get()==Recipe);
+    TestFalse(TEXT("自动开屏不冒充玩家操作"), F.Screen->IsPlayerOpened());
+    TestFalse(TEXT("提前展示不建立订单"), F.Screen->IsPending());
+    TestEqual(TEXT("提前展示不改变服务单序号"), Spot->GetOrderSerial(), Serial);
+    TestEqual(TEXT("自动展示不广播触屏动作"), F.Screen->GetLastScreenAction(), INDEX_NONE);
+    F.Tick(30);
+    TestFalse(TEXT("自动展示不完成配方教学"), F.Step->IsCompleted());
+    TestFalse(TEXT("自动选中不算查看"), F.Step->HasViewedRequiredRecipe());
+    TestTrue(TEXT("实际电源可收起自动屏"), F.TouchPower());
+    TestFalse(TEXT("手动收屏生效"), F.Screen->IsPanelOpen());
+    F.Director->StartTutorial(); F.Tick(30);
+    TestFalse(TEXT("重启同局教程不再次强弹"), F.Screen->IsPanelOpen());
+    TestFalse(TEXT("同局显式重复提示不再次展示"), F.Screen->RevealFirstOrderRecipe(Recipe));
+    TestTrue(TEXT("后续实际BeginOrder正常建立"), F.Screen->BeginOrder(Recipe,Spot,nullptr,FText::GetEmpty()));
+    TestFalse(TEXT("实际建单尊重已手动收起"), F.Screen->IsPanelOpen());
+    F.Tick(100);
+    TestFalse(TEXT("等待后也不重复强弹"), F.Screen->IsPanelOpen());
+    TestTrue(TEXT("玩家仍可实际电源重开"), F.TouchPower()); F.Tick(20);
+    TestTrue(TEXT("真实点饮品才完成教学"), TutorialMenuTestHelpers::FindRecipe(F.Screen,TEXT("BNT")));
+    TestTrue(TEXT("真实教学完成"), F.Step->IsCompleted());
+    Cup->AddIngredientLiquid(100,TEXT("Coffee"),FLinearColor::White); Cup->AddIngredientLiquid(100,TEXT("Milk"),FLinearColor::White);
+    if (!TestTrue(TEXT("实际加入一块冰"), TutorialMenuTestHelpers::AddIce(Cup,1))) return false;
+    FTransform ServeTM=Spot->GetActorTransform(); ServeTM.SetScale3D(Cup->GetActorScale3D()); Cup->SetActorTransform(ServeTM);
+    if (!TestTrue(TEXT("同杯200液加1冰实际提交成功"), Spot->TrySubmitCup(Cup))) return false;
+    TestEqual(TEXT("交付快照实际1冰"), Spot->GetLastValidation().IceCount,1);
+    F.Tick(150);
+    TestTrue(TEXT("玩家主动阅读不被交付收屏"), F.Screen->IsPanelOpen() && F.Screen->IsPlayerOpened());
+    if (!TestEqual(TEXT("只记一次实际历史"), F.Screen->GetDeliveryRecords().Num(),1)) return false;
+    TestEqual(TEXT("历史仍实际200mL"), F.Screen->GetDeliveryRecords()[0].VolumeML,200.0);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTutorialAutoRevealOptional, "CyberCafe.TutorialMenu.AutoRevealOptionalAndNextOrderCompatible", TutorialMenuTests::TestOptions)
+bool FTutorialAutoRevealOptional::RunTest(const FString&)
+{
+    TutorialMenuTests::FWorld F;
+    if (!TestNotNull(TEXT("真实屏幕"), F.Screen) || !TestNotNull(TEXT("实际菜单数据"), F.Screen->RecipeMenu.Get())) return false;
+    auto* Recipe = F.Screen->RecipeMenu->Entries[0].Recipe.Get();
+    F.Begin();
+    auto* Data=F.Screen->RecipeMenu.Get(); F.Screen->RecipeMenu=nullptr;
+    TestFalse(TEXT("缺菜单不伪称已展示"), F.Screen->RevealFirstOrderRecipe(Recipe));
+    TestFalse(TEXT("无配置不设置首次已展示"), F.Screen->HasRevealedFirstOrderRecipe());
+    F.Screen->RecipeMenu=Data;
+    TestTrue(TEXT("恢复有效配置可首次展示"), F.Screen->RevealFirstOrderRecipe(Recipe)); F.Tick(20);
+    TestTrue(TEXT("电源收起预览"), F.TouchPower());
+    auto* Other=Data->Entries[1].Recipe.Get(); auto* Spot=F.World->SpawnActor<AServingSpotActor>();
+    Spot->SetActiveRecipe(Other); Spot->SetSubmissionEnabled(true);
+    TestTrue(TEXT("非首杯其他订单仍可正常建立"), F.Screen->BeginOrder(Other,Spot,nullptr,FText::GetEmpty()));
+    TestTrue(TEXT("其他订单保原自动开屏行为"), F.Screen->IsPanelOpen() && F.Screen->HasAutoOpened() && !F.Screen->IsPlayerOpened());
     return true;
 }
 #endif

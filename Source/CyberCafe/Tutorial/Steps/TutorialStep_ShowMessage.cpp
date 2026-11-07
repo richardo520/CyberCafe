@@ -1,6 +1,8 @@
 // @trace NAR-02 NAR-04 -- Input consumed once; reading duration starts only after complete reveal.
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
 #include "Tutorial/TutorialDirector.h"
+#include "Serving/OrderHologramActor.h"
+#include "Serving/DrinkRecipe.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
 #include "UI/Narrative/NarrativeTextPolicy.h"
@@ -15,6 +17,8 @@ void UTutorialStep_ShowMessage::EnterStep(ATutorialDirector* InDirector)
     OwnedPresentationSerial = 0;
     UWorld* World = GetWorld();
     if (!World) { MarkCompleted(); return; }
+    if (IsValid(FirstOrderMenu) && FirstOrderMenu->GetWorld() == World && IsValid(FirstOrderRecipe))
+        FirstOrderMenu->RevealFirstOrderRecipe(FirstOrderRecipe);
     EnterGameTime = World->GetTimeSeconds();
     LastRevealGameTime = -1000.f;
     bAdvanceQueued = false;

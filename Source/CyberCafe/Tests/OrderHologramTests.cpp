@@ -767,7 +767,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         if (Display->CustomerNotes.IsValidIndex(1))
         {
             TestEqual(Label + TEXT("：备注只记录公开称呼"), Display->CustomerNotes[0].ToString(), FString(bFirstCustomerInstance ? TEXT("称呼：时零") : TEXT("教学客人")));
-            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("首杯：冰拿铁；咖啡与牛奶对半，加3块冰") : TEXT("喜好尚未了解")));
+            TestEqual(Label + TEXT("：仅当前订单事实，不虚构长期喜好"), Display->CustomerNotes[1].ToString(), FString(bFirstCustomerInstance ? TEXT("首杯：冰拿铁；咖啡与牛奶对半，加冰即可") : TEXT("喜好尚未了解")));
         }
         if (bFirstCustomerInstance && Display->CustomerNotes.IsValidIndex(2))
             TestEqual(Label + TEXT("：备注只记录本次来意"), Display->CustomerNotes[2].ToString(), FString(TEXT("本次：想在店里坐一会儿")));
@@ -795,7 +795,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         !TestTrue(TEXT("保存杯类派生自 ACupActor"), CupClass->IsChildOf(ACupActor::StaticClass()))) return false;
     TestEqual(TEXT("保存配方 ID 仍为 Latte"), Recipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("保存配方显示名为冰拿铁"), Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
-    TestEqual(TEXT("保存配方要求三块冰"), Recipe->ExpectedIceCount, 3);
+    TestEqual(TEXT("旧加冰建议值保留"), Recipe->ExpectedIceCount, 3);
     AServingSpotActor* Spot = T.Spot(Recipe);
     Spot->SetSubmissionEnabled(false);
     const FVector CupPosition = Spot->DetectBox->GetComponentTransform().TransformPosition(FVector(1, 1, 1));

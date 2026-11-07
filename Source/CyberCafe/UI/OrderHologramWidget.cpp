@@ -32,22 +32,24 @@ namespace
     constexpr int32 MaxMenuRows = 10;
     constexpr int32 MaxIngredientCards = 3;
 
-    const FLinearColor Paper = FLinearColor::FromSRGBColor(FColor(246, 245, 239));
-    const FLinearColor Panel = FLinearColor::FromSRGBColor(FColor(252, 255, 253));
-    const FLinearColor Card = FLinearColor::FromSRGBColor(FColor(255, 254, 250));
-    const FLinearColor Ink = FLinearColor::FromSRGBColor(FColor(41, 67, 61));
-    const FLinearColor Muted = FLinearColor::FromSRGBColor(FColor(113, 132, 122));
-    const FLinearColor Line = FLinearColor::FromSRGBColor(FColor(218, 231, 223));
-    const FLinearColor Teal = FLinearColor::FromSRGBColor(FColor(28, 128, 108));
-    const FLinearColor Accent = FLinearColor::FromSRGBColor(FColor(225, 244, 235));
+    const FLinearColor Paper = FLinearColor::FromSRGBColor(FColor(17, 29, 36));
+    const FLinearColor Panel = FLinearColor::FromSRGBColor(FColor(21, 37, 45));
+    const FLinearColor Card = FLinearColor::FromSRGBColor(FColor(32, 52, 61));
+    const FLinearColor Ink = FLinearColor::FromSRGBColor(FColor(227, 237, 234));
+    const FLinearColor Muted = FLinearColor::FromSRGBColor(FColor(183, 201, 201));
+    const FLinearColor Line = FLinearColor::FromSRGBColor(FColor(66, 90, 100));
+    const FLinearColor Teal = FLinearColor::FromSRGBColor(FColor(128, 213, 197));
+    const FLinearColor Accent = FLinearColor::FromSRGBColor(FColor(42, 75, 80));
+    const FLinearColor SelectedBorder = FLinearColor::FromSRGBColor(FColor(80, 124, 122));
+    const FLinearColor Pressed = FLinearColor::FromSRGBColor(FColor(53, 93, 96));
 
     void SetScreenButtonStyle(URecipeScreenButton* Button, bool bSelected)
     {
         FButtonStyle Style;
         Style.SetNormal(FSlateRoundedBoxBrush(bSelected ? Accent : Panel, 9.f,
-            bSelected ? FLinearColor::FromSRGBColor(FColor(188, 219, 200)) : FLinearColor::Transparent, 1.f));
+            bSelected ? SelectedBorder : FLinearColor::Transparent, 1.f));
         Style.SetHovered(FSlateRoundedBoxBrush(Accent, 9.f, Line, 1.f));
-        Style.SetPressed(FSlateRoundedBoxBrush(FLinearColor::FromSRGBColor(FColor(206, 233, 219)), 9.f, Teal, 1.f));
+        Style.SetPressed(FSlateRoundedBoxBrush(Pressed, 9.f, Teal, 1.f));
         Style.SetDisabled(FSlateRoundedBoxBrush(Paper, 9.f));
         Style.SetNormalPadding(FMargin(0.f));
         Style.SetPressedPadding(FMargin(0.f));
@@ -81,7 +83,7 @@ namespace
     FText IceText(int32 Count)
     {
         if (Count == 0) return LOCTEXT("NoIce", "不加冰");
-        if (Count > 0) return FText::Format(LOCTEXT("IceCount", "冰块 {0} 块"), FText::AsNumber(Count));
+        if (Count > 0) return LOCTEXT("IceRequired", "加冰即可");
         return LOCTEXT("IceUnconfigured", "冰量未配置");
     }
 
@@ -770,8 +772,11 @@ void UOrderHologramWidget::ApplyPresentation(const AOrderHologramActor* Source)
         }
         Ranges.Add(LOCTEXT("NoExtraIngredients", "不允许额外原料").ToString());
         const FText Range = FText::FromString(FString::Join(Ranges, TEXT(" · ")));
+        const FText IceHint = Recipe->ExpectedIceCount > 0
+            ? LOCTEXT("IcePresenceHint", "有冰即可，不限块数")
+            : (Recipe->ExpectedIceCount == 0 ? LOCTEXT("PourWithoutIce", "直接加入原料") : FText::GetEmpty());
         const FText Method = Recipe->ExpectedIceCount > 0
-            ? LOCTEXT("MenuMethodWithIce", "取指定杯并按冰量加冰，再依次倒入；看杯旁 mL，做好后放到交付位置并松手。")
+            ? LOCTEXT("MenuMethodWithIce", "取指定杯并加冰，再依次倒入；看杯旁 mL，做好后放到交付位置并松手。")
             : LOCTEXT("MenuMethodWithoutIce", "取指定杯，依次倒入；看杯旁 mL，做好后放到交付位置并松手。");
         const FText CurrentName = CurrentMenuEntry ? CurrentMenuEntry->DisplayName
             : (IsValid(CurrentRecipe) ? PresentedRecipeName : LOCTEXT("NoOrder", "暂无当前订单"));
@@ -794,8 +799,7 @@ void UOrderHologramWidget::ApplyPresentation(const AOrderHologramActor* Source)
         if (MenuCupName) MenuCupName->SetText(SelectedEntry->CupName);
         if (MenuMetadata) MenuMetadata->SetText(Capacity);
         if (MenuIceLabel) MenuIceLabel->SetText(Ice);
-        if (MenuIceHint) MenuIceHint->SetText(Recipe->ExpectedIceCount == 3 ? LOCTEXT("OneIceScoop", "用冰铲取 1 铲")
-            : (Recipe->ExpectedIceCount == 0 ? LOCTEXT("PourWithoutIce", "直接加入原料") : FText::GetEmpty()));
+        if (MenuIceHint) MenuIceHint->SetText(IceHint);
         if (MenuTotal) MenuTotal->SetText(Total);
         if (MenuTotalHint) MenuTotalHint->SetText(LOCTEXT("LiquidExcludesIce", "液体 mL 不含冰块"));
         if (MenuIngredientHeading) MenuIngredientHeading->SetText(Recipe->ExpectedIceCount > 0
@@ -809,7 +813,8 @@ void UOrderHologramWidget::ApplyPresentation(const AOrderHologramActor* Source)
         MenuText = FText::FromString(Index.ToString() + TEXT(" · ") + Title.ToString()
             + TEXT("\n") + SelectedEntry->Category.ToString() + TEXT(" · ") + SelectedEntry->Description.ToString()
             + TEXT("\n") + SelectedEntry->CupName.ToString() + TEXT(" · ") + Capacity.ToString()
-            + TEXT("\n") + Ice.ToString() + TEXT(" · ") + Total.ToString() + TEXT("（液体 mL 不含冰块）")
+            + TEXT("\n") + Ice.ToString() + TEXT(" · ") + IceHint.ToString()
+            + TEXT(" · ") + Total.ToString() + TEXT("（液体 mL 不含冰块）")
             + TEXT("\n") + FString::Join(IngredientLines, TEXT("\n"))
             + TEXT("\n") + Method.ToString() + TEXT("\n") + Range.ToString() + TEXT("\n") + Footer);
     }
