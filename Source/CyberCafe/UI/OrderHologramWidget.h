@@ -8,6 +8,7 @@ class AOrderHologramActor;
 class UFont;
 class USizeBox;
 class UTextBlock;
+class UWidgetSwitcher;
 
 /** 只读全息订单摘要；空 WBP 子类在运行时继承此原生控件树。 */
 UCLASS(BlueprintType, Blueprintable)
@@ -26,6 +27,7 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "Hologram|Presentation")
     FText GetHistoryText() const;
+    UFUNCTION(BlueprintPure,Category="Hologram|Menu") FText GetMenuText() const {return MenuText;}
 
     // 幂等构树：只补空根，不覆盖蓝图已有的布局。
     void BuildWidgetTree();
@@ -76,6 +78,15 @@ private:
     UPROPERTY(Transient)
     TArray<TObjectPtr<UTextBlock>> HistoryVolumeTextBlocks;
 
+    UPROPERTY(Transient) TObjectPtr<UWidgetSwitcher> PageSwitcher;
+    UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> MenuIndexLabels;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuTitle;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuMetadata;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuDescription;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuIngredientLines;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuTolerance;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MenuFooter;
+    FText MenuText;
     FText OrderText;
     FText HistoryText;
     FText PresentedStatus;

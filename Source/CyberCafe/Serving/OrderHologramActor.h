@@ -15,6 +15,9 @@ class UMaterialInstanceDynamic;
 class UOrderHologramWidget;
 class ATutorialNPC;
 class AVRPawn;
+class UDrinkMenuData;
+class UTextRenderComponent;
+struct FDrinkMenuEntry;
 USTRUCT(BlueprintType)
 struct FHologramDeliveryRecord
 {
@@ -58,6 +61,18 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Interaction") FName LeftTouchBone=TEXT("index_03_l");
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Interaction") FName RightTouchBone=TEXT("index_03_r");
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Interaction",meta=(ClampMin="0")) float TouchRearmMarginCM=3.f;
+    // @trace MN-02. Browsing is presentation-only: never changes the active order.
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Hologram|Menu") TObjectPtr<UDrinkMenuData> RecipeMenu;
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Hologram|Menu") TObjectPtr<UBoxComponent> MenuModeZone;
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Hologram|Menu") TObjectPtr<UBoxComponent> MenuPreviousZone;
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Hologram|Menu") TObjectPtr<UBoxComponent> MenuNextZone;
+    UFUNCTION(BlueprintCallable,Category="Hologram|Menu") bool ToggleRecipeMenu();
+    UFUNCTION(BlueprintCallable,Category="Hologram|Menu") bool BrowseRecipeMenu(int32 Direction);
+    UFUNCTION(BlueprintCallable,Category="Hologram|Menu") bool SelectRecipeByPinyin(FName Index);
+    UFUNCTION(BlueprintPure,Category="Hologram|Menu") bool IsRecipeMenuMode() const {return bRecipeMenuMode;}
+    UFUNCTION(BlueprintPure,Category="Hologram|Menu") int32 GetSelectedMenuIndex() const {return SelectedMenuIndex;}
+    const FDrinkMenuEntry* GetSelectedMenuEntry() const;
+    bool ProcessMenuTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked=true,bool Holding=false);
     UFUNCTION(BlueprintCallable,Category="Hologram") void PressButton();
     // Called after the teaching step has established the spot's final OrderSerial.
     UFUNCTION(BlueprintCallable,Category="Hologram") bool BeginOrder(UDrinkRecipe* Recipe,AServingSpotActor* Spot,ATutorialNPC* Customer,FText Name);
@@ -80,6 +95,13 @@ private:
     void RefreshDisplay();
     void UpdateVisual(float DeltaSeconds);
     void PollHands();
+    UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> MenuKeys;
+    UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> MenuLabels;
+    bool bRecipeMenuMode=false;
+    int32 SelectedMenuIndex=0;
+    bool MenuTouchLatched[4]={false,false,false,false};
+    bool MenuLeftOutside[4]={true,true,true,true};
+    bool MenuRightOutside[4]={true,true,true,true};
     UPROPERTY(Transient) TObjectPtr<UDrinkRecipe> CurrentRecipe;
     UPROPERTY(Transient) TWeakObjectPtr<AServingSpotActor> CurrentSpot;
     UPROPERTY(Transient) TWeakObjectPtr<ATutorialNPC> CurrentCustomer;

@@ -8,9 +8,12 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Components/WidgetSwitcher.h"
+#include "Serving/DrinkMenuData.h"
 #include "Engine/Font.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Serving/DrinkRecipe.h"
+#include "Liquid/LiquidContainerActor.h"
 #include "Serving/OrderHologramActor.h"
 #include "Styling/SlateBrush.h"
 #include "UObject/ConstructorHelpers.h"
@@ -150,7 +153,8 @@ void UOrderHologramWidget::BuildWidgetTree()
     Frame->SetContent(Body);
 
     UHorizontalBox* Columns = WidgetTree->ConstructWidget<UHorizontalBox>();
-    Body->SetContent(Columns);
+    PageSwitcher=WidgetTree->ConstructWidget<UWidgetSwitcher>(UWidgetSwitcher::StaticClass(),TEXT("OrderMenuSwitcher"));
+    Body->SetContent(PageSwitcher);PageSwitcher->AddChild(Columns);
     UVerticalBox* MainColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("OrderColumn"));
     UVerticalBox* SideColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("CustomerColumn"));
     MainColumn->SetClipping(EWidgetClipping::ClipToBoundsAlways);
@@ -234,6 +238,23 @@ void UOrderHologramWidget::BuildWidgetTree()
         HistoryVolumeTextBlocks.Add(Volume);
     }
 
+    // Menu uses the exact same 1200x750 panel. Index rows: x28..342,
+    // y134..614 at 48px pitch, matching actor screen-touch hit testing.
+    auto* MenuColumns=WidgetTree->ConstructWidget<UHorizontalBox>();PageSwitcher->AddChild(MenuColumns);
+    auto* IndexColumn=WidgetTree->ConstructWidget<UVerticalBox>();auto* IndexWidth=WidgetTree->ConstructWidget<USizeBox>();IndexWidth->SetWidthOverride(320);IndexWidth->SetContent(IndexColumn);MenuColumns->AddChildToHorizontalBox(IndexWidth)->SetPadding(FMargin(0,0,20,0));
+    auto* Heading=MakeText(TEXT("MenuHeading"),36,Cyan,false);Heading->SetText(LOCTEXT("RecipeMenuHeading","配方菜单 · A–Z"));AddFixed(IndexColumn,Heading,64);
+    auto* Hint=MakeText(TEXT("MenuIndexHint"),22,SecondaryInk,false);Hint->SetText(LOCTEXT("IndexHint","点索引查看 / 底座 PREV NEXT"));AddFixed(IndexColumn,Hint,44);
+    for(int32 I=0;I<10;++I){auto* Label=MakeText(FName(*FString::Printf(TEXT("MenuIndex%d"),I)),24,SecondaryInk,false);MenuIndexLabels.Add(Label);AddFixed(IndexColumn,Label,48);}
+    auto* Notes=MakeText(TEXT("MenuNote"),20,SecondaryInk,true);Notes->SetText(LOCTEXT("MenuDataOnly","拼音首字母索引\n只查配方，不更换当前订单"));AddFixed(IndexColumn,Notes,100);
+    auto* Details=WidgetTree->ConstructWidget<UVerticalBox>();MenuColumns->AddChildToHorizontalBox(Details)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+    MenuTitle=MakeText(TEXT("MenuDrinkTitle"),46,Ink,false);AddFixed(Details,MenuTitle,74);
+    MenuMetadata=MakeText(TEXT("MenuCupVolume"),28,Cyan,false);AddFixed(Details,MenuMetadata,48);
+    MenuDescription=MakeText(TEXT("MenuDrinkDescription"),26,SecondaryInk,true);AddFixed(Details,MenuDescription,82);
+    MenuIngredientLines=MakeText(TEXT("MenuIngredientsML"),34,Ink,true);AddFixed(Details,MenuIngredientLines,180);
+    auto* Method=MakeText(TEXT("MenuPourMethod"),24,SecondaryInk,true);Method->SetText(LOCTEXT("Method","按上方顺序逐项倒入；以 mL 和成分比例为准。\n原型无需摇壶 / 拉花 / 分层。"));AddFixed(Details,Method,76);
+    MenuTolerance=MakeText(TEXT("MenuAcceptanceRange"),22,SecondaryInk,true);AddFixed(Details,MenuTolerance,128);
+    MenuFooter=MakeText(TEXT("MenuCurrentOrderHint"),22,Cyan,true);AddFixed(Details,MenuFooter,104);
+    PageSwitcher->SetActiveWidgetIndex(0);
     SynchronizePresentation();
 }
 
@@ -384,6 +405,32 @@ void UOrderHologramWidget::ApplyPresentation(const AOrderHologramActor* Source)
     }
     HistoryText = HistoryLines.IsEmpty() ? LOCTEXT("NoHistory", "暂无本局交付")
         : FText::FromString(FString::Join(HistoryLines, TEXT("\n")));
+    if(PageSwitcher)PageSwitcher->SetActiveWidgetIndex(IsValid(Source)&&Source->IsRecipeMenuMode()?1:0);
+    MenuText=FText::GetEmpty();
+    if(IsValid(Source)&&IsValid(Source->RecipeMenu))
+    {
+        const UDrinkMenuData* Menu=Source->RecipeMenu;
+        for(int32 I=0;I<MenuIndexLabels.Num();++I)
+        {
+            const bool Valid=Menu->Entries.IsValidIndex(I);
+            MenuIndexLabels[I]->SetText(Valid?FText::FromString(Menu->Entries[I].PinyinIndex.ToString()+TEXT("  ")+Menu->Entries[I].DisplayName.ToString()):FText::GetEmpty());
+            MenuIndexLabels[I]->SetColorAndOpacity(FSlateColor(I==Source->GetSelectedMenuIndex()?FLinearColor(.04,.78,.88,1):FLinearColor(.7,.8,.87,1)));
+        }
+        if(const auto* E=Source->GetSelectedMenuEntry();E&&IsValid(E->Recipe))
+        {
+            const auto* R=E->Recipe.Get();
+            const FText Title=FText::FromString(E->PinyinIndex.ToString()+TEXT(" · ")+E->DisplayName.ToString());
+            const FText Meta=FText::FromString(E->Category.ToString()+TEXT("  /  ")+E->CupName.ToString()+TEXT("  /  ")+NumberText(R->TargetVolumeML).ToString()+TEXT(" mL"));
+            TArray<FString> Lines;for(int32 I=0;I<E->Ingredients.Num();++I){const auto& Ingredient=E->Ingredients[I];Lines.Add(FString::Printf(TEXT("%d  %s    %s mL"),I+1,*UDrinkMenuData::IngredientDisplayName(Ingredient.IngredientId).ToString(),*NumberText(Ingredient.VolumeML).ToString()));}
+            double Max=R->MaxVolumeML;if(R->AcceptedCupClass)Max=FMath::Min(Max,static_cast<double>(R->AcceptedCupClass->GetDefaultObject<ALiquidContainerActor>()->MaxVolumeML));
+            FString Range=TEXT("配方校验：")+NumberText(R->MinVolumeML).ToString()+TEXT("–")+NumberText(Max).ToString()+TEXT(" mL；不允许额外原料。");
+            for(const auto& Rule:R->Rules)Range+=TEXT("\n")+UDrinkMenuData::IngredientDisplayName(Rule.IngredientId).ToString()+TEXT(" ")+NumberText(Rule.MinFraction*100).ToString()+TEXT("–")+NumberText(Rule.MaxFraction*100).ToString()+TEXT("%");
+            FString Footer=FString::Printf(TEXT("%02d / %02d    MENU 返回订单 · PREV / NEXT 翻查"),Source->GetSelectedMenuIndex()+1,Menu->Entries.Num());
+            if(IsValid(Source->GetCurrentRecipe()))Footer+=TEXT("\n当前订单：")+Source->GetCurrentRecipe()->DisplayName.ToString()+(Source->IsPending()?TEXT(" · 待交付"):TEXT(" · 已结束"));
+            if(MenuTitle)MenuTitle->SetText(Title);if(MenuMetadata)MenuMetadata->SetText(Meta);if(MenuDescription)MenuDescription->SetText(E->Description);if(MenuIngredientLines)MenuIngredientLines->SetText(FText::FromString(FString::Join(Lines,TEXT("\n"))));if(MenuTolerance)MenuTolerance->SetText(FText::FromString(Range));if(MenuFooter)MenuFooter->SetText(FText::FromString(Footer));
+            MenuText=FText::FromString(Title.ToString()+TEXT("\n")+Meta.ToString()+TEXT("\n")+FString::Join(Lines,TEXT("\n"))+TEXT("\n")+Range);
+        }
+    }
     SynchronizePresentation();
 }
 

@@ -1,5 +1,7 @@
 #include "Serving/OrderHologramActor.h"
 #include "Serving/DrinkRecipe.h"
+#include "Serving/DrinkMenuData.h"
+#include "Components/TextRenderComponent.h"
 #include "Serving/ServingSpotActor.h"
 #include "UI/OrderHologramWidget.h"
 #include "Tutorial/CyberCafeEventSubsystem.h"
@@ -40,6 +42,17 @@ AOrderHologramActor::AOrderHologramActor()
     BaseMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);BaseMesh->SetCollisionResponseToAllChannels(ECR_Block);BaseMesh->SetCollisionResponseToChannel(ECC_Pawn,ECR_Ignore);
     ButtonZone=CreateDefaultSubobject<UBoxComponent>(TEXT("ButtonZone"));ButtonZone->SetupAttachment(Root);ButtonZone->SetRelativeLocation(FVector(7,0,4.5));ButtonZone->SetBoxExtent(FVector(2.7,3.2,1.5));ButtonZone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Panel=CreateDefaultSubobject<UWidgetComponent>(TEXT("OrderPanel"));Panel->SetupAttachment(Root);Panel->SetWidgetSpace(EWidgetSpace::World);Panel->SetDrawSize(FVector2D(1200,750));Panel->SetPivot(FVector2D(.5,.5));Panel->SetBlendMode(EWidgetBlendMode::Transparent);Panel->SetTwoSided(false);Panel->SetOpacityFromTexture(1);Panel->SetBackgroundColor(FLinearColor::Transparent);Panel->SetCollisionEnabled(ECollisionEnabled::NoCollision);Panel->SetGenerateOverlapEvents(false);Panel->SetWindowFocusable(false);Panel->SetManuallyRedraw(true);Panel->SetVisibility(false);Panel->SetCastShadow(false);
+    const FVector MenuPositions[]={FVector(-7,0,4.5),FVector(-3,-6,4.5),FVector(-3,6,4.5)};
+    const TCHAR* MenuNames[]={TEXT("MENU"),TEXT("PREV"),TEXT("NEXT")};
+    // Each button keeps a separated physical touch zone; screen index rows use
+    // the panel's local coordinates below, not a new widget-interaction ray.
+    for(int32 I=0;I<3;++I)
+    {
+        auto* Zone=CreateDefaultSubobject<UBoxComponent>(*FString::Printf(TEXT("MenuTouch%d"),I));Zone->SetupAttachment(Root);Zone->SetRelativeLocation(MenuPositions[I]);Zone->SetBoxExtent(FVector(1.7,1.7,1.1));Zone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        if(I==0)MenuModeZone=Zone;else if(I==1)MenuPreviousZone=Zone;else MenuNextZone=Zone;
+        auto* Key=CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("MenuKey%d"),I));Key->SetupAttachment(Root);Key->SetStaticMesh(Cube.Object);Key->SetRelativeLocation(MenuPositions[I]-FVector(0,0,.38));Key->SetRelativeScale3D(FVector(.038,.038,.004));Key->SetCollisionEnabled(ECollisionEnabled::NoCollision);Key->SetCastShadow(false);MenuKeys.Add(Key);
+        auto* Label=CreateDefaultSubobject<UTextRenderComponent>(*FString::Printf(TEXT("MenuLabel%d"),I));Label->SetupAttachment(Root);Label->SetRelativeLocation(MenuPositions[I]-FVector(1.2,1.4,.1));Label->SetRelativeRotation(FRotator(90,90,0));Label->SetWorldSize(.6f);Label->SetText(FText::FromString(MenuNames[I]));Label->SetTextRenderColor(FColor(80,230,215));MenuLabels.Add(Label);
+    }
     DisplayWidgetClass=UOrderHologramWidget::StaticClass();CustomerName=NSLOCTEXT("Hologram","Guide","咖啡馆向导");
 }
 void AOrderHologramActor::OnConstruction(const FTransform& Transform)
@@ -59,6 +72,9 @@ void AOrderHologramActor::OnConstruction(const FTransform& Transform)
     if(ShellMaterial){BaseMesh->SetMaterial(0,ShellMaterial);ButtonMesh->SetMaterial(0,ShellMaterial);}
     if(SignalMaterial){StatusLamp->SetMaterial(0,SignalMaterial);EmitterMesh->SetMaterial(0,SignalMaterial);}
     if(DisplayWidgetClass)Panel->SetWidgetClass(DisplayWidgetClass);
+    const bool HasMenu=IsValid(RecipeMenu)&&RecipeMenu->IsValidMenu();
+    for(const auto& Key:MenuKeys){Key->SetVisibility(HasMenu);if(ShellMaterial)Key->SetMaterial(0,ShellMaterial);}
+    for(const auto& Label:MenuLabels)Label->SetVisibility(HasMenu);
 }
 void AOrderHologramActor::BeginPlay()
 {
@@ -91,6 +107,29 @@ void AOrderHologramActor::CancelOrder(AServingSpotActor* Spot,int64 Serial)
     if(IsValid(Spot)&&Spot->HasBeenServed()&&Spot->GetAcceptedOrderSerial()==CurrentOrderSerial)return;
     ++Generation;CloseRemaining=-1;bPending=false;bDelivered=false;CurrentRecipe=nullptr;CurrentSpot.Reset();
     if(bOpen&&!bPlayerOpened)SetOpen(false,false);RefreshDisplay();
+}
+const FDrinkMenuEntry* AOrderHologramActor::GetSelectedMenuEntry() const
+{
+    return IsValid(RecipeMenu)&&RecipeMenu->Entries.IsValidIndex(SelectedMenuIndex)?&RecipeMenu->Entries[SelectedMenuIndex]:nullptr;
+}
+bool AOrderHologramActor::ToggleRecipeMenu()
+{
+    if(!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
+    bRecipeMenuMode=!bRecipeMenuMode;SelectedMenuIndex=FMath::Clamp(SelectedMenuIndex,0,RecipeMenu->Entries.Num()-1);
+    // Browsing is an explicit player-open action. No order serial/recipe/snapshot
+    // is changed; an automatic delivery close must not interrupt menu reading.
+    SetOpen(true,true);return true;
+}
+bool AOrderHologramActor::BrowseRecipeMenu(int32 Direction)
+{
+    if(!bRecipeMenuMode||!bOpen||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu()||Direction==0)return false;
+    const int32 Count=RecipeMenu->Entries.Num();SelectedMenuIndex=(SelectedMenuIndex+(Direction>0?1:-1)+Count)%Count;RefreshDisplay();return true;
+}
+bool AOrderHologramActor::SelectRecipeByPinyin(FName Index)
+{
+    if(!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
+    const int32 Found=RecipeMenu->FindPinyinIndex(Index);if(Found==INDEX_NONE)return false;
+    SelectedMenuIndex=Found;bRecipeMenuMode=true;SetOpen(true,true);return true;
 }
 void AOrderHologramActor::PressButton(){ButtonPressRemaining=.15f;SetOpen(!bOpen,true);}
 void AOrderHologramActor::SetOpen(bool Value,bool ByPlayer)
@@ -150,6 +189,39 @@ bool AOrderHologramActor::ProcessTouchSample(EControllerHand Hand,const FVector&
     const bool Inside=FMath::Abs(Local.X)<=Extent.X&&FMath::Abs(Local.Y)<=Extent.Y&&FMath::Abs(Local.Z)<=Extent.Z;
     if(Inside&&!Holding&&!bTouchLatched){bTouchLatched=true;PressButton();return true;}return false;
 }
+bool AOrderHologramActor::ProcessMenuTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked,bool Holding)
+{
+    if(!Tracked||Point.ContainsNaN()||(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
+    UBoxComponent* Zones[]={MenuModeZone.Get(),MenuPreviousZone.Get(),MenuNextZone.Get()};
+    bool Triggered=false;
+    for(int32 I=0;I<4;++I)
+    {
+        bool Inside=false,Outside=true;int32 Row=INDEX_NONE;
+        if(I<3)
+        {
+            const FVector P=Zones[I]->GetComponentTransform().InverseTransformPosition(Point);const FVector E=Zones[I]->GetUnscaledBoxExtent();const FVector Outer=E+FVector(1.f);
+            Inside=FMath::Abs(P.X)<=E.X&&FMath::Abs(P.Y)<=E.Y&&FMath::Abs(P.Z)<=E.Z;
+            Outside=FMath::Abs(P.X)>Outer.X||FMath::Abs(P.Y)>Outer.Y||FMath::Abs(P.Z)>Outer.Z;
+        }
+        else if(bOpen&&bRecipeMenuMode&&AnimationValue>.95f)
+        {
+            // UWidgetComponent: local -Y is screen right, +Z is screen up.
+            const FVector P=Panel->GetComponentTransform().InverseTransformPosition(Point);
+            const double X=600-P.Y,Y=375-P.Z;
+            Inside=FMath::Abs(P.X)<=24&&X>=28&&X<=342&&Y>=134&&Y<614;
+            Outside=FMath::Abs(P.X)>44||X<10||X>360||Y<116||Y>632;
+            if(Inside)Row=FMath::FloorToInt((Y-134)/48);
+        }
+        (Hand==EControllerHand::Left?MenuLeftOutside[I]:MenuRightOutside[I])=Outside;
+        if(MenuLeftOutside[I]&&MenuRightOutside[I])MenuTouchLatched[I]=false;
+        if(Inside&&!Holding&&!MenuTouchLatched[I]&&!Triggered)
+        {
+            MenuTouchLatched[I]=true;
+            if(I==0)Triggered=ToggleRecipeMenu();else if(I<3)Triggered=BrowseRecipeMenu(I==1?-1:1);else if(RecipeMenu->Entries.IsValidIndex(Row))Triggered=SelectRecipeByPinyin(RecipeMenu->Entries[Row].PinyinIndex);
+        }
+    }
+    return Triggered;
+}
 void AOrderHologramActor::PollHands()
 {
     if(!TouchPawn.IsValid())for(TActorIterator<AVRPawn> I(GetWorld());I;++I){if(I->IsLocallyControlled()){TouchPawn=*I;break;}}
@@ -159,7 +231,10 @@ void AOrderHologramActor::PollHands()
         if(!Grip||!Grip->IsTracked())return;
         FVector Point=Grip->GetComponentLocation()+Grip->GetForwardVector()*4.f;
         if(Mesh&&Mesh->DoesSocketExist(Bone))Point=Mesh->GetSocketLocation(Bone);
-        if(ProcessTouchSample(Hand,Point,true,IsValid(Held)&&Held->IsHeld()))
+        const bool Holding=IsValid(Held)&&Held->IsHeld();
+        const bool PowerPressed=ProcessTouchSample(Hand,Point,true,Holding);
+        const bool MenuPressed=ProcessMenuTouchSample(Hand,Point,true,Holding);
+        if(PowerPressed||MenuPressed)
             if(auto* PC=Cast<APlayerController>(Pawn->GetController()))if(Pawn->HoverHapticEffect)PC->PlayHapticEffect(Pawn->HoverHapticEffect,Hand,.35f,false);
     };
     Sample(EControllerHand::Left,Pawn->MotionControllerLeftGrip,Pawn->HandLeft,LeftTouchBone,Pawn->HeldComponentLeft);
