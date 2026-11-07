@@ -4,6 +4,7 @@
 #include "Misc/AutomationTest.h"
 #include "Serving/OrderHologramActor.h"
 #include "Serving/DrinkRecipe.h"
+#include "Serving/DrinkMenuData.h"
 #include "Serving/ServingSpotActor.h"
 #include "Liquid/CupActor.h"
 #include "GrabComponent.h"
@@ -24,12 +25,14 @@
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
+#include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
 #include "NiagaraComponent.h"
+#include <limits>
 
 namespace OrderHologramTests
 {
@@ -344,6 +347,29 @@ bool FHologramTimeoutGenerationTest::RunTest(const FString&)
     }
     T.Hologram->Tick(3.f);
     CheckPending(*this, TEXT("重复调用之后仍保持手动关闭"), T.Hologram, false, 3);
+    auto* Widget = T.Hologram->GetDisplayWidget();
+    if (!TestNotNull(TEXT("三条真实交付历史 Widget"), Widget) || !TestNotNull(TEXT("真实历史控件树"), Widget->WidgetTree.Get())) return false;
+    const auto& Records = T.Hologram->GetDeliveryRecords();
+    if (!TestEqual(TEXT("原交付流程产生三条真实记录"), Records.Num(), 3)) return false;
+    TArray<FString> HistoryLines;
+    for (int32 I = 0; I < 3; ++I)
+    {
+        const auto& Record = Records[Records.Num() - 1 - I];
+        const FString ExpectedName = Record.DrinkName.ToString() + TEXT(" · 已交付");
+        const FString ExpectedVolume = FString::Printf(TEXT("实际 %.0f mL"), Record.VolumeML);
+        HistoryLines.Add(ExpectedName);
+        HistoryLines.Add(ExpectedVolume);
+        auto* Name = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryName%d"), I))));
+        auto* Volume = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryVolume%d"), I))));
+        if (!TestNotNull(TEXT("三行真实历史名控件"), Name) || !TestNotNull(TEXT("三行真实历史量控件"), Volume)
+            || !TestNotNull(TEXT("真实历史画布"), Name->GetParent()) || !TestNotNull(TEXT("真实历史行容器"), Name->GetParent()->GetParent())) return false;
+        TestEqual(TEXT("三行历史倒序显示真实饮品名"), Name->GetText().ToString(), ExpectedName);
+        TestEqual(TEXT("三行历史倒序显示真实验收量，不以目标代替"), Volume->GetText().ToString(), ExpectedVolume);
+        TestTrue(TEXT("三行真实历史保持可见，面板关闭不删除账本 UI"), Name->GetVisibility() == ESlateVisibility::HitTestInvisible
+            && Volume->GetVisibility() == ESlateVisibility::HitTestInvisible
+            && Name->GetParent()->GetParent()->GetVisibility() == ESlateVisibility::HitTestInvisible);
+    }
+    TestEqual(TEXT("删除菜单历史页脚不删除三条真实交付 UI"), Widget->GetHistoryText().ToString(), FString::Join(HistoryLines, TEXT("\n")));
     return true;
 }
 
@@ -832,6 +858,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     {
         TestNotNull(TEXT("WBP 实际控件树有根布局"), Widget->WidgetTree->RootWidget.Get());
     }
+    const TArray<FText> RuntimeNotesBefore = T.Hologram->CustomerNotes;
     T.Director->StartTutorial();
     CheckPending(*this, TEXT("真实 BP 由 WaitStep 自动点单"), T.Hologram, true, 0);
     TestTrue(TEXT("运行订单绑定加载的真实 DA_Latte"), T.Hologram->GetCurrentRecipe() == Recipe);
@@ -849,11 +876,56 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     const FString InitialHistoryText = Widget->GetHistoryText().ToString();
     const bool bAutoPending = T.Hologram->IsPending();
     const bool bAutoOpen = T.Hologram->IsPanelOpen();
-    TestTrue(TEXT("真实 WBP 订单文本含冰拿铁"), OrderText.Contains(TEXT("冰拿铁")));
-    TestTrue(TEXT("真实 WBP 订单文本含目标 200"), OrderText.Contains(TEXT("200")));
-    TestTrue(TEXT("真实 WBP 订单文本含成分 100"), OrderText.Contains(TEXT("100")));
-    TestTrue(TEXT("真实 WBP 订单文本含咖啡"), OrderText.Contains(TEXT("咖啡")));
-    TestTrue(TEXT("真实 WBP 订单文本含牛奶"), OrderText.Contains(TEXT("牛奶")));
+    const UDrinkRecipe* ActualRecipe = T.Hologram->GetCurrentRecipe();
+    if (!TestNotNull(TEXT("真实订单权威配方"), ActualRecipe) || !TestNotNull(TEXT("真实 WBP 控件树"), Widget->WidgetTree.Get())
+        || !TestNotNull(TEXT("真实保存菜单"), T.Hologram->RecipeMenu.Get())) return false;
+    TestTrue(TEXT("展示取实际订单而非浏览配方或首单预览"), T.Hologram->GetPresentedRecipe() == ActualRecipe && ActualRecipe == Recipe);
+    TestEqual(TEXT("实际配方目标仍为 200 mL"), ActualRecipe->TargetVolumeML, 200.0);
+    TestEqual(TEXT("隐藏范围文字不改变实际最小验收量"), ActualRecipe->MinVolumeML, 180.0);
+    TestEqual(TEXT("隐藏范围文字不改变实际最大验收量"), ActualRecipe->MaxVolumeML, 220.0);
+    if (!TestEqual(TEXT("实际配方仍为两条权威原料规则"), ActualRecipe->Rules.Num(), 2)) return false;
+    const FName RuleIds[] = { CoffeeId, MilkId };
+    for (int32 I = 0; I < 2; ++I)
+    {
+        TestEqual(TEXT("实际原料英文 ID 保留于数据"), ActualRecipe->Rules[I].IngredientId, RuleIds[I]);
+        TestEqual(TEXT("实际原料最小比例仍为 45%"), ActualRecipe->Rules[I].MinFraction, .45);
+        TestEqual(TEXT("实际原料最大比例仍为 55%"), ActualRecipe->Rules[I].MaxFraction, .55);
+    }
+    const auto* Entry = T.Hologram->RecipeMenu->Entries.FindByPredicate([ActualRecipe](const FDrinkMenuEntry& E)
+    {
+        return E.Recipe.Get() == ActualRecipe;
+    });
+    if (!TestNotNull(TEXT("杯名取实际订单对应的保存菜单条目"), Entry)) return false;
+    const FString ExpectedIngredients = TEXT("咖啡  100 mL\n牛奶  100 mL");
+    const FString ExpectedOrder = TEXT("待制作 / 待交付\n冰拿铁\n目标总量  200 mL\n")
+        + Entry->CupName.ToString() + TEXT("\n加冰即可\n") + ExpectedIngredients;
+    TestEqual(TEXT("真实 WBP 订单全文仅状态中文名目标中文量及杯冰"), OrderText, ExpectedOrder);
+    const TCHAR* CoreNames[] = { TEXT("OrderStatus"), TEXT("RecipeName"), TEXT("TargetVolume"),
+        TEXT("OrderCupName"), TEXT("OrderIceCount"), TEXT("OrderIngredients") };
+    const FString CoreValues[] = { TEXT("待制作 / 待交付"), TEXT("冰拿铁"), TEXT("目标总量  200 mL"),
+        Entry->CupName.ToString(), TEXT("加冰即可"), ExpectedIngredients };
+    for (int32 I = 0; I < 6; ++I)
+    {
+        auto* Text = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(CoreNames[I])));
+        if (!TestNotNull(TEXT("真实订单核心控件"), Text)) return false;
+        TestEqual(Text->GetName() + TEXT("：核心中文用量与真实订单一致"), Text->GetText().ToString(), CoreValues[I]);
+        TestTrue(Text->GetName() + TEXT("：核心内容真实可见"), Text->GetVisibility() == ESlateVisibility::HitTestInvisible);
+    }
+    const TCHAR* RemovedNames[] = { TEXT("CustomerId"), TEXT("CustomerNotes"), TEXT("NotesHeading"), TEXT("OrderTolerance") };
+    for (const TCHAR* Name : RemovedNames)
+    {
+        auto* Text = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(Name)));
+        if (!TestNotNull(FString(Name) + TEXT("：旧命名控件仍在"), Text)) return false;
+        TestTrue(FString(Name) + TEXT("：真实清空且折叠，不把 Notes 拼进订单"), Text->GetText().IsEmpty()
+            && Text->GetVisibility() == ESlateVisibility::Collapsed);
+    }
+    if (!TestEqual(TEXT("精简展示保留运行 Actor 的 Notes 数据条数"), T.Hologram->CustomerNotes.Num(), RuntimeNotesBefore.Num())
+        || !TestTrue(TEXT("Notes 数据非空，隐藏控件不是空测"), !RuntimeNotesBefore.IsEmpty())) return false;
+    for (int32 I = 0; I < RuntimeNotesBefore.Num(); ++I)
+        TestEqual(TEXT("精简只折叠 Notes UI，不删除备注数据"), T.Hologram->CustomerNotes[I].ToString(), RuntimeNotesBefore[I].ToString());
+    const TCHAR* RemovedWords[] = { TEXT("Coffee"), TEXT("Milk"), TEXT("约"), TEXT("ratio"), TEXT("%"),
+        TEXT("45"), TEXT("55"), TEXT("180"), TEXT("220"), TEXT("验收"), TEXT("比例"), TEXT("Notes") };
+    for (const TCHAR* Word : RemovedWords) TestFalse(FString(Word) + TEXT("：实际订单不再显示英文 ID 或范围小字"), OrderText.Contains(Word));
     TestTrue(TEXT("真实 WBP 初始历史为暂无本局交付"), InitialHistoryText.Contains(TEXT("暂无本局交付")));
     T.Hologram->Tick(T.Hologram->AnimationSeconds);
     const FVector RuntimePanelCenter = T.Hologram->Panel->GetRelativeLocation();
@@ -943,6 +1015,95 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     TestTrue(TEXT("保存真实捕获值到 Saved/Hologram/saved_flow.json"),
         FFileHelper::SaveStringToFile(Json, *FPaths::Combine(Directory, TEXT("saved_flow.json")),
             FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHologramCompactGenericPresentationTest,
+    "CyberCafe.Hologram.CompactChineseMidpointAmountsAndInvalidNumericPresentation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHologramCompactGenericPresentationTest::RunTest(const FString&)
+{
+    if (!TestNotNull(TEXT("测试需要 Engine WorldContext"), GEngine)) return false;
+    FHologramWorld T;
+    auto* Recipe = T.Recipe(FName(TEXT("GenericDrink")));
+    Recipe->DisplayName = FText::FromString(TEXT("调配饮品"));
+    Recipe->TargetVolumeML = 240.0;
+    Recipe->MinVolumeML = 180.0;
+    Recipe->MaxVolumeML = 260.0;
+    Recipe->ExpectedIceCount = 0;
+    Recipe->Rules[0].MinFraction = .2;
+    Recipe->Rules[0].MaxFraction = .4;
+    Recipe->Rules[1].MinFraction = .5;
+    Recipe->Rules[1].MaxFraction = .7;
+    T.Hologram->CustomerNotes = { FText::FromString(TEXT("教学客人")), FText::FromString(TEXT("喜好尚未了解")) };
+    const TArray<FText> NotesBefore = T.Hologram->CustomerNotes;
+    auto* Spot = T.Spot(Recipe);
+    T.BeginPlay();
+    if (!CheckFixture(*this, T, Spot)
+        || !TestTrue(TEXT("通用配方真实建立订单"), T.Hologram->BeginOrder(Recipe, Spot, T.NPC, FText::GetEmpty()))) return false;
+    auto* Widget = T.Hologram->GetDisplayWidget();
+    if (!TestNotNull(TEXT("通用订单实际 Widget"), Widget) || !TestNotNull(TEXT("通用订单实际控件树"), Widget->WidgetTree.Get())) return false;
+    const FString ExpectedIngredients = TEXT("咖啡  80 mL\n牛奶  160 mL");
+    TestEqual(TEXT("非对半配方仍按 midpoint 总和归一化，而非固定 100 或目标对半"), Widget->GetOrderText().ToString(),
+        FString(TEXT("待制作 / 待交付\n调配饮品\n目标总量  240 mL\n不加冰\n")) + ExpectedIngredients);
+    auto* Ingredients = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("OrderIngredients")));
+    if (!TestNotNull(TEXT("真实中文原料用量控件"), Ingredients)) return false;
+    TestEqual(TEXT("真实可见中文 mL 与归一化建议量一致"), Ingredients->GetText().ToString(), ExpectedIngredients);
+    TestTrue(TEXT("中文用量实际可见"), Ingredients->GetVisibility() == ESlateVisibility::HitTestInvisible);
+    TestTrue(TEXT("显示与当前真实订单指针一致"), T.Hologram->GetPresentedRecipe() == Recipe && T.Hologram->GetCurrentRecipe() == Recipe);
+    TestEqual(TEXT("展示不修改目标量"), Recipe->TargetVolumeML, 240.0);
+    TestEqual(TEXT("展示不修改原最小量"), Recipe->MinVolumeML, 180.0);
+    TestEqual(TEXT("展示不修改原最大量"), Recipe->MaxVolumeML, 260.0);
+    TestEqual(TEXT("展示不修改咖啡最小比例"), Recipe->Rules[0].MinFraction, .2);
+    TestEqual(TEXT("展示不修改咖啡最大比例"), Recipe->Rules[0].MaxFraction, .4);
+    TestEqual(TEXT("展示不修改牛奶最小比例"), Recipe->Rules[1].MinFraction, .5);
+    TestEqual(TEXT("展示不修改牛奶最大比例"), Recipe->Rules[1].MaxFraction, .7);
+    const TCHAR* Removed[] = { TEXT("CustomerId"), TEXT("CustomerNotes"), TEXT("NotesHeading"), TEXT("OrderTolerance") };
+    for (const TCHAR* Name : Removed)
+    {
+        auto* Text = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(Name)));
+        if (!TestNotNull(TEXT("通用订单旧命名控件保留"), Text)) return false;
+        TestTrue(TEXT("通用配方不显示备注和验收范围"), Text->GetText().IsEmpty() && Text->GetVisibility() == ESlateVisibility::Collapsed);
+    }
+    if (!TestEqual(TEXT("隐藏 Notes 保留真实数据条数"), T.Hologram->CustomerNotes.Num(), NotesBefore.Num())) return false;
+    for (int32 I = 0; I < NotesBefore.Num(); ++I)
+        TestEqual(TEXT("隐藏 Notes 不删除真实数据内容"), T.Hologram->CustomerNotes[I].ToString(), NotesBefore[I].ToString());
+
+    // 仅给展示输入无效数值，不改验收逻辑、不提交杯，也不以隐藏范围跳过运算保护。
+    for (int32 Case = 0; Case < 12; ++Case)
+    {
+        auto* Invalid = T.Recipe(FName(*FString::Printf(TEXT("InvalidDisplay%d"), Case)));
+        Invalid->DisplayName = FText::FromString(TEXT("无效测试饮品"));
+        Invalid->ExpectedIceCount = 0;
+        switch (Case)
+        {
+        case 0: Invalid->TargetVolumeML = std::numeric_limits<double>::quiet_NaN(); break;
+        case 1: Invalid->TargetVolumeML = std::numeric_limits<double>::infinity(); break;
+        case 2: Invalid->MinVolumeML = std::numeric_limits<double>::quiet_NaN(); break;
+        case 3: Invalid->MaxVolumeML = std::numeric_limits<double>::infinity(); break;
+        case 4: Invalid->Rules[0].MinFraction = std::numeric_limits<double>::quiet_NaN(); break;
+        case 5: Invalid->Rules[0].MinFraction = -.1; break;
+        case 6: Invalid->Rules[0].MinFraction = .6; break;
+        case 7: Invalid->Rules[0].MaxFraction = 1.1; break;
+        case 8: Invalid->Rules.Reset(); break;
+        case 9:
+            for (auto& Rule : Invalid->Rules) { Rule.MinFraction = 0.0; Rule.MaxFraction = 0.0; }
+            break;
+        case 10: Invalid->TargetVolumeML = 0.0; break;
+        case 11: Invalid->Rules[0].MaxFraction = std::numeric_limits<double>::infinity(); break;
+        }
+        Spot->SetActiveRecipe(Invalid);
+        if (!TestTrue(TEXT("无效显示输入仍通过真实订单路径绑定"), T.Hologram->BeginOrder(Invalid, Spot, T.NPC, FText::GetEmpty()))) return false;
+        const FString Text = Widget->GetOrderText().ToString();
+        TestEqual(TEXT("无效数值不生成目标或伪造原料 mL"), Text,
+            FString(TEXT("待制作 / 待交付\n无效测试饮品\n不加冰\n当前配方配置无效")));
+        TestEqual(TEXT("无效数值真实显示配置无效"), Ingredients->GetText().ToString(), FString(TEXT("当前配方配置无效")));
+        TestTrue(TEXT("无效输入仍保留真实绑定，而不是替换为可用配方"), T.Hologram->GetCurrentRecipe() == Invalid
+            && T.Hologram->GetPresentedRecipe() == Invalid);
+        TestEqual(TEXT("显示失败不伪造交付账本"), T.Hologram->GetDeliveryRecords().Num(), 0);
+        TestFalse(TEXT("显示失败不伪造订单交付成功"), T.Hologram->IsDelivered());
+    }
     return true;
 }
 

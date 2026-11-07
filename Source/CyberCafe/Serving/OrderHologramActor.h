@@ -98,6 +98,8 @@ public:
     UFUNCTION(BlueprintPure,Category="Hologram") bool IsAmberLit() const {return bPending&&!bOpen;}
     UFUNCTION(BlueprintPure,Category="Hologram") bool HasAutoOpened() const {return bAutoOpened;}
     UFUNCTION(BlueprintPure,Category="Hologram") UDrinkRecipe* GetCurrentRecipe() const {return CurrentRecipe;}
+    // Display-only spoken-order preview; never grants submission ownership.
+    UFUNCTION(BlueprintPure,Category="Hologram") UDrinkRecipe* GetPresentedRecipe() const;
     UFUNCTION(BlueprintPure,Category="Hologram") int64 GetCurrentOrderSerial() const {return CurrentOrderSerial;}
     const TArray<FHologramDeliveryRecord>& GetDeliveryRecords() const {return DeliveryRecords;}
     // Uses the same geometric/debounce path as a tracked hand. Tests supply measured samples.
@@ -128,7 +130,7 @@ private:
     uint64 Generation=0;
     bool bOpen=false,bPlayerOpened=false,bAutoOpened=false,bPending=false,bDelivered=false;
     UPROPERTY(Transient) TWeakObjectPtr<UDrinkRecipe> FirstOrderPreviewRecipe;
-    bool bFirstOrderRecipeRevealed=false,bFirstOrderPreviewDismissed=false;
+    bool bFirstOrderRecipeRevealed=false,bFirstOrderPreviewDismissed=false,bFirstOrderPreviewActive=false;
     bool bTouchLatched=false,bLeftOutside=true,bRightOutside=true;
     float AnimationValue=0,CloseRemaining=-1,ButtonPressRemaining=0;
 };

@@ -474,10 +474,11 @@ struct FRun
                 {
                     auto* Screen = Wait->OrderHologram.Get();
                     if (!Need(IsValid(Screen) && Screen->HasRevealedFirstOrderRecipe() && Screen->IsPanelOpen() &&
-                        Screen->IsRecipeMenuMode() && !Screen->IsPlayerOpened() && !Screen->IsPending() &&
-                        Screen->GetSelectedMenuEntry() && Screen->GetSelectedMenuEntry()->Recipe.Get() == Wait->RequiredRecipe.Get(),
-                        TEXT("真实首句点单未在任何手输入前自动显示对应配方"))) return false;
-                    Reason = TEXT("首次点单句自动展开冰拿铁配方；未按电源、未创建服务订单");
+                        !Screen->IsRecipeMenuMode() && !Screen->IsPlayerOpened() && !Screen->IsPending() &&
+                        Screen->GetPresentedRecipe() == Wait->RequiredRecipe.Get() && !Screen->GetCurrentRecipe() &&
+                        Screen->GetDisplayWidget() && Screen->GetDisplayWidget()->GetOrderText().ToString().Contains(TEXT("冰拿铁")),
+                        TEXT("真实首句点单未在任何手输入前自动显示对应当前订单"))) return false;
+                    Reason = TEXT("首次点单句自动展开当前订单冰拿铁；未按电源、未创建服务验收订单");
                     Record(TEXT("首次点单自动展开"));
                 }
             }
@@ -510,10 +511,10 @@ struct FRun
                             for (int32 I = 0; I < 20; ++I) if (!Tick()) return false;
                         if (!Need(Screen->IsPanelOpen() && Screen->Panel->GetRelativeScale3D().Z >= Screen->Panel->GetRelativeScale3D().Y * .999f,
                             TEXT("真实 World Tick 后菜单展开动画仍未完成"))) return false;
-                        if (!Need(TutorialMenuTestHelpers::FindRecipe(Screen, FName(TEXT("BNT"))),
-                            TEXT("真实屏内 drinkRow 手采样未查看冰拿铁配方"))) return false;
+                        if (!Need(!Screen->IsRecipeMenuMode() && TutorialMenuTestHelpers::TouchAction(Screen, 2) && Screen->IsRecipeMenuMode(),
+                            TEXT("真实当前订单配方入口未用手采样打开冰拿铁配方"))) return false;
                         if (!Need(MenuStep->IsCompleted(), TEXT("真实菜单操作未完成教学门槛"))) return false;
-                        Reason = TEXT("首次自动开屏后真实 drinkRow 手触查看 BNT，无需返回，自动展示不跳过教学");
+                        Reason = TEXT("首次自动显示当前订单后真实手触查看这杯的配方，无需返回，未跳过教学");
                         Record(TEXT("菜单教学完成"));
                     }
                 }

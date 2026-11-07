@@ -47,8 +47,10 @@ void UTutorialStep_WaitForRecipeMenu::HandleMenuInteraction(AOrderHologramActor*
     if(!bActive||IsCompleted()||Screen!=SubscribedScreen.Get()||!Screen->IsPanelOpen())return;
     if(!Screen->IsRecipeMenuMode())return;
     bOpenedMenu=true;
-    // A page tab or retained/scripted default selection is not a drink click.
-    if(Screen->GetLastScreenAction()<100||Screen->GetLastScreenAction()>=110)return;
+    // Explicit current-order recipe navigation is equivalent to clicking that drink.
+    // Tabs and retained/scripted default selection alone are not recipe consultation.
+    const int32 Action=Screen->GetLastScreenAction();
+    if(Action!=2&&(Action<100||Action>=110))return;
     const auto* Entry=Screen->GetSelectedMenuEntry();
     if(Entry&&Entry->PinyinIndex==RequiredPinyinIndex)
     {

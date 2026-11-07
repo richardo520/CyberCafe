@@ -100,7 +100,7 @@ bool AOrderHologramActor::BeginOrder(UDrinkRecipe* Recipe,AServingSpotActor* Spo
     if(CurrentSpot==Spot&&CurrentOrderSerial==Serial&&CurrentRecipe==Recipe)return false;
     ++Generation;CloseRemaining=-1;CurrentSpot=Spot;CurrentOrderSerial=Serial;CurrentRecipe=Recipe;CurrentCustomer=Customer;
     if(!Name.IsEmpty())CustomerName=Name;
-    bPending=true;bDelivered=false;bAutoOpened=false;
+    bPending=true;bDelivered=false;bAutoOpened=false;bFirstOrderPreviewActive=false;
     // A first-order preview dismissed by the player must not pop back up when
     // the teaching flow later establishes the actual serving order.
     const bool RespectPreviewDismissal=bFirstOrderRecipeRevealed&&bFirstOrderPreviewDismissed&&FirstOrderPreviewRecipe.Get()==Recipe;
@@ -114,6 +114,11 @@ void AOrderHologramActor::CancelOrder(AServingSpotActor* Spot,int64 Serial)
     if(IsValid(Spot)&&Spot->HasBeenServed()&&Spot->GetAcceptedOrderSerial()==CurrentOrderSerial)return;
     ++Generation;CloseRemaining=-1;bPending=false;bDelivered=false;CurrentRecipe=nullptr;CurrentSpot.Reset();
     if(bOpen&&!bPlayerOpened)SetOpen(false,false);RefreshDisplay();
+}
+UDrinkRecipe* AOrderHologramActor::GetPresentedRecipe() const
+{
+    if(IsValid(CurrentRecipe))return CurrentRecipe;
+    return bFirstOrderPreviewActive?FirstOrderPreviewRecipe.Get():nullptr;
 }
 const FDrinkMenuEntry* AOrderHologramActor::GetSelectedMenuEntry() const
 {
@@ -143,8 +148,8 @@ bool AOrderHologramActor::RevealFirstOrderRecipe(UDrinkRecipe* Recipe)
     if(bFirstOrderRecipeRevealed||bPending||!IsValid(Recipe)||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu())return false;
     const int32 Found=RecipeMenu->Entries.IndexOfByPredicate([Recipe](const FDrinkMenuEntry& Entry){return Entry.Recipe.Get()==Recipe;});
     if(Found==INDEX_NONE)return false;
-    bFirstOrderRecipeRevealed=true;FirstOrderPreviewRecipe=Recipe;bFirstOrderPreviewDismissed=false;
-    SelectedMenuIndex=Found;MenuFilter=0;bRecipeMenuMode=true;
+    bFirstOrderRecipeRevealed=true;FirstOrderPreviewRecipe=Recipe;bFirstOrderPreviewDismissed=false;bFirstOrderPreviewActive=true;
+    SelectedMenuIndex=Found;MenuFilter=0;bRecipeMenuMode=false;
     // Do not broadcast the input delegate: showing a recipe is not the player clicking it.
     if(!bOpen){bAutoOpened=true;SetOpen(true,false);}else RefreshDisplay();
     return true;
@@ -239,9 +244,10 @@ bool AOrderHologramActor::ActivateScreenAction(int32 Action)
     bool Accepted=false;
     if(Action==0){bRecipeMenuMode=false;Accepted=true;}
     else if(Action==1){bRecipeMenuMode=true;Accepted=true;}
-    else if(Action==2&&IsValid(CurrentRecipe))
+    else if(Action==2&&IsValid(GetPresentedRecipe()))
     {
-        const int32 Found=RecipeMenu->Entries.IndexOfByPredicate([this](const FDrinkMenuEntry& E){return E.Recipe==CurrentRecipe;});
+        const UDrinkRecipe* Presented=GetPresentedRecipe();
+        const int32 Found=RecipeMenu->Entries.IndexOfByPredicate([Presented](const FDrinkMenuEntry& E){return E.Recipe.Get()==Presented;});
         if(Found!=INDEX_NONE){SelectedMenuIndex=Found;MenuFilter=0;bRecipeMenuMode=true;Accepted=true;}
     }
     else if(bRecipeMenuMode&&Action>=10&&Action<=12){MenuFilter=Action-10;Accepted=true;}
@@ -272,7 +278,7 @@ bool AOrderHologramActor::ProcessMenuTouchSample(EControllerHand Hand,const FVec
         const FVector P=Panel->GetComponentTransform().InverseTransformPosition(Point);const FVector2D Pixel(600-P.Y,375-P.Z);
         TArray<int32> Actions={0,1};
         if(bRecipeMenuMode){Actions.Append({10,11,12});for(int32 I=0;I<GetVisibleMenuIndices().Num();++I)Actions.Add(100+I);}
-        else if(IsValid(CurrentRecipe))Actions.Add(2);
+        else if(IsValid(GetPresentedRecipe()))Actions.Add(2);
         for(int32 Action:Actions)
         {
             const FIntRect Rect=UOrderHologramWidget::GetScreenActionRect(Action);

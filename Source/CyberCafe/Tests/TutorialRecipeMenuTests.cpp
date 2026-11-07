@@ -17,6 +17,7 @@
 #include "Tests/TutorialMenuTestHelpers.h"
 #include "UI/OrderHologramWidget.h"
 #include "Components/Image.h"
+#include "Components/WidgetSwitcher.h"
 #include "Components/WidgetComponent.h"
 #include "Components/BoxComponent.h"
 #include "Blueprint/WidgetTree.h"
@@ -218,10 +219,10 @@ bool FTutorialMenuPhysical::RunTest(const FString&)
     auto* Widget = S->GetDisplayWidget();
     if (!TestNotNull(TEXT("实际显示控件"), Widget) || !TestNotNull(TEXT("实际控件树"), Widget->WidgetTree.Get())) return false;
     const FString Text = Widget->GetMenuText().ToString();
-    TestTrue(TEXT("实际冰拿铁文字与冰量"), Text.Contains(TEXT("BNT")) && Text.Contains(TEXT("冰拿铁"))
+    TestTrue(TEXT("实际冰拿铁文字与冰量"), !Text.Contains(TEXT("BNT")) && Text.Contains(TEXT("冰拿铁"))
         && Text.Contains(TEXT("加冰即可")) && Text.Contains(TEXT("200 mL")));
-    TestTrue(TEXT("两种原料实际各显示 100 mL"), Text.Contains(TEXT("咖啡液    100 mL"))
-        && Text.Contains(TEXT("牛奶    100 mL")));
+    TestTrue(TEXT("两种原料实际各显示 100 mL"), Text.Contains(TEXT("咖啡液  100 mL"))
+        && Text.Contains(TEXT("牛奶  100 mL")));
     const auto* Entry = S->GetSelectedMenuEntry();
     if (!TestNotNull(TEXT("实际选择的冰拿铁条目"), Entry)) return false;
     TestTrue(TEXT("实际文字含指定杯型"), Text.Contains(Entry->CupName.ToString()));
@@ -336,7 +337,14 @@ bool FTutorialFirstOrderReveal::RunTest(const FString&)
     TestFalse(TEXT("首句前屏幕未开"), F.Screen->IsPanelOpen());
     F.Begin();
     TestTrue(TEXT("真实导演进入点单句自动开屏"), F.Screen->IsPanelOpen() && F.Screen->HasRevealedFirstOrderRecipe());
-    TestTrue(TEXT("展示原冰拿铁配方页"), F.Screen->IsRecipeMenuMode() && F.Screen->GetSelectedMenuEntry()->Recipe.Get()==Recipe);
+    TestFalse(TEXT("首次自动优先当前订单页"), F.Screen->IsRecipeMenuMode());
+    TestEqual(TEXT("预览展示冰拿铁但真实订单仍无"), F.Screen->GetPresentedRecipe(), Recipe);
+    TestNull(TEXT("显示预览不提前建真实订单"), F.Screen->GetCurrentRecipe());
+    auto* OrderSwitch=Cast<UWidgetSwitcher>(F.Screen->GetDisplayWidget()->WidgetTree->FindWidget(TEXT("OrderMenuSwitcher")));
+    if (!TestNotNull(TEXT("实际UMG两页"),OrderSwitch))return false;
+    TestEqual(TEXT("实际首屏显示当前订单0"),OrderSwitch->GetActiveWidgetIndex(),0);
+    const FString FirstOrderText=F.Screen->GetDisplayWidget()->GetOrderText().ToString();
+    TestTrue(TEXT("当前订单首屏真实中文名与液量"),FirstOrderText.Contains(TEXT("冰拿铁")) && FirstOrderText.Contains(TEXT("200 mL")) && FirstOrderText.Contains(TEXT("100 mL")) && !FirstOrderText.Contains(TEXT("暂无当前订单")));
     TestFalse(TEXT("自动开屏不冒充玩家操作"), F.Screen->IsPlayerOpened());
     TestFalse(TEXT("提前展示不建立订单"), F.Screen->IsPending());
     TestEqual(TEXT("提前展示不改变服务单序号"), Spot->GetOrderSerial(), Serial);
@@ -384,6 +392,33 @@ bool FTutorialAutoRevealOptional::RunTest(const FString&)
     Spot->SetActiveRecipe(Other); Spot->SetSubmissionEnabled(true);
     TestTrue(TEXT("非首杯其他订单仍可正常建立"), F.Screen->BeginOrder(Other,Spot,nullptr,FText::GetEmpty()));
     TestTrue(TEXT("其他订单保原自动开屏行为"), F.Screen->IsPanelOpen() && F.Screen->HasAutoOpened() && !F.Screen->IsPlayerOpened());
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTutorialPreviewOrderRecipeEntry, "CyberCafe.TutorialMenu.FirstOrderPreviewRecipeEntryIsRealInputAndCancelClearsPreview", TutorialMenuTests::TestOptions)
+bool FTutorialPreviewOrderRecipeEntry::RunTest(const FString&)
+{
+    TutorialMenuTests::FWorld F;
+    if(!TestNotNull(TEXT("原屏"),F.Screen)||!TestNotNull(TEXT("原菜单"),F.Screen->RecipeMenu.Get()))return false;
+    F.Begin();auto* Recipe=F.Screen->RecipeMenu->Entries[0].Recipe.Get();
+    TestTrue(TEXT("首次实际预览可展开"),F.Screen->RevealFirstOrderRecipe(Recipe));F.Tick(20);
+    TestFalse(TEXT("首屏订单非配方"),F.Screen->IsRecipeMenuMode());
+    TestFalse(TEXT("自动展示不算看配方"),F.Step->IsCompleted());
+    TestNull(TEXT("首屏无服务订单"),F.Screen->GetCurrentRecipe());
+    TestEqual(TEXT("显示原冰拿铁"),F.Screen->GetPresentedRecipe(),Recipe);
+    TestTrue(TEXT("真实订单入口手采样直接查这杯配方"),TutorialMenuTestHelpers::TouchAction(F.Screen,2));
+    TestTrue(TEXT("点击入口显示对应配方"),F.Screen->IsRecipeMenuMode()&&F.Screen->GetSelectedMenuEntry()->Recipe.Get()==Recipe);
+    TestTrue(TEXT("入口属于真实查看教学已完成"),F.Step->IsCompleted()&&F.Step->HasViewedRequiredRecipe());
+    TestNull(TEXT("查配方不提前创建订单"),F.Screen->GetCurrentRecipe());
+    TestEqual(TEXT("查配方无历史"),F.Screen->GetDeliveryRecords().Num(),0);
+    auto* Spot=F.World->SpawnActor<AServingSpotActor>();Spot->SetActiveRecipe(Recipe);Spot->SetSubmissionEnabled(true);const auto Serial=Spot->GetOrderSerial();
+    TestTrue(TEXT("随后原WaitServe方式可建单"),F.Screen->BeginOrder(Recipe,Spot,nullptr,FText::GetEmpty()));
+    TestEqual(TEXT("真实订单取代预览"),F.Screen->GetCurrentRecipe(),Recipe);
+    F.Screen->CancelOrder(Spot,Serial);
+    TestNull(TEXT("取消实际订单不恢复过时首单预览"),F.Screen->GetPresentedRecipe());
+    TestNull(TEXT("真实订单已清"),F.Screen->GetCurrentRecipe());
+    const FString Order=F.Screen->GetDisplayWidget()->GetOrderText().ToString();
+    TestFalse(TEXT("取消后订单页不残留旧杯名"),Order.Contains(TEXT("冰拿铁")));
+    TestFalse(TEXT("取消后入口无旧订单可查"),F.Screen->ActivateScreenAction(2));
     return true;
 }
 #endif

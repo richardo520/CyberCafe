@@ -26,6 +26,7 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/WorldSettings.h"
 #include "CoreGlobals.h"
+#include "UObject/UnrealType.h"
 
 namespace RecipeMenuTest
 {
@@ -364,7 +365,10 @@ bool FMenuPresentation::RunTest(const FString&)
             || !TestTrue(TEXT("真实可见行点击"), TutorialMenuTestHelpers::FindRecipe(S, E.PinyinIndex))) return false;
         TestEqual(TEXT("真实 UMG 配方页显示"), Switch->GetActiveWidgetIndex(), 1);
         const FString Text = Widget->GetMenuText().ToString();
-        TestTrue(TEXT("索引与显示名精确出现"), Text.Contains(E.PinyinIndex.ToString()) && Text.Contains(E.DisplayName.ToString()));
+        TestTrue(TEXT("中文饮品名精确出现"), Text.Contains(E.DisplayName.ToString()));
+        TestFalse(TEXT("拼音索引仅用于内部检索，不出现在配方文字"), Text.Contains(E.PinyinIndex.ToString()));
+        TestTrue(TEXT("移除制作方法与冰量小字但保留控件"), IceHint->GetText().IsEmpty() && Method->GetText().IsEmpty()
+            && IceHint->GetVisibility() == ESlateVisibility::Collapsed && Method->GetVisibility() == ESlateVisibility::Collapsed);
         TestTrue(TEXT("指定杯名出现"), Text.Contains(E.CupName.ToString()));
         TestEqual(TEXT("真实杯名控件一致"), CupName->GetText().ToString(), E.CupName.ToString());
         if (!TestNotNull(TEXT("保存杯型图资源"), E.CupIcon.Get())) return false;
@@ -378,9 +382,7 @@ bool FMenuPresentation::RunTest(const FString&)
         if (E.Recipe->ExpectedIceCount > 0)
         {
             CheckedIce = true;
-            TestEqual(TEXT("真实正数冰量提示不限定块数"), IceHint->GetText().ToString(), FString(TEXT("有冰即可，不限块数")));
-            TestTrue(TEXT("菜单包含有冰即可"), Text.Contains(TEXT("有冰即可，不限块数")));
-            TestTrue(TEXT("真实制作方法先加冰再依次倒入"), Method->GetText().ToString().StartsWith(TEXT("取指定杯并加冰，再依次倒入")));
+            TestFalse(TEXT("需冰菜单不重复冰量说明"), Text.Contains(TEXT("有冰即可，不限块数")));
             if (!TestNotNull(TEXT("保存冰图资源"), S->RecipeMenu->IceIcon.Get())) return false;
             TestTrue(TEXT("需冰配方显示真实冰图"), IceIcon->GetBrush().GetResourceObject() == S->RecipeMenu->IceIcon.Get()
                 && IceIcon->GetVisibility() == ESlateVisibility::HitTestInvisible);
@@ -388,19 +390,22 @@ bool FMenuPresentation::RunTest(const FString&)
         else
         {
             CheckedNoIce = true;
-            TestEqual(TEXT("真实无冰提示仍为直接加入原料"), IceHint->GetText().ToString(), FString(TEXT("直接加入原料")));
-            TestTrue(TEXT("真实无冰方法仍直接依次倒入"), Method->GetText().ToString().StartsWith(TEXT("取指定杯，依次倒入")));
+            TestFalse(TEXT("无冰菜单不重复操作说明"), Text.Contains(TEXT("直接加入原料")));
             TestTrue(TEXT("无冰配方清掉上一杯冰图并隐藏"), IceIcon->GetBrush().GetResourceObject() == nullptr
                 && IceIcon->GetVisibility() == ESlateVisibility::Hidden);
         }
-        TestTrue(TEXT("液体总量明确不含冰"), Text.Contains(FString::Printf(TEXT("%.0f mL"), E.Recipe->TargetVolumeML))
-            && Text.Contains(TEXT("液体 mL 不含冰块")));
+        TestTrue(TEXT("液体总量保留精确 mL"), Text.Contains(FString::Printf(TEXT("液体总量  %.0f mL"), E.Recipe->TargetVolumeML)));
+        TestFalse(TEXT("菜单不重复液体与冰块说明"), Text.Contains(TEXT("液体 mL 不含冰块")));
+        TArray<FString> Lines;
+        Text.ParseIntoArrayLines(Lines, false);
+        TestEqual(TEXT("紧凑文字只保留四项核心与各原料行"), Lines.Num(), 4 + E.Ingredients.Num());
         for (int32 I = 0; I < E.Ingredients.Num(); ++I)
         {
             const auto& P = E.Ingredients[I];
-            const FString Line = FString::Printf(TEXT("%d  %s    %.0f mL"), I + 1,
+            const FString Line = FString::Printf(TEXT("%s  %.0f mL"),
                 *UDrinkMenuData::IngredientDisplayName(P.IngredientId).ToString(), P.VolumeML);
-            TestTrue(TEXT("原料名与精确 mL 在同一实际配方行"), Text.Contains(Line));
+            if (!TestTrue(TEXT("原料行索引有效"), Lines.IsValidIndex(4 + I))) return false;
+            TestEqual(TEXT("原料中文名与精确 mL 同行且不带数字序号"), Lines[4 + I], Line);
             auto* Icon = Cast<UImage>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientIcon%d"), I))));
             if (!TestNotNull(TEXT("真实原料图控件"), Icon) || !TestNotNull(TEXT("保存原料图资源"), P.Icon.Get())) return false;
             TestTrue(TEXT("原料图实际绑定保存贴图且可见"), Icon->GetBrush().GetResourceObject() == P.Icon.Get()
@@ -421,6 +426,214 @@ bool FMenuPresentation::RunTest(const FString&)
     TestTrue(TEXT("屏内订单页签切换"), TutorialMenuTestHelpers::TouchAction(S, 0));
     TestEqual(TEXT("原订单 UMG 页恢复"), Switch->GetActiveWidgetIndex(), 0);
     TestTrue(TEXT("原订单文字仍可用"), !Widget->GetOrderText().IsEmpty());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuCompactCore, "CyberCafe.RecipeMenu.CompactCoreTextAndLayoutAllTenDrinks", RecipeMenuTest::MenuTestFlags)
+bool FMenuCompactCore::RunTest(const FString&)
+{
+    RecipeMenuTest::World F;
+    if (!TestNotNull(TEXT("保存屏幕"), F.Screen)) return false;
+    F.Begin();
+    auto* S = F.Screen;
+    auto* Widget = S->GetDisplayWidget();
+    if (!TestNotNull(TEXT("真实保存 WBP"), Widget) || !TestNotNull(TEXT("真实控件树"), Widget->WidgetTree.Get())
+        || !TestNotNull(TEXT("真实菜单"), S->RecipeMenu.Get())
+        || !TestTrue(TEXT("菜单完整校验仍有效"), S->RecipeMenu->IsValidMenu())
+        || !TestEqual(TEXT("紧凑展示覆盖十款"), S->RecipeMenu->Entries.Num(), 10)) return false;
+    auto* Switch = Cast<UWidgetSwitcher>(Widget->WidgetTree->FindWidget(TEXT("OrderMenuSwitcher")));
+    auto* Details = Cast<UCanvasPanel>(Widget->WidgetTree->FindWidget(TEXT("MenuDetailsColumn")));
+    // UE5.6 没有 GetJustification；只读反射实际 UPROPERTY，不改控件来满足断言。
+    const auto* Justification = FindFProperty<FByteProperty>(UTextBlock::StaticClass(), TEXT("Justification"));
+    if (!TestNotNull(TEXT("真实两页切换器"), Switch) || !TestNotNull(TEXT("真实详情画布"), Details)
+        || !TestNotNull(TEXT("真实文字对齐属性"), Justification)) return false;
+    TestEqual(TEXT("精简仍保持两页"), Switch->GetChildrenCount(), 2);
+    TestNull(TEXT("只浏览菜单没有真实订单"), S->GetCurrentRecipe());
+    TestNull(TEXT("普通菜单浏览没有首单预览"), S->GetPresentedRecipe());
+    TestEqual(TEXT("普通浏览订单序号仍为零"), S->GetCurrentOrderSerial(), int64(0));
+    TestEqual(TEXT("初始没有伪造交付记录"), S->GetDeliveryRecords().Num(), 0);
+    TestEqual(TEXT("历史空态来自真实空账本"), Widget->GetHistoryText().ToString(), FString(TEXT("暂无本局交付")));
+    for (int32 I = 0; I < 3; ++I)
+    {
+        auto* Name = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryName%d"), I))));
+        auto* Volume = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryVolume%d"), I))));
+        auto* Record = Cast<UCanvasPanel>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryRecord%d"), I))));
+        if (!TestNotNull(TEXT("原三行历史名控件仍在"), Name) || !TestNotNull(TEXT("原三行历史量控件仍在"), Volume)
+            || !TestNotNull(TEXT("原三行历史画布仍在"), Record) || !TestNotNull(TEXT("原历史行容器仍在"), Record->GetParent())) return false;
+        TestTrue(TEXT("空账本三行真实清空且折叠，不伪造历史"), Name->GetText().IsEmpty() && Volume->GetText().IsEmpty()
+            && Record->GetParent()->GetVisibility() == ESlateVisibility::Collapsed);
+    }
+    if (!TestTrue(TEXT("真实电源开屏"), F.TouchPower())) return false;
+    F.Tick(20);
+    if (!TestTrue(TEXT("真实切配方页"), TutorialMenuTestHelpers::TouchAction(S, 1))
+        || !TestTrue(TEXT("真实点击全部筛选"), TutorialMenuTestHelpers::TouchAction(S, 10))) return false;
+    const TArray<int32> Rows = S->GetVisibleMenuIndices();
+    if (!TestEqual(TEXT("全部十行真实可见"), Rows.Num(), 10)) return false;
+    for (int32 Row = 0; Row < Rows.Num(); ++Row)
+    {
+        auto* Label = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIndex%d"), Row))));
+        auto* Button = Cast<URecipeScreenButton>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIndexButton%d"), Row))));
+        if (!TestNotNull(TEXT("真实索引文字"), Label) || !TestNotNull(TEXT("真实索引按钮"), Button)) return false;
+        TestEqual(TEXT("十行内部 DataIndex 映射仍精确"), Rows[Row], Row);
+        TestEqual(TEXT("索引文字仅 DisplayName，无序号或缩写"), Label->GetText().ToString(), S->RecipeMenu->Entries[Rows[Row]].DisplayName.ToString());
+        TestTrue(TEXT("索引标签与原 action 按钮可见"), Label->GetVisibility() == ESlateVisibility::HitTestInvisible
+            && Button->GetVisibility() == ESlateVisibility::Visible && Button->Action == 100 + Row);
+    }
+    const TCHAR* RemovedText[] = {
+        TEXT("ScreenBrandSubline"), TEXT("ScreenTouchHint"), TEXT("MenuHeading"),
+        TEXT("MenuIndexHint"), TEXT("MenuNote"), TEXT("MenuIndexBadge"), TEXT("MenuDrinkDescription"),
+        TEXT("MenuCupVolume"), TEXT("MenuIceHint"), TEXT("MenuTotalHint"), TEXT("MenuIngredientHeading"),
+        TEXT("MenuIngredientsML"), TEXT("MenuPourMethod"), TEXT("MenuAcceptanceRange"), TEXT("MenuCurrentOrderHint"),
+        TEXT("MenuIngredientNumber0"), TEXT("MenuIngredientNumber1"), TEXT("MenuIngredientNumber2"),
+        TEXT("CustomerId"), TEXT("CustomerNotes"), TEXT("NotesHeading"), TEXT("OrderTolerance")
+    };
+    const auto CheckSlot = [this](UWidget* Control, FVector2D Position, FVector2D Size)
+    {
+        auto* Slot = Cast<UCanvasPanelSlot>(Control->Slot);
+        if (!TestNotNull(Control->GetName() + TEXT("：真实 CanvasSlot"), Slot)) return;
+        TestTrue(Control->GetName() + TEXT("：紧凑位置和尺寸精确"), Slot->GetPosition().Equals(Position)
+            && Slot->GetSize().Equals(Size));
+        TestTrue(Control->GetName() + TEXT("：零锚点零对齐且非自动尺寸"), Slot->GetAnchors().Minimum.Equals(FVector2D::ZeroVector)
+            && Slot->GetAnchors().Maximum.Equals(FVector2D::ZeroVector) && Slot->GetAlignment().Equals(FVector2D::ZeroVector)
+            && !Slot->GetAutoSize());
+    };
+    const TCHAR* CardNames[] = { TEXT("MenuCupCard"), TEXT("MenuIceCard"), TEXT("MenuTotalCard") };
+    const FVector2D CardPositions[] = { FVector2D(30.f, 100.f), FVector2D(354.f, 100.f), FVector2D(648.f, 100.f) };
+    const FVector2D CardSizes[] = { FVector2D(312.f, 151.f), FVector2D(282.f, 151.f), FVector2D(222.f, 151.f) };
+    bool CheckedTwo = false, CheckedThree = false;
+    for (int32 Row = 0; Row < Rows.Num(); ++Row)
+    {
+        const auto& E = S->RecipeMenu->Entries[Rows[Row]];
+        if (!TestNotNull(TEXT("真实权威配方"), E.Recipe.Get())
+            || !TestTrue(TEXT("指定杯中文名非空"), !E.CupName.IsEmpty())
+            || !TestTrue(TEXT("每款使用实际 action Rect 中心手采样"), TutorialMenuTestHelpers::TouchAction(S, 100 + Row))) return false;
+        TestEqual(TEXT("真实选中原始 DataIndex"), S->GetSelectedMenuIndex(), Rows[Row]);
+        TestEqual(TEXT("真实配方页处于显示状态"), Switch->GetActiveWidgetIndex(), 1);
+        const int32 Count = E.Ingredients.Num();
+        if (!TestTrue(TEXT("十款每款完整展示两或三原料，不截断"), Count == 2 || Count == 3)) return false;
+        CheckedTwo |= Count == 2;
+        CheckedThree |= Count == 3;
+        const float Width = Count == 2 ? 414.f : 272.f;
+        const FString Ice = E.Recipe->ExpectedIceCount > 0 ? TEXT("加冰即可") : TEXT("不加冰");
+        const FString Total = FString::Printf(TEXT("%.0f mL"), E.Recipe->TargetVolumeML);
+        TArray<FString> ExpectedLines = { E.DisplayName.ToString(), E.CupName.ToString(), Ice, TEXT("液体总量  ") + Total };
+        const TCHAR* CoreNames[] = { TEXT("MenuDrinkTitle"), TEXT("MenuCupName"), TEXT("MenuIceCount"), TEXT("MenuTargetVolume") };
+        const FString CoreValues[] = { E.DisplayName.ToString(), E.CupName.ToString(), Ice, Total };
+        const TCHAR* CoreParents[] = { TEXT("MenuDetailsColumn"), TEXT("MenuCupCard"), TEXT("MenuIceCard"), TEXT("MenuTotalCard") };
+        for (int32 I = 0; I < 4; ++I)
+        {
+            auto* Text = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(CoreNames[I])));
+            if (!TestNotNull(TEXT("实际核心文字控件"), Text)) return false;
+            TestEqual(Text->GetName() + TEXT("：同源核心内容"), Text->GetText().ToString(), CoreValues[I]);
+            TestTrue(Text->GetName() + TEXT("：核心文字可见"), Text->GetVisibility() == ESlateVisibility::HitTestInvisible);
+            TestTrue(Text->GetName() + TEXT("：核心属于正确详情卡而非旧空余区域"), Text->GetParent()
+                && Text->GetParent()->GetFName() == FName(CoreParents[I]));
+        }
+        for (int32 I = 0; I < 3; ++I)
+        {
+            auto* Card = Cast<UCanvasPanel>(Widget->WidgetTree->FindWidget(FName(CardNames[I])));
+            if (!TestNotNull(TEXT("实际杯冰总量卡片"), Card)) return false;
+            TestTrue(TEXT("杯冰总量卡片仍可见且属于详情列"), Card->GetVisibility() == ESlateVisibility::SelfHitTestInvisible
+                && Card->GetParent() == Details);
+            CheckSlot(Card, CardPositions[I], CardSizes[I]);
+        }
+        auto* CupIcon = Cast<UImage>(Widget->WidgetTree->FindWidget(TEXT("MenuCupIcon")));
+        auto* IceIcon = Cast<UImage>(Widget->WidgetTree->FindWidget(TEXT("MenuIceIcon")));
+        if (!TestNotNull(TEXT("真实杯图"), CupIcon) || !TestNotNull(TEXT("真实冰图"), IceIcon)
+            || !TestNotNull(TEXT("保存杯图资源"), E.CupIcon.Get()) || !TestNotNull(TEXT("保存冰图资源"), S->RecipeMenu->IceIcon.Get())) return false;
+        TestTrue(TEXT("指定杯图真实绑定且可见"), CupIcon->GetBrush().GetResourceObject() == E.CupIcon.Get()
+            && CupIcon->GetVisibility() == ESlateVisibility::HitTestInvisible);
+        TestTrue(TEXT("杯冰图仍位于对应核心卡内"), CupIcon->GetParent() && IceIcon->GetParent()
+            && CupIcon->GetParent()->GetFName() == FName(TEXT("MenuCupCard")) && IceIcon->GetParent()->GetFName() == FName(TEXT("MenuIceCard")));
+        CheckSlot(CupIcon, FVector2D(10.f, 12.f), FVector2D(128.f, 128.f));
+        CheckSlot(IceIcon, FVector2D(8.f, 25.f), FVector2D(94.f, 94.f));
+        TestTrue(TEXT("冰图按需真实绑定或清空隐藏"), IceIcon->GetBrush().GetResourceObject() == (E.Recipe->ExpectedIceCount > 0 ? S->RecipeMenu->IceIcon.Get() : nullptr)
+            && IceIcon->GetVisibility() == (E.Recipe->ExpectedIceCount > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden));
+        for (int32 I = 0; I < 3; ++I)
+        {
+            auto* Card = Cast<UCanvasPanel>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientCard%d"), I))));
+            auto* Background = Cast<UBorder>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientCard%dBackground"), I))));
+            auto* Icon = Cast<UImage>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientIcon%d"), I))));
+            auto* Name = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientName%d"), I))));
+            auto* Volume = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("MenuIngredientVolume%d"), I))));
+            if (!TestNotNull(TEXT("真实原料卡"), Card) || !TestNotNull(TEXT("真实原料背景"), Background)
+                || !TestNotNull(TEXT("真实原料图"), Icon) || !TestNotNull(TEXT("真实原料名"), Name)
+                || !TestNotNull(TEXT("真实原料量"), Volume)) return false;
+            if (I >= Count)
+            {
+                TestTrue(TEXT("两列时第三卡折叠且不残留上一款原料图文"), Card->GetVisibility() == ESlateVisibility::Collapsed
+                    && Icon->GetBrush().GetResourceObject() == nullptr && Icon->GetVisibility() == ESlateVisibility::Hidden
+                    && Name->GetText().IsEmpty() && Volume->GetText().IsEmpty());
+                continue;
+            }
+            const auto& P = E.Ingredients[I];
+            const FString IngredientName = UDrinkMenuData::IngredientDisplayName(P.IngredientId).ToString();
+            const FString ML = FString::Printf(TEXT("%.0f mL"), P.VolumeML);
+            ExpectedLines.Add(IngredientName + TEXT("  ") + ML);
+            TestTrue(TEXT("原料卡与图名量仍真实可见"), Card->GetVisibility() == ESlateVisibility::SelfHitTestInvisible
+                && Icon->GetVisibility() == ESlateVisibility::HitTestInvisible && Name->GetVisibility() == ESlateVisibility::HitTestInvisible
+                && Volume->GetVisibility() == ESlateVisibility::HitTestInvisible);
+            TestTrue(TEXT("原料卡仍属于详情列，图名量属于该卡"), Card->GetParent() == Details
+                && Icon->GetParent() == Card && Name->GetParent() == Card && Volume->GetParent() == Card && Background->GetParent() == Card);
+            if (!TestNotNull(TEXT("保存原料图资源"), P.Icon.Get())) return false;
+            TestTrue(TEXT("原料图绑定正确资源而非文字替代"), Icon->GetBrush().GetResourceObject() == P.Icon.Get());
+            TestEqual(TEXT("原料中文名完整"), Name->GetText().ToString(), IngredientName);
+            TestFalse(TEXT("原料标签不以英文 ID 兜底"), Name->GetText().ToString().Contains(P.IngredientId.ToString()));
+            TestEqual(TEXT("原料精确 mL 完整"), Volume->GetText().ToString(), ML);
+            CheckSlot(Card, FVector2D(30.f + I * (Width + 12.f), 275.f), FVector2D(Width, 214.f));
+            CheckSlot(Background, FVector2D::ZeroVector, FVector2D(Width, 214.f));
+            CheckSlot(Icon, FVector2D((Width - 128.f) * .5f, 8.f), FVector2D(128.f, 128.f));
+            CheckSlot(Name, FVector2D(12.f, 140.f), FVector2D(Width - 24.f, 32.f));
+            CheckSlot(Volume, FVector2D(12.f, 175.f), FVector2D(Width - 24.f, 38.f));
+            TestTrue(TEXT("中文标签与 mL 文字实际居中"), Justification->GetPropertyValue_InContainer(Name) == uint8(ETextJustify::Center)
+                && Justification->GetPropertyValue_InContainer(Volume) == uint8(ETextJustify::Center));
+        }
+        const FString MenuText = Widget->GetMenuText().ToString();
+        TestEqual(TEXT("全文只含中文饮品杯冰总量与无编号原料行"), MenuText, FString::Join(ExpectedLines, TEXT("\n")));
+        for (const TCHAR* Removed : RemovedText)
+        {
+            auto* Text = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(Removed)));
+            if (!TestNotNull(FString(Removed) + TEXT("：旧命名控件保留"), Text)) return false;
+            TestTrue(FString(Removed) + TEXT("：每款更新后仍 empty 且 Collapsed"), Text->GetText().IsEmpty()
+                && Text->GetVisibility() == ESlateVisibility::Collapsed);
+        }
+        auto* Footer = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("MenuFooterDivider")));
+        if (!TestNotNull(TEXT("旧页脚分隔线保留"), Footer)) return false;
+        TestTrue(TEXT("页脚分隔线 Collapsed 且没有内容"), Footer->GetVisibility() == ESlateVisibility::Collapsed && Footer->GetContent() == nullptr);
+        FString VisibleText = MenuText;
+        TArray<UWidget*> Controls;
+        Widget->WidgetTree->GetAllWidgets(Controls);
+        for (UWidget* Control : Controls)
+        {
+            auto* Text = Cast<UTextBlock>(Control);
+            if (!Text || Text->GetText().IsEmpty()) continue;
+            UWidget* Cursor = Text;
+            FVector2D Position = FVector2D::ZeroVector;
+            bool bVisible = true;
+            while (Cursor && Cursor != Details)
+            {
+                if (Cursor->GetVisibility() == ESlateVisibility::Collapsed || Cursor->GetVisibility() == ESlateVisibility::Hidden) bVisible = false;
+                if (auto* Slot = Cast<UCanvasPanelSlot>(Cursor->Slot)) Position += Slot->GetPosition();
+                Cursor = Cursor->GetParent();
+            }
+            if (Cursor != Details || !bVisible) continue;
+            VisibleText += TEXT("\n") + Text->GetText().ToString();
+            auto* Slot = Cast<UCanvasPanelSlot>(Text->Slot);
+            if (!TestNotNull(TEXT("可见详情文字使用实际 CanvasSlot"), Slot)) return false;
+            TestTrue(Text->GetName() + TEXT("：核心不散落旧下半屏"), Position.Y >= 0.f && Position.Y + Slot->GetSize().Y <= 489.f);
+        }
+        const TCHAR* RemovedWords[] = { TEXT("BNT"), TEXT("CAFE"), TEXT("AZ"), TEXT("A-Z"), TEXT("A–Z"), TEXT("Index"),
+            TEXT("先取"), TEXT("顺序倒入"), TEXT("依次倒入"), TEXT("ratio"), TEXT("%"), TEXT("验收"), TEXT("范围"), TEXT("本局最近实际") };
+        for (const TCHAR* Word : RemovedWords) TestFalse(FString(Word) + TEXT("：无缩写或长操作验收文字"), VisibleText.Contains(Word));
+        for (const auto& Entry : S->RecipeMenu->Entries)
+            TestFalse(TEXT("全部 PinyinIndex 只用于数据，不用于显示"), VisibleText.Contains(Entry.PinyinIndex.ToString()));
+        TestNull(TEXT("全十款浏览没有创建真实订单"), S->GetCurrentRecipe());
+        TestNull(TEXT("全十款浏览没有伪造预览"), S->GetPresentedRecipe());
+        TestEqual(TEXT("全十款浏览不推进 serial"), S->GetCurrentOrderSerial(), int64(0));
+        TestEqual(TEXT("全十款浏览不生成历史"), S->GetDeliveryRecords().Num(), 0);
+        TestEqual(TEXT("删除页脚不删除真实历史空态"), Widget->GetHistoryText().ToString(), FString(TEXT("暂无本局交付")));
+    }
+    TestTrue(TEXT("真实检查了动态两列和三列"), CheckedTwo && CheckedThree);
     return true;
 }
 
@@ -449,6 +662,8 @@ bool FMenuPalette::RunTest(const FString&)
         && BodySlot->GetSize().Equals(FVector2D(1200.f, 750.f)));
     TestTrue(TEXT("冰量提示保留原 160x40 尺寸及位置"), HintSlot->GetSize().Equals(FVector2D(160.f, 40.f))
         && HintSlot->GetPosition().Equals(FVector2D(110.f, 101.f)));
+    TestTrue(TEXT("原位置冰量小字真实清空并折叠"), Hint->GetText().IsEmpty()
+        && Hint->GetVisibility() == ESlateVisibility::Collapsed);
 
     const FColor Paper(17, 29, 36), Panel(21, 37, 45), Card(32, 52, 61), Ink(227, 237, 234);
     const FColor Muted(183, 201, 201), Line(66, 90, 100), Teal(128, 213, 197), Accent(42, 75, 80);
@@ -695,6 +910,10 @@ bool FMenuAcceptedOrder::RunTest(const FString&)
     TestTrue(TEXT("浏览没有换掉拿铁订单"), F.Screen->GetCurrentRecipe() == Recipe && Spot->ActiveRecipe == Recipe);
     TestEqual(TEXT("浏览没有换订单序号"), Spot->GetOrderSerial(), Serial);
     TestEqual(TEXT("提交前没有虚构历史"), F.Screen->GetDeliveryRecords().Num(), 0);
+    auto* Widget = F.Screen->GetDisplayWidget();
+    if (!TestNotNull(TEXT("真实历史 UMG 控件"), Widget) || !TestNotNull(TEXT("真实历史控件树"), Widget->WidgetTree.Get())) return false;
+    TestEqual(TEXT("浏览菜单不伪造本局历史 UI"), Widget->GetHistoryText().ToString(), FString(TEXT("暂无本局交付")));
+    TestFalse(TEXT("精简配方全文没有历史页脚"), Widget->GetMenuText().ToString().Contains(TEXT("本局最近实际")));
     TestTrue(TEXT("原冰拿铁真实杯提交"), Spot->TrySubmitCup(Cup));
     TestTrue(TEXT("真实交付事件到达屏幕"), F.Screen->IsDelivered());
     TestEqual(TEXT("恰好一条真实交付记录"), F.Screen->GetDeliveryRecords().Num(), 1);
@@ -713,10 +932,23 @@ bool FMenuAcceptedOrder::RunTest(const FString&)
     TestTrue(TEXT("屏内按钮返回已交付原订单"), TutorialMenuTestHelpers::TouchAction(F.Screen, 0));
     TestFalse(TEXT("显示已交付订单页"), F.Screen->IsRecipeMenuMode());
     TestTrue(TEXT("同一原杯保持冻结"), Cup->IsLiquidFrozen());
-    auto* Widget = F.Screen->GetDisplayWidget();
-    if (!TestNotNull(TEXT("真实历史 UMG 控件"), Widget)) return false;
-    TestTrue(TEXT("真实历史 UMG 显示冰拿铁及实际量"), Widget->GetHistoryText().ToString().Contains(TEXT("冰拿铁"))
-        && Widget->GetHistoryText().ToString().Contains(TEXT("200 mL")));
+    const FString HistoryText = Widget->GetHistoryText().ToString();
+    TestEqual(TEXT("真实历史全文只记录实际交付冰拿铁和实际 200 mL"), HistoryText,
+        FString(TEXT("冰拿铁 · 已交付\n实际 200 mL")));
+    TestFalse(TEXT("真实交付后历史不是空态或伪造评价"), HistoryText.Contains(TEXT("暂无本局交付"))
+        || HistoryText.Contains(TEXT("刚刚好")) || HistoryText.Contains(TEXT("喜欢")));
+    for (int32 I = 0; I < 3; ++I)
+    {
+        auto* Name = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryName%d"), I))));
+        auto* Volume = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryVolume%d"), I))));
+        auto* Row = Cast<UCanvasPanel>(Widget->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("HistoryRecord%d"), I))));
+        if (!TestNotNull(TEXT("真实历史名"), Name) || !TestNotNull(TEXT("真实历史量"), Volume)
+            || !TestNotNull(TEXT("真实历史画布"), Row) || !TestNotNull(TEXT("真实历史行容器"), Row->GetParent())) return false;
+        TestTrue(TEXT("三行历史按真实记录显示或折叠"), Row->GetParent()->GetVisibility()
+            == (I == 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed));
+        TestEqual(TEXT("真实历史名无浏览饮品残留"), Name->GetText().ToString(), I == 0 ? FString(TEXT("冰拿铁 · 已交付")) : FString());
+        TestEqual(TEXT("真实历史量无虚构额外记录"), Volume->GetText().ToString(), I == 0 ? FString(TEXT("实际 200 mL")) : FString());
+    }
     TestFalse(TEXT("同杯再次提交不能复制历史"), Spot->TrySubmitCup(Cup));
     TestEqual(TEXT("浏览和重复提交不复制历史"), F.Screen->GetDeliveryRecords().Num(), 1);
     return true;
