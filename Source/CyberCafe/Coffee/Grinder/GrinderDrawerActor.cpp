@@ -156,6 +156,40 @@ void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneCo
     OnGrinderGrindProgress(OwnerGrinder->GetCurrentBeanGrams(), OwnerGrinder->GetCurrentGroundGrams());
 }
 
+bool AGrinderDrawerActor::ResetForWorkbench(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp)
+{
+    if (!IsValid(this) || !IsValid(InOwner) || !IsValid(MountComp)
+        || GetWorld() != InOwner->GetWorld() || MountComp->GetOwner() != InOwner
+        || MountComp != InOwner->DrawerMountPoint || OwnerGrinder != InOwner
+        || !IsValid(DrawerMesh) || DrawerMesh->GetOwner() != this || GetRootComponent() != DrawerMesh
+        || !IsValid(GrabComp) || GrabComp->GetOwner() != this
+        || GrabComp->IsHeld() || GrabComp->IsPulled()
+        || !InOwner->CanResetForWorkbench() || InOwner->GetCurrentGroundGrams() != 0.f)
+    {
+        return false;
+    }
+
+    DiscardedGroundGrams += CurrentGroundGrams;
+    CurrentGroundGrams = 0.f;
+    LastPouredGroundGrams = 0.f;
+    LastAcceptedGroundGrams = 0.f;
+    LastGroundPourOrigin = FVector::ZeroVector;
+    LastGroundPourEnd = FVector::ZeroVector;
+    if (IsValid(PowderStream)) { PowderStream->ClearInstances(); }
+    PowderVisualAge = 0.f;
+    PourSoundCooldown = 0.f;
+    GrabHandOffsetLocal = FVector::ZeroVector;
+    if (DrawerMesh->IsSimulatingPhysics())
+    {
+        DrawerMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+        DrawerMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+    }
+    // 主体留存已是零，原挂接回调不会把待丢弃的粉搬回空抽屉。
+    AttachToGrinder(InOwner, MountComp);
+    UpdateGroundPileVisual();
+    return true;
+}
+
 void AGrinderDrawerActor::ReattachToGrinder()
 {
     if (!OwnerGrinder || !MountRef)

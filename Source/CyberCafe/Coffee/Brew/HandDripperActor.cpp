@@ -132,6 +132,38 @@ bool AHandDripperActor::ReplacePaper()
     DiscardedGroundsGrams+=GroundsGrams;GroundsGrams=0;RemainingCoffeeML=0;CoffeeProducedML=0;DrippedML=0;Wetness=0;BloomElapsed=0;bWaterStarted=false;BrewState=ECoffeeBrewState::Empty;++BrewGeneration;UpdateBrewVisuals();return true;
 }
 
+bool AHandDripperActor::ResetBrewForWorkbench()
+{
+    const double VolumeML = GetPreciseVolumeML();
+    if (!IsValid(this) || IsBroken() || IsLiquidFrozen()
+        || !IsValid(GrabComp) || GrabComp->GetOwner() != this
+        || GrabComp->IsHeld() || GrabComp->IsPulled()
+        || !FMath::IsFinite(VolumeML) || VolumeML < 0.0 || VolumeML > EmptyToleranceML)
+    {
+        return false;
+    }
+
+    // 排液及源在途包由管理器结算；其他器具的在途包不阻塞此恢复。
+    DiscardedGroundsGrams += GroundsGrams;
+    GroundsGrams = 0.f;
+    RemainingCoffeeML = 0.f;
+    BloomElapsed = 0.f;
+    Wetness = 0.f;
+    BrewState = ECoffeeBrewState::Empty;
+    bWaterStarted = false;
+    ++BrewGeneration;
+    CoffeeProducedAtBatchStartML = CoffeeProducedML;
+    StopPouring();
+    if (IsValid(DropVisual)) { DropVisual->ClearInstances(); }
+    DropAge = 0.f;
+    PaperHold = 0.f;
+    bPaperTouchLatched = false;
+    SoundCooldown = 0.f;
+    if (IsValid(WaterSurface)) { WaterSurface->SetVisibility(false); }
+    UpdateBrewVisuals();
+    return true;
+}
+
 bool AHandDripperActor::CanReceiveGrounds() const
 {
     const float Capacity = FMath::IsFinite(MaxGroundsGrams)
@@ -160,7 +192,11 @@ float AHandDripperActor::AddGrounds(float Grams, const FVector& WorldPoint)
     if (Accepted <= 0.f) return 0.f;
     const float Yield = FMath::IsFinite(CoffeeYieldMLPerGram)
         ? FMath::Clamp(CoffeeYieldMLPerGram, 0.f, MaximumYieldMLPerGram) : 0.f;
-    if (GroundsGrams == 0.f) ++BrewGeneration;
+    if (GroundsGrams == 0.f)
+    {
+        ++BrewGeneration;
+        CoffeeProducedAtBatchStartML = CoffeeProducedML;
+    }
     GroundsGrams = NewGrounds;
     RemainingCoffeeML = FMath::Min(GroundsGrams * MaximumYieldMLPerGram,
         RemainingCoffeeML + Accepted * Yield);
@@ -206,7 +242,8 @@ void AHandDripperActor::PrepareTransferredLiquid(FLiquidComposition& Portion, FL
     const double Budget = FMath::IsFinite(RemainingCoffeeML) ? FMath::Max(0.f, RemainingCoffeeML) : 0.0;
     // 双精度累计值另行约束整批上限，避免 float 余额舍入产生无限尾量。
     const double BatchRemaining = FMath::Max(0.0,
-        static_cast<double>(GroundsGrams) * MaximumYieldMLPerGram - CoffeeProducedML);
+        static_cast<double>(GroundsGrams) * MaximumYieldMLPerGram
+            - FMath::Max(0.0, CoffeeProducedML - CoffeeProducedAtBatchStartML));
     const double Converted = FMath::IsFinite(Water)
         ? FMath::Min(FMath::Max(0.0, Water), FMath::Min(Budget, BatchRemaining)) : 0.0;
     if (Converted > 0.0)

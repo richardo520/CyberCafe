@@ -120,6 +120,11 @@ public:
     double TotalBeanConsumedGrams = 0.0;
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
     double TotalGroundOutputGrams = 0.0;
+    /** 工作台清理的豆粉独立记账，不改写研磨产出、消耗或损耗。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    double DiscardedBeanGrams = 0.0;
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Grinder|Runtime")
+    double DiscardedGroundGrams = 0.0;
     UPROPERTY(Transient)
     FVector BeanPileInitialScale;
     UPROPERTY(Transient)
@@ -156,6 +161,11 @@ public:
     FTransform GetDrawerMountWorldTransform() const;
     UFUNCTION(BlueprintPure, Category = "Grinder")
     bool IsHeld() const;
+    /** 无副作用预检；缺失子件仅在配置可生成时允许恢复。 */
+    UFUNCTION(BlueprintPure, Category = "Grinder|Workbench")
+    bool CanResetForWorkbench() const;
+    UFUNCTION(BlueprintCallable, Category = "Grinder|Workbench")
+    bool ResetForWorkbench(const FTransform& WorldTransform);
     UFUNCTION(BlueprintCallable, Category = "Grinder|Grind")
     float TryAddBeans(float Grams);
     UFUNCTION(BlueprintCallable, Category = "Grinder|Grind")

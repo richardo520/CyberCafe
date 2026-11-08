@@ -23,6 +23,8 @@ public:
  UFUNCTION(BlueprintPure) float GetCoffeeBudgetML() const{return RemainingCoffeeML;}
  UFUNCTION(BlueprintCallable) void AdvanceBrew(float Dt);
  UFUNCTION(BlueprintCallable) bool ReplacePaper();
+ /** 管理器排空液体后恢复冲煮状态；忙碌时无副作用，保留生产累计。 */
+ UFUNCTION(BlueprintCallable,Category="Coffee|Workbench") bool ResetBrewForWorkbench();
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UInstancedStaticMeshComponent> DropVisual;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UStaticMeshComponent> WaterSurface;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UBoxComponent> PaperButton;
@@ -47,6 +49,8 @@ protected:
 private:
  float GroundsGrams=0,RemainingCoffeeML=0,BloomElapsed=0,SoundCooldown=0;
  bool bWaterStarted=false;
+ // 累计产量保留历史，批次上限只扣当前批新增产量。
+ double CoffeeProducedAtBatchStartML=0;
  FVector InitialGroundLocation=FVector::ZeroVector,InitialGroundScale=FVector::OneVector;
  void UpdateBrewVisuals();
 };

@@ -98,7 +98,7 @@ void ACoffeeGrinderActor::SpawnChildParts()
     FActorSpawnParameters SpawnParams;
     SpawnParams.Owner = this;
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    if (HandleClass && HandleMountPoint)
+    if (!IsValid(HandleRef) && HandleClass && HandleMountPoint)
     {
         AGrinderHandleActor* Handle = World->SpawnActor<AGrinderHandleActor>(HandleClass, HandleMountPoint->GetComponentTransform(), SpawnParams);
         if (Handle)
@@ -107,7 +107,7 @@ void ACoffeeGrinderActor::SpawnChildParts()
             HandleRef = Handle;
         }
     }
-    if (DrawerClass && DrawerMountPoint)
+    if (!IsValid(DrawerRef) && DrawerClass && DrawerMountPoint)
     {
         AGrinderDrawerActor* Drawer = World->SpawnActor<AGrinderDrawerActor>(DrawerClass, DrawerMountPoint->GetComponentTransform(), SpawnParams);
         if (Drawer)
@@ -289,6 +289,106 @@ FTransform ACoffeeGrinderActor::GetDrawerMountWorldTransform() const
 bool ACoffeeGrinderActor::IsHeld() const
 {
     return GrabComp ? GrabComp->IsHeld() : false;
+}
+
+bool ACoffeeGrinderActor::CanResetForWorkbench() const
+{
+    if (!IsValid(this) || !IsValid(GetWorld())
+        || !IsValid(BodyMesh) || BodyMesh->GetOwner() != this || GetRootComponent() != BodyMesh
+        || !IsValid(GrabComp) || GrabComp->GetOwner() != this
+        || GrabComp->IsHeld() || GrabComp->IsPulled()
+        || !IsValid(HandleMountPoint) || HandleMountPoint->GetOwner() != this
+        || !IsValid(DrawerMountPoint) || DrawerMountPoint->GetOwner() != this)
+    {
+        return false;
+    }
+
+    if (IsValid(HandleRef))
+    {
+        if (HandleRef->GetWorld() != GetWorld() || HandleRef->OwnerGrinder != this
+            || !IsValid(HandleRef->HandleMesh) || HandleRef->HandleMesh->GetOwner() != HandleRef
+            || HandleRef->GetRootComponent() != HandleRef->HandleMesh
+            || !IsValid(HandleRef->GrabComp) || HandleRef->GrabComp->GetOwner() != HandleRef
+            || HandleRef->GrabComp->IsHeld() || HandleRef->GrabComp->IsPulled())
+        {
+            return false;
+        }
+    }
+    else if (!IsValid(HandleClass.Get()) || HandleClass->HasAnyClassFlags(CLASS_Abstract))
+    {
+        return false;
+    }
+
+    if (IsValid(DrawerRef))
+    {
+        if (DrawerRef->GetWorld() != GetWorld() || DrawerRef->OwnerGrinder != this
+            || !IsValid(DrawerRef->DrawerMesh) || DrawerRef->DrawerMesh->GetOwner() != DrawerRef
+            || DrawerRef->GetRootComponent() != DrawerRef->DrawerMesh
+            || !IsValid(DrawerRef->GrabComp) || DrawerRef->GrabComp->GetOwner() != DrawerRef
+            || DrawerRef->GrabComp->IsHeld() || DrawerRef->GrabComp->IsPulled())
+        {
+            return false;
+        }
+    }
+    else if (!IsValid(DrawerClass.Get()) || DrawerClass->HasAnyClassFlags(CLASS_Abstract))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool ACoffeeGrinderActor::ResetForWorkbench(const FTransform& WorldTransform)
+{
+    // 所有忙碌及目标校验均先完成，不停声、不搬动、不改库存或生成子件。
+    if (!CanResetForWorkbench() || WorldTransform.ContainsNaN()
+        || !WorldTransform.GetRotation().IsNormalized() || WorldTransform.GetScale3D().GetMin() <= 0.0)
+    {
+        return false;
+    }
+    const bool bHadHandle = IsValid(HandleRef);
+    const bool bHadDrawer = IsValid(DrawerRef);
+    const FVector HandleWorldScale = bHadHandle ? HandleRef->GetActorScale3D() : WorldTransform.GetScale3D();
+    const FVector DrawerWorldScale = bHadDrawer ? DrawerRef->GetActorScale3D() : WorldTransform.GetScale3D();
+    const bool bWasSimulatingPhysics = BodyMesh->IsSimulatingPhysics();
+    BodyMesh->SetWorldTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+    if (bWasSimulatingPhysics)
+    {
+        BodyMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+        BodyMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+    }
+    checkSlow(BodyMesh->IsSimulatingPhysics() == bWasSimulatingPhysics);
+
+    AdvanceGrinding(0.f, 0.f);
+    if (IsValid(GrindSFX)) { GrindSFX->Stop(); }
+    if (IsValid(GrindFX)) { GrindFX->Deactivate(); }
+    DiscardedBeanGrams += CurrentBeanGrams;
+    DiscardedGroundGrams += CurrentGroundGrams;
+    CurrentBeanGrams = 0.f;
+    CurrentGroundGrams = 0.f;
+    AccumulatedHandleAngleDeg = 0.f;
+    TargetAngularSpeedDeg = 0.f;
+    SmoothedAngularSpeedDeg = 0.f;
+    LastTurnGameTime = -1000.f;
+    GrindSFXStartTime = -1000.f;
+    ActualTickDt = 1.f / 90.f;
+    bGrindSFXActive = false;
+    bPlayingEmptySound = false;
+    UpdateBeanPileVisual();
+
+    // 留存粉先归零，生成/挂接抽屉的旧回调不再产生假搬粉。
+    if (!bHadHandle || !bHadDrawer) { SpawnChildParts(); }
+    if (!ensureMsgf(IsValid(HandleRef) && IsValid(DrawerRef) && CanResetForWorkbench(),
+        TEXT("研磨器工作台恢复未能补齐有效把手和抽屉")))
+    {
+        return false;
+    }
+    HandleRef->AttachToGrinder(this, HandleMountPoint);
+    HandleRef->LastHandAngleDeg = 0.f;
+    HandleRef->LastHapticAngleDeg = 0.f;
+    if (bHadHandle) { HandleRef->SetActorScale3D(HandleWorldScale); }
+    if (!DrawerRef->ResetForWorkbench(this, DrawerMountPoint)) { return false; }
+    if (bHadDrawer) { DrawerRef->SetActorScale3D(DrawerWorldScale); }
+    return true;
 }
 
 float ACoffeeGrinderActor::TryAddBeans(float Grams)

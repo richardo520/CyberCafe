@@ -99,6 +99,10 @@ public:
     UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category="Glass Breakage") TObjectPtr<UGlassBreakProfile> GlassBreakProfile;
     // @trace RS-03. Replacements reject pre-restore unrelated in-flight packages briefly.
     UPROPERTY(Transient) float RestoreReceiveCooldown=0.f;
+    // 仅由工作台恢复调用期护栏管理，不向蓝图暴露写入口。
+    bool bWorkbenchRestoreEmissionBlocked=false;
+    // Preserve pouring permissions while clearing flow and audio during a supply reset.
+    void StopFlowForWorkbenchRestore() { StopPouring(); StopPourAudio(true); }
 
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

@@ -330,7 +330,9 @@ struct FRun
         if (!Cup) Cup = PrototypeCup;
         if (!Need(Wait && Consume && IsValid(Cup) && Cup == PrototypeCup && IsValid(Wait->RequiredSpot) && IsValid(Wait->RequiredRecipe),
             TEXT("保存步骤/原恢复经理唯一教学杯/Spot/配方引用缺失或不一致"))) return false;
-        if (!Need(Recovery->RestoreTargets.Num() == 6, TEXT("保存 RestoreTargets 不再是六个目标"))) return false;
+        if (!Need(Recovery->bRestoreAllSupplies && Recovery->RestoreTargets.Num() == 15 && Recovery->RestoreToolTargets.Num() == 3 && IsValid(Recovery->RestoreScoop.Get()), TEXT("新版统一恢复必须覆盖15瓶杯、3工具与冰铲"))) return false;
+        for (const auto& Tool : Recovery->RestoreToolTargets)
+            if (!Need(IsValid(Tool.Get()) && Tool->GetWorld() == World, TEXT("新版工具引用必须重映射到真实完整地图副本"))) return false;
         int32 CupTargetCount = 0;
         for (const auto& Target : Recovery->RestoreTargets)
         {

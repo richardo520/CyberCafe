@@ -179,6 +179,10 @@ public:
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     double SpilledGroundGrams = 0.0;
 
+    /** 工作台清理的留存粉，不计入倾倒洒粉。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    double DiscardedGroundGrams = 0.0;
+
     /** 本次实际出粉/接纳量与路径；表现端只能读取，不参与重量结算。 */
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     float LastPouredGroundGrams = 0.f;
@@ -207,6 +211,10 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Drawer")
     void AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp);
+
+    /** 主体已清空留存粉后清理并挂回；持有或拉拽时无副作用。 */
+    UFUNCTION(BlueprintCallable, Category = "Drawer|Workbench")
+    bool ResetForWorkbench(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp);
 
     /** 强制吸回挂点（内部松手回调或蓝图脚本调用） */
     UFUNCTION(BlueprintCallable, Category = "Drawer")

@@ -115,7 +115,7 @@ double ULiquidTransferSubsystem::GetUnsettledFlightHorizon() const
 }
 double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double ML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay,const FTransform* RibbonTransform)
 {
-    if(!IsValid(Source)||!FMath::IsFinite(ML)||ML<=0||Position.ContainsNaN()||Velocity.ContainsNaN()||Gravity.ContainsNaN())return 0;
+    if(!IsValid(Source)||Source->bWorkbenchRestoreEmissionBlocked||!FMath::IsFinite(ML)||ML<=0||Position.ContainsNaN()||Velocity.ContainsNaN()||Gravity.ContainsNaN())return 0;
     Source->InitializeLiquidState();
     FLinearColor Color=Source->LiquidColor;
     UMaterialInterface* Material=Source->LiquidMaterialAsset;

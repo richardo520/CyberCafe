@@ -16,6 +16,8 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MotionControllerComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Math/RotationMatrix.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "UObject/ConstructorHelpers.h"
@@ -86,7 +88,7 @@ void AOrderHologramActor::BeginPlay()
     Panel->InitWidget();
     if(SignalMaterial){LampMID=StatusLamp->CreateDynamicMaterialInstance(0,SignalMaterial);EmitterMID=EmitterMesh->CreateDynamicMaterialInstance(0,SignalMaterial);}
     if(auto* Events=UCyberCafeEventSubsystem::Get(this))Events->OnDrinkServed.AddUniqueDynamic(this,&AOrderHologramActor::HandleServed);
-    RefreshDisplay();UpdateVisual(0);
+    RefreshDisplay();UpdateFacingFromPlayer(0);UpdateVisual(0);
 }
 void AOrderHologramActor::EndPlay(const EEndPlayReason::Type Reason)
 {
@@ -162,6 +164,7 @@ void AOrderHologramActor::PressButton()
 }
 void AOrderHologramActor::SetOpen(bool Value,bool ByPlayer)
 {
+    if(Value)UpdateFacingFromPlayer(0);
     if(ByPlayer&&!Value&&bFirstOrderRecipeRevealed)bFirstOrderPreviewDismissed=true;
     bOpen=Value;bPlayerOpened=Value&&ByPlayer;if(ByPlayer||!Value)CloseRemaining=-1;
     if(Value){Panel->SetVisibility(true);Panel->RequestRedraw();}RefreshDisplay();
@@ -185,6 +188,42 @@ void AOrderHologramActor::RefreshDisplay()
     if(LampMID)LampMID->SetVectorParameterValue(TEXT("SignalColor"),IsAmberLit()?FLinearColor(1,.38,.05):FLinearColor(.012,.008,.003));
     if(EmitterMID)EmitterMID->SetVectorParameterValue(TEXT("SignalColor"),bOpen?FLinearColor(.05,.65,.52):FLinearColor(.003,.009,.008));
 }
+bool AOrderHologramActor::UpdatePanelFacing(const FVector& CameraWorld,float Dt)
+{
+    if(!bFaceHeadset||!Panel||!FMath::IsFinite(CameraWorld.X)||!FMath::IsFinite(CameraWorld.Y)||!FMath::IsFinite(CameraWorld.Z)||!FMath::IsFinite(Dt)||Dt<0)return false;
+    // 始终从父变换下完全展开的固定中心取方向，不依赖动画中的面板位置。
+    const USceneComponent* Parent=Panel->GetAttachParent();
+    const FVector CenterWorld=Parent?Parent->GetComponentTransform().TransformPosition(PanelCenter):PanelCenter;
+    const FVector ToCamera=CameraWorld-CenterWorld;
+    const double DistanceSquared=ToCamera.SizeSquared();
+    if(ToCamera.ContainsNaN()||!FMath::IsFinite(DistanceSquared)||DistanceSquared<1.)return false;
+    const FVector Direction=ToCamera/FMath::Sqrt(DistanceSquared);
+    // 正上方或正下方无法用世界上方向确定无滚转坐标系，保留最后有效朝向。
+    if(FVector::CrossProduct(Direction,FVector::UpVector).IsNearlyZero())return false;
+    const FQuat Target=FRotationMatrix::MakeFromXZ(Direction,FVector::UpVector).ToQuat();
+    FQuat Facing=Target;
+    if(Dt>0)
+    {
+        if(!FMath::IsFinite(FacingInterpSpeed))return false;
+        FRotator Current=Panel->GetComponentQuat().Rotator();
+        if(Current.ContainsNaN())return false;
+        Current.Roll=0;
+        FRotator Interpolated=FMath::RInterpTo(Current,Target.Rotator(),Dt,FMath::Max(0.f,FacingInterpSpeed));
+        Interpolated.Roll=0;
+        Facing=Interpolated.Quaternion();
+    }
+    Panel->SetWorldRotation(Facing);
+    return true;
+}
+void AOrderHologramActor::UpdateFacingFromPlayer(float Dt)
+{
+    UWorld* World=GetWorld();
+    if(!bFaceHeadset||!World)return;
+    APlayerController* PC=World->GetFirstPlayerController();
+    if(!IsValid(PC)||!PC->IsLocalController())return;
+    APlayerCameraManager* Camera=PC->PlayerCameraManager;
+    if(IsValid(Camera))UpdatePanelFacing(Camera->GetCameraLocation(),Dt);
+}
 void AOrderHologramActor::UpdateVisual(float Dt)
 {
     const float Target=bOpen?1.f:0.f;const float Previous=AnimationValue;
@@ -192,7 +231,7 @@ void AOrderHologramActor::UpdateVisual(float Dt)
     const float Scale=FMath::Clamp(PanelWidthCM,20.f,100.f)/1200.f;
     Panel->SetRelativeScale3D(FVector(Scale,Scale,Scale*FMath::Max(.001f,AnimationValue)));
     // Keep the lower edge stationary during projection unfolding (panel up is local Z).
-    const FVector Up=PanelRotation.RotateVector(FVector::UpVector);
+    const FVector Up=Panel->GetRelativeRotation().RotateVector(FVector::UpVector);
     Panel->SetRelativeLocation(PanelCenter-Up*((1-AnimationValue)*750.f*Scale*.5f));
     BeamMesh->SetVisibility(AnimationValue>.001f);
     if(AnimationValue==0&&!bOpen)Panel->SetVisibility(false);
@@ -204,7 +243,7 @@ void AOrderHologramActor::Tick(float Dt)
     ButtonPressRemaining=FMath::Max(0.f,ButtonPressRemaining-Dt);
     ButtonMesh->SetRelativeLocation(FVector(7,0,ButtonPressRemaining>0?4.0:4.15));
     if(CloseRemaining>=0){CloseRemaining-=FMath::Max(0.f,Dt);if(CloseRemaining<=0){CloseRemaining=-1;if(bDelivered&&bOpen&&!bPlayerOpened)SetOpen(false,false);}}
-    UpdateVisual(Dt);PollHands();
+    UpdateFacingFromPlayer(Dt);UpdateVisual(Dt);PollHands();
 }
 bool AOrderHologramActor::ProcessTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked,bool Holding)
 {

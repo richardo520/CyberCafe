@@ -306,7 +306,7 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
         Before.Add({Actor, Actor->GetActorTransform(), Liquid ? Liquid->FillAmount : 0.f,
             Liquid ? Liquid->MaxVolumeML : 0.f, Liquid ? Liquid->GetPreciseVolumeML() : 0.0});
     }
-    TestEqual(TEXT("与Editor枚举同源的保存场景仍有335个Actor"), ActorCount, 335);
+    TestEqual(TEXT("用户新版布局与Editor枚举同源的312个Actor"), ActorCount, 312);
     const bool bMapDirty = Map->GetOutermost()->IsDirty();
     auto* Sound = LoadSoundWave(*this);
     if (!Sound) return false;
@@ -334,6 +334,7 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
         Near(*this, TEXT("保存权威 mL 不改变"), A->GetPreciseVolumeML(), Snapshot.ML);
     }
     TestTrue(TEXT("遍历到壶、瓶、杯，未只检查一个基类"), Kettles > 0 && Bottles > 0 && Cups > 0 && Liquids > 3);
+    TestEqual(TEXT("新版布局17个实际液体容器全部保留出流水声"), Liquids, 17);
     for (const auto& Snapshot : Before)
         TestTrue(TEXT("全部已保存 Actor 布局和缩放均不改变"), Snapshot.Actor->GetActorTransform().Equals(Snapshot.Pose, Tolerance));
     TestEqual(TEXT("只读断言不使地图变脏"), Map->GetOutermost()->IsDirty(), bMapDirty);

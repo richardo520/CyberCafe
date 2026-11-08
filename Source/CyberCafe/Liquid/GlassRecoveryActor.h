@@ -30,12 +30,22 @@ struct FGlassRecoverySlot
  bool bEntryAbsoluteLocation=false,bEntryAbsoluteRotation=false,bEntryAbsoluteScale=false;
  bool bLatched=false;
 };
+USTRUCT()
+struct FWorkbenchToolSlot
+{
+ GENERATED_BODY()
+ UPROPERTY() TObjectPtr<AActor> Current;
+ FTransform InitialTransform;
+ float InitialVolumeML=0;
+ FName Ingredient;
+};
 UCLASS()
 class CYBERCAFE_API AGlassRecoveryActor:public AActor
 {
  GENERATED_BODY()
 public:
  AGlassRecoveryActor();
+ virtual void OnConstruction(const FTransform& Transform) override;
  virtual void BeginPlay() override;
  virtual void Tick(float Dt) override;
  UPROPERTY(EditAnywhere,Category="Glass Prototype") TObjectPtr<ALiquidContainerActor> PrototypeCup;
@@ -44,6 +54,9 @@ public:
  UPROPERTY(EditAnywhere,Category="Glass Prototype") TObjectPtr<UGlassBreakProfile> BottleProfile;
  // @trace RS-01 RS-02 RS-04 默认关闭以保留旧双键契约。
  UPROPERTY(EditAnywhere,Category="Workbench Restore") bool bUnifiedRestore=false;
+ // 显式选择全物资模式；工具只原地恢复，不替换身份。
+ UPROPERTY(EditAnywhere,Category="Workbench Restore") bool bRestoreAllSupplies=false;
+ UPROPERTY(EditAnywhere,Category="Workbench Restore") TArray<TObjectPtr<AActor>> RestoreToolTargets;
  UPROPERTY(EditAnywhere,Category="Workbench Restore") TArray<TObjectPtr<ALiquidContainerActor>> RestoreTargets;
  UPROPERTY(EditAnywhere,Category="Workbench Restore") TObjectPtr<AIceScoopActor> RestoreScoop;
  UPROPERTY(EditAnywhere,Category="Workbench Restore",meta=(ClampMin="0.01")) float HoldSeconds=1.0f;
@@ -53,6 +66,9 @@ public:
  UFUNCTION(BlueprintPure,Category="Workbench Restore") float GetRestoreProgress() const;
  UFUNCTION(BlueprintPure,Category="Workbench Restore") int32 GetRestoreGeneration() const { return RestoreGeneration; }
  UFUNCTION(BlueprintPure,Category="Workbench Restore") int32 GetRestoreSlotCount() const;
+ UFUNCTION(BlueprintPure,Category="Workbench Restore") int32 GetRestoreToolCount() const;
+ UFUNCTION(BlueprintPure,Category="Workbench Restore") AActor* GetCapturedTool(int32 Index) const;
+ UFUNCTION(BlueprintPure,Category="Workbench Restore") FTransform GetToolInitialTransform(int32 Index) const;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Base;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> CupButton;
  UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> BottleButton;
@@ -62,6 +78,8 @@ public:
  void BindPrototype(ALiquidContainerActor* Cup,ALiquidContainerActor* Bottle,UGlassBreakProfile* CupData,UGlassBreakProfile* BottleData);
 private:
  UPROPERTY() TArray<FGlassRecoverySlot> Slots;
+ UPROPERTY() TArray<FWorkbenchToolSlot> ToolSlots;
+ bool bToolCaptureComplete=false,bToolCaptureValid=true;
  UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Keys;
  UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> Labels;
  UPROPERTY() TObjectPtr<UTextRenderComponent> StatusLabel;
@@ -72,6 +90,12 @@ private:
  bool bRestoreInProgress=false,bRestoreHoldLatched=false;
  FVector PreviousTouch[2]={FVector::ZeroVector,FVector::ZeroVector};
  bool bTouchSampleReady[2]={false,false};
+ void ApplyButtonMode();
+ bool IsUnifiedRestoreMode() const { return bUnifiedRestore||bRestoreAllSupplies; }
+ bool IsToolLiquid(const ALiquidContainerActor* Container) const;
+ bool IsRestoredTool(const AActor* Actor) const;
+ bool IsOwnedToolChild(const AActor* Actor) const;
+ void StopToolPourAudio(ALiquidContainerActor* Container);
  void CaptureSlot(int32 Index,ALiquidContainerActor* Container,UGlassBreakProfile* Profile);
  bool PreflightRestore(TArray<ALiquidContainerActor*>& OldToRestore,TArray<ABottleCapActor*>& CapsToRestore);
  void Install(ALiquidContainerActor* Container,UGlassBreakProfile* Profile);

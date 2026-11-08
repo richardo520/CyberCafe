@@ -55,6 +55,8 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual",meta=(ClampMin="20",ClampMax="100")) float PanelWidthCM=60.f;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual") FVector PanelCenter=FVector(0,0,47);
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual") FRotator PanelRotation=FRotator(12,0,0);
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual") bool bFaceHeadset=false;
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual",meta=(ClampMin="0")) float FacingInterpSpeed=4.f;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Visual",meta=(ClampMin="0")) float AnimationSeconds=.3f;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Order",meta=(ClampMin="0")) float AutoCloseSeconds=2.f;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Hologram|Customer") FName CustomerId=TEXT("TutorialGuide");
@@ -105,10 +107,13 @@ public:
     // Uses the same geometric/debounce path as a tracked hand. Tests supply measured samples.
     bool ProcessTouchSample(EControllerHand Hand,const FVector& WorldPoint,bool bTracked=true,bool bHolding=false);
     UOrderHologramWidget* GetDisplayWidget() const;
+    // 仅在启用朝向时更新；Dt 为零立即对准，拒绝输入时保留当前朝向。
+    bool UpdatePanelFacing(const FVector& CameraWorld,float Dt);
 private:
     UFUNCTION() void HandleServed(AServingSpotActor* Spot,ALiquidContainerActor* Cup);
     void SetOpen(bool bValue,bool bByPlayer);
     void RefreshDisplay();
+    void UpdateFacingFromPlayer(float Dt);
     void UpdateVisual(float DeltaSeconds);
     void PollHands();
     UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> MenuKeys;
