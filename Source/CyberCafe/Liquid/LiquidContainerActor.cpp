@@ -6,6 +6,10 @@
 #include "Liquid/GlassBreakableComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/AudioComponent.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
@@ -119,6 +123,10 @@ ALiquidContainerActor::ALiquidContainerActor()
     bNoList                 = true;
 
     bIsPouring              = false;
+
+    static ConstructorHelpers::FObjectFinder<USoundBase> DefaultPourSound(
+        TEXT("/Game/VRTemplate/Audio/Pouring/S_PourWaterLoop.S_PourWaterLoop"));
+    PourLoopSound = DefaultPourSound.Object;
 }
 
 void ALiquidContainerActor::BeginPlay()
@@ -160,6 +168,7 @@ void ALiquidContainerActor::BeginPlay()
 void ALiquidContainerActor::EndPlay(const EEndPlayReason::Type Reason)
 {
     StopPouring();
+    StopPourAudio(true);
     if (bLiquidStateInitialized && GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
             S->UnregisterContainer(this, CurrentVolumeML);
@@ -168,6 +177,7 @@ void ALiquidContainerActor::EndPlay(const EEndPlayReason::Type Reason)
 
 void ALiquidContainerActor::Destroyed()
 {
+    StopPourAudio(true);
     if (bLiquidStateInitialized && GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
             S->UnregisterContainer(this, CurrentVolumeML);
@@ -177,7 +187,13 @@ void ALiquidContainerActor::Destroyed()
 void ALiquidContainerActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    if (bPourAudioStopOnNextTick) StopPourAudio();
     RestoreReceiveCooldown=FMath::Max(0.f,RestoreReceiveCooldown-DeltaTime);
+    if (!bEnablePourAudio || !IsValid(PourLoopSound.Get()) || !GetWorld() ||
+        !GetWorld()->AllowAudioPlayback() || !GetWorld()->GetAudioDeviceRaw())
+    {
+        StopPourAudio(true);
+    }
     if (bBroken) return;
 
     // 1) 根据容器运动状态实时调节液面波动
@@ -195,7 +211,7 @@ void ALiquidContainerActor::Tick(float DeltaTime)
         {
             StartPouring();
         }
-        else if (!bShouldPour && bIsPouring)
+        else if (!bShouldPour && (bIsPouring || bPourAudioRequested))
         {
             StopPouring();
         }
@@ -256,6 +272,7 @@ bool ALiquidContainerActor::BreakContainerForImpact()
     bCanPour = false;
     bAcceptLiquidFromOthers = false;
     StopPouring();
+    StopPourAudio(true);
     if (PourFX)
     {
         PourFX->DeactivateImmediate();
@@ -272,6 +289,7 @@ void ALiquidContainerActor::FreezeLiquidForServing()
     bCanPour = false;
     bAcceptLiquidFromOthers = false;
     StopPouring();
+    StopPourAudio(true);
 }
 
 double ALiquidContainerActor::ConsumeForCustomer(UCustomerDrinkComponent* Consumer,double RequestedML)
@@ -751,13 +769,109 @@ void ALiquidContainerActor::StartPouring()
 
 void ALiquidContainerActor::StopPouring()
 {
+    ++PourStopGeneration;
     bIsPouring = false;
+    if (!bPreserveLastEmissionAudio) StopPourAudio();
 
     if (PourFX)
     {
         // 不销毁，只停止 Spawn；已在飞的 Ribbon 粒子按 lifetime 自然消散，
         // 视觉上更贴近真实的"水流断尾"过渡。下次 Activate 可直接重启。
         PourFX->Deactivate();
+    }
+}
+
+UAudioComponent* ALiquidContainerActor::GetPourAudioComponent() const
+{
+    return PourAudioComponent.Get();
+}
+
+void ALiquidContainerActor::UpdatePourAudio(double ActualFlowMLPerSecond, const FTransform& SourceTransform)
+{
+    UWorld* World = GetWorld();
+    if (!IsValid(this) || IsActorBeingDestroyed() || bLiquidFrozen || bBroken ||
+        !bEnablePourAudio || !IsValid(PourLoopSound.Get()) || !IsValid(ContainerMesh.Get()) ||
+        !World || !World->AllowAudioPlayback() || !World->GetAudioDeviceRaw())
+    {
+        StopPourAudio(true);
+        return;
+    }
+    if (!bIsPouring || !FMath::IsFinite(ActualFlowMLPerSecond) || ActualFlowMLPerSecond <= 0.0 ||
+        SourceTransform.GetLocation().ContainsNaN() || SourceTransform.GetRotation().ContainsNaN())
+    {
+        StopPourAudio();
+        return;
+    }
+
+    if (!IsValid(PourAudioComponent.Get()))
+    {
+        PourAudioComponent = NewObject<UAudioComponent>(this, NAME_None, RF_Transient);
+        PourAudioComponent->bAutoActivate = false;
+        PourAudioComponent->bAutoDestroy = false;
+        PourAudioComponent->SetUISound(false);
+        PourAudioComponent->bAllowSpatialization = true;
+        PourAudioComponent->bOverrideAttenuation = true;
+        FSoundAttenuationSettings Attenuation;
+        Attenuation.bAttenuate = true;
+        Attenuation.bSpatialize = true;
+        Attenuation.AttenuationShape = EAttenuationShape::Sphere;
+        Attenuation.AttenuationShapeExtents = FVector(35.f);
+        Attenuation.FalloffDistance = 180.f;
+        Attenuation.SpatializationAlgorithm = SPATIALIZATION_Default;
+        PourAudioComponent->AttenuationOverrides = Attenuation;
+        PourAudioComponent->SetupAttachment(ContainerMesh.Get());
+        PourAudioComponent->SetAbsolute(false, false, true);
+        AddInstanceComponent(PourAudioComponent.Get());
+        PourAudioComponent->RegisterComponent();
+        bPourAudioRunning = false;
+    }
+
+    const float ReferenceFlow = FMath::Clamp(FMath::IsFinite(PourAudioReferenceFlow) ? PourAudioReferenceFlow : 40.f, 0.01f, 1000000.f);
+    const double FlowRatio = ActualFlowMLPerSecond / ReferenceFlow;
+    const float BaseVolume = FMath::Clamp(FMath::IsFinite(PourAudioVolume) ? PourAudioVolume : 0.45f, 0.f, 1.f);
+    const float Volume = BaseVolume * FMath::Sqrt(static_cast<float>(FMath::Clamp(FlowRatio, 0.1, 1.25)));
+    const float Pitch = 0.94f + 0.1f * static_cast<float>(FMath::Clamp(FlowRatio, 0.0, 1.0));
+    PourAudioComponent->SetWorldTransform(FTransform(SourceTransform.GetRotation(), SourceTransform.GetLocation(), FVector::OneVector),
+        false, nullptr, ETeleportType::TeleportPhysics);
+    PourAudioComponent->SetPitchMultiplier(Pitch);
+    bPourAudioRequested = true;
+    PourAudioActualFlow = ActualFlowMLPerSecond;
+
+    // 使用自己的请求门禁；没有实际 voice 时也不按 IsPlaying 每帧重启。
+    if (!bPourAudioRunning || PourAudioComponent->Sound.Get() != PourLoopSound.Get())
+    {
+        PourAudioComponent->Stop();
+        PourAudioComponent->SetSound(PourLoopSound.Get());
+        const float FadeInSeconds = FMath::Clamp(FMath::IsFinite(PourAudioFadeIn) ? PourAudioFadeIn : 0.06f, 0.f, 10.f);
+        // VolumeMultiplier carries the flow gain; FadeIn fades to unity so it
+        // does not multiply the configured flow volume a second time.
+        PourAudioComponent->SetVolumeMultiplier(Volume);
+        PourAudioComponent->FadeIn(FadeInSeconds, 1.f, FMath::FRandRange(0.f, 0.5f));
+        ++AudioStartCount;
+        bPourAudioRunning = true;
+    }
+    else
+    {
+        PourAudioComponent->SetVolumeMultiplier(Volume);
+    }
+}
+
+void ALiquidContainerActor::StopPourAudio(bool bImmediate)
+{
+    bPourAudioStopOnNextTick = false;
+    bPourAudioRequested = false;
+    PourAudioActualFlow = 0.0;
+    const bool bWasRunning = bPourAudioRunning;
+    bPourAudioRunning = false;
+    if (!IsValid(PourAudioComponent.Get())) return;
+    if (bImmediate)
+    {
+        PourAudioComponent->Stop();
+    }
+    else if (bWasRunning)
+    {
+        const float FadeOutSeconds = FMath::Clamp(FMath::IsFinite(PourAudioFadeOut) ? PourAudioFadeOut : 0.12f, 0.f, 10.f);
+        PourAudioComponent->FadeOut(FadeOutSeconds, 0.f);
     }
 }
 
@@ -769,6 +883,7 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
 {
     if (bBroken || !ContainerMesh)
     {
+        StopPourAudio(bBroken);
         return;
     }
 
@@ -826,10 +941,24 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
     }
 
     // One transaction debits the source and credits a precise in-flight packet.
+    double Emitted = 0.0;
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
-            S->EmitPour(this, DeltaTime, GetPourWorldTransform());
-    if (GetPreciseVolumeML() <= 0.0) StopPouring();
+            Emitted += S->EmitPour(this, DeltaTime, GetPourWorldTransform());
+    if (!IsValid(this) || IsActorBeingDestroyed()) return;
+    if (bIsPouring && bCanPour && !bLiquidFrozen && !bBroken)
+    {
+        const double ActualRate = FMath::IsFinite(DeltaTime) && DeltaTime > 0.f ? Emitted / DeltaTime : 0.0;
+        UpdatePourAudio(ActualRate, GetPourWorldTransform());
+    }
+    if (GetPreciseVolumeML() <= 0.0)
+    {
+        // Keep the audio of the final actual emission until the next empty Tick,
+        // while preserving the existing immediate end of the Niagara spawn state.
+        TGuardValue<bool> HoldLastAudio(bPreserveLastEmissionAudio, Emitted > 0.0 && bIsPouring && bCanPour && !bLiquidFrozen && !bBroken);
+        StopPouring();
+        bPourAudioStopOnNextTick = bPreserveLastEmissionAudio && bPourAudioRequested;
+    }
 }
 
 //=====================================================================

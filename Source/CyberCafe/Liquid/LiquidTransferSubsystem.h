@@ -66,7 +66,7 @@ public:
     void RecordRemoved(double ML){RemovedML+=ML;}
     void RecordSpilled(double ML){SpilledML+=ML;}
     double EmitVolume(ALiquidContainerActor* Source,double RequestedML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay=0,const FTransform* RibbonTransform=nullptr);
-    void EmitPour(ALiquidContainerActor* Source,double DeltaTime,const FTransform& PourTransform);
+    double EmitPour(ALiquidContainerActor* Source,double DeltaTime,const FTransform& PourTransform);
     void Simulate(double DeltaTime);
     double GetUnsettledFlightHorizon() const;
     UFUNCTION(BlueprintPure,Category="Liquid|Debug") FLiquidBalance GetBalance() const;

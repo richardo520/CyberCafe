@@ -18,6 +18,8 @@ class USceneComponent;
 class UMaterialInstanceDynamic;
 class ULiquidTransferSubsystem;
 class UGlassBreakProfile;
+class UAudioComponent;
+class USoundBase;
 
 /**
  * 液体变化事件
@@ -358,6 +360,39 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Pour|FX")
     bool bNoList;
 
+    /** 仅按真实出流请求共享水声，不模拟不同液体或落点。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio")
+    bool bEnablePourAudio = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio")
+    TObjectPtr<USoundBase> PourLoopSound = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float PourAudioVolume = 0.45f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio", meta = (ClampMin = "0.01", ClampMax = "1000000.0"))
+    float PourAudioReferenceFlow = 40.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+    float PourAudioFadeIn = 0.06f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Liquid|Audio", meta = (ClampMin = "0.0", ClampMax = "10.0"))
+    float PourAudioFadeOut = 0.12f;
+
+    /** 诊断播放请求，不代表音频设备实际可听。 */
+    UFUNCTION(BlueprintPure, Category = "Liquid|Audio")
+    bool IsPourAudioRequested() const { return bPourAudioRequested; }
+
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Audio")
+    double PourAudioActualFlow = 0.0;
+
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Audio")
+    int32 AudioStartCount = 0;
+
+    /** 首次有效真实出流前可返回 nullptr。 */
+    UFUNCTION(BlueprintPure, Category = "Liquid|Audio")
+    UAudioComponent* GetPourAudioComponent() const;
+
     //=====================================================================
     // 液体属性(编辑器可调 / 蓝图可读写)
     //=====================================================================
@@ -549,6 +584,10 @@ protected:
     UPROPERTY(Transient) int32 LiquidRevision = 0;
     UPROPERTY(Transient) bool bLiquidFrozen = false;
     UPROPERTY(Transient) bool bBroken = false;
+    // Explicit stop during emitted-volume callbacks cancels the remaining slices.
+    uint32 PourStopGeneration = 0;
+    bool bPreserveLastEmissionAudio = false;
+    bool bPourAudioStopOnNextTick = false;
 
     /**
      * 初始化 LiquidFX：只预写运行时表现参数（Fill / Opacity / Waves / Viscosity）。
@@ -626,6 +665,14 @@ protected:
 
     /** 每 Tick 同步 FX 起点并提交定量在途包；接液由世界级转移系统结算。 */
     virtual void UpdatePouring(float DeltaTime);
+
+    void UpdatePourAudio(double ActualFlowMLPerSecond, const FTransform& SourceTransform);
+    void StopPourAudio(bool bImmediate = false);
+
+    UPROPERTY(Transient)
+    TObjectPtr<UAudioComponent> PourAudioComponent = nullptr;
+    bool bPourAudioRequested = false;
+    bool bPourAudioRunning = false;
 
     /**
      * 收集本次倒液 Trace 需要忽略的 Actor。

@@ -149,16 +149,17 @@ double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double
     // Both debit and in-flight credit are committed before external subscribers run.
     Source->NotifyLiquidState();return Actual;
 }
-void ULiquidTransferSubsystem::EmitPour(ALiquidContainerActor* Source,double Dt,const FTransform& TM)
+double ULiquidTransferSubsystem::EmitPour(ALiquidContainerActor* Source,double Dt,const FTransform& TM)
 {
-    if(!IsValid(Source)||!Source->bCanPour||!FMath::IsFinite(Dt)||Dt<=0)return;
+    if(!IsValid(Source)||!Source->bCanPour||!FMath::IsFinite(Dt)||Dt<=0)return 0;
     const bool bWasPouring=Source->bIsPouring;
     const double Rate=FMath::IsFinite(Source->PourRatePerSecond)?FMath::Max(0.f,Source->PourRatePerSecond):0;
-    if(Rate<=0)return;
+    if(Rate<=0)return 0;
     // Volume follows time, not particle count. Midpoint births prevent a long frame
     // from treating all newly emitted liquid as if it left at the frame start.
     const int32 N=FMath::Clamp(FMath::CeilToInt(Dt/StepSeconds),1,1024);
     const double Slice=Dt/N;
+    double EmitVolumeActual=0;
     for(int32 I=0;I<N&&IsValid(Source);++I)
     {
         // NotifyLiquidState may close the cap, disable pouring, stop the stream
@@ -166,8 +167,9 @@ void ULiquidTransferSubsystem::EmitPour(ALiquidContainerActor* Source,double Dt,
         if(!Source->bCanPour||(bWasPouring&&!Source->bIsPouring)||Source->GetPreciseVolumeML()<=0)break;
         const FVector Velocity=-TM.GetUnitAxis(EAxis::X)*Source->PourInitialSpeedCms;
         const bool bRibbon=Source->bUseRibbonTrajectory&&Source->PourFX&&Source->PourFX->GetAsset()&&Source->PourFX->GetAsset()->GetFName()==TEXT("P_Ribbon");
-        EmitVolume(Source,Rate*Slice,TM.GetLocation(),Velocity,Source->PourGravityCms2,(I+.5)*Slice,bRibbon?&TM:nullptr);
+        EmitVolumeActual+=EmitVolume(Source,Rate*Slice,TM.GetLocation(),Velocity,Source->PourGravityCms2,(I+.5)*Slice,bRibbon?&TM:nullptr);
     }
+    return EmitVolumeActual;
 }
 void ULiquidTransferSubsystem::Simulate(double Dt)
 {

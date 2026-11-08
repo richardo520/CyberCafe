@@ -44,7 +44,7 @@ void AHandPourKettleActor::Tick(float Dt)
 float AHandPourKettleActor::PourWater(float Dt)
 {
  if(WaterJet)WaterJet->ClearInstances();CurrentFlowMLPerSecond=0;
- if(!FMath::IsFinite(Dt)||Dt<=0||IsBroken()||IsLiquidFrozen()||GetPreciseVolumeML()<=0||!PourFX){StopPouring();return 0;}
+ if(!FMath::IsFinite(Dt)||Dt<=0||IsBroken()||IsLiquidFrozen()||bIsCapped||GetPreciseVolumeML()<=0||!PourFX){StopPouring();return 0;}
  const float Tilt=FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(GetActorUpVector().Z,-1.f,1.f)));
  const FTransform SpoutTM=GetKettleSpoutWorldTransform();
  const float Down=FVector::DotProduct(SpoutTM.GetUnitAxis(EAxis::X),FVector::DownVector);
@@ -56,10 +56,15 @@ float AHandPourKettleActor::PourWater(float Dt)
  LiquidColor=WaterStreamColor;
  const FVector Origin=SpoutTM.GetLocation();const FVector Velocity=SpoutTM.GetUnitAxis(EAxis::X)*35.f;double Emitted=0;
  const int32 N=FMath::Clamp(FMath::CeilToInt(Dt*120),1,240);const double Slice=Dt/N;
- for(int I=0;I<N;++I){if(IsBroken()||IsLiquidFrozen()||GetPreciseVolumeML()<=0)break;Emitted+=S->EmitVolume(this,Rate*Slice,Origin,Velocity,FVector(0,0,-980),(I+.5)*Slice);}
+ const uint32 StopGeneration=PourStopGeneration;
+ for(int I=0;I<N;++I){if(!IsValid(this)||IsActorBeingDestroyed()||IsBroken()||IsLiquidFrozen()||bIsCapped||PourStopGeneration!=StopGeneration||GetPreciseVolumeML()<=0)break;Emitted+=S->EmitVolume(this,Rate*Slice,Origin,Velocity,FVector(0,0,-980),(I+.5)*Slice);}
+ if(!IsValid(this)||IsActorBeingDestroyed())return Emitted;
+ if(PourStopGeneration!=StopGeneration||bIsCapped){CurrentFlowMLPerSecond=0;return Emitted;}
  CurrentFlowMLPerSecond=Emitted/Dt;
  // 最后一份液量发完的当帧保留水柱；空壶在下一帧停止，粒子回调不参与计量。
  UpdateKettleRibbon(Emitted>0);
+ if(IsValid(this)&&!IsActorBeingDestroyed()&&bIsPouring&&!IsLiquidFrozen()&&!IsBroken())
+  UpdatePourAudio(Emitted/Dt,SpoutTM);
  return Emitted;
 }
 void AHandPourKettleActor::UpdateKettleRibbon(bool bEmissionPositive)
