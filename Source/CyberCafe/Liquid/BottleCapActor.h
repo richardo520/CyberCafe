@@ -69,6 +69,24 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Reattach", meta = (ClampMin = "0.0"))
     float ReattachSnapDistance;
 
+    /** 仅新旋盖蓝图启用；false 保留原拉拔和砸桌开盖行为。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Screw")
+    bool bRequireScrewTwist = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Screw", meta = (ClampMin = "1.0", ClampMax = "360.0", EditCondition = "bRequireScrewTwist"))
+    float UnlockAngleDegrees = 120.f;
+
+    /** +1 为 Socket +Z 轴正向旋转（从盖顶看逆时针），-1 可反转。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Screw", meta = (ClampMin = "-1", ClampMax = "1", EditCondition = "bRequireScrewTwist"))
+    int32 OpeningDirection = 1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Screw", meta = (ClampMin = "0.0", EditCondition = "bRequireScrewTwist"))
+    float ThreadLiftCM = 0.6f;
+
+    /** 有符号净角进度；反向旋转会撤销进度，松手保留、盖回清零。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Cap|Screw")
+    float TwistProgress = 0.f;
+
     /** 拧下瓶盖时给持盖手的触觉反馈(可选) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cap|Feedback")
     TObjectPtr<UHapticFeedbackEffect_Base> DetachHaptic;
@@ -169,6 +187,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Cap")
     void DetachFromBottle(UMotionControllerComponent* MotionController);
 
+    /** 显式有效姿态采样入口；仍要求真实 GrabComp 已持盖且盖仍附着。
+     *  运行时 Tick 只在持有手柄 IsTracked() 时调用，测试可直接提供有效姿态。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Cap|Screw")
+    void SampleScrewHandPose(const FTransform& HandWorld, float DeltaTime);
+
 protected:
     /** GrabComp 广播的抓取回调（订阅在 BeginPlay 里挂上） */
     UFUNCTION()
@@ -197,4 +221,11 @@ private:
     /** 是否处于"已抓住但尚未拔下来"的中间状态（Custom Grab 生效但仍附在瓶口 Socket 上） */
     UPROPERTY(Transient)
     bool bGrabbedButNotDetached;
+
+    void UpdateScrewVisual();
+    bool bScrewSampleReady = false;
+    double PreviousScrewAngleDegrees = 0.0;
+    FVector PreviousScrewHandLocation = FVector::ZeroVector;
+    UPROPERTY(Transient)
+    TWeakObjectPtr<UMotionControllerComponent> ScrewSampleController;
 };

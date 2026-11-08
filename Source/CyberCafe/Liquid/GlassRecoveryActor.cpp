@@ -31,6 +31,7 @@
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
 #include "Coffee/Grinder/GrinderHandleActor.h"
 #include "Coffee/Grinder/GrinderDrawerActor.h"
+#include "Coffee/Bean/DirectBeanJarActor.h"
 #include "Components/AudioComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 AGlassRecoveryActor::AGlassRecoveryActor()
@@ -73,11 +74,16 @@ void AGlassRecoveryActor::CaptureSlot(int32 I,ALiquidContainerActor* A,UGlassBre
  if(auto* Existing=A->FindComponentByClass<UGlassBreakableComponent>())if(IsValid(Existing->Profile.Get()))P=Existing->Profile.Get();
  S.Current=A;S.Profile=P;S.ContainerClass=A->GetClass();S.SpawnTransform=A->GetActorTransform();
  S.InitialFill=A->FillAmount;S.Capacity=A->MaxVolumeML;S.Ingredient=A->InitialIngredientId;S.Color=A->LiquidColor;
+ if(auto* Jar=Cast<ADirectBeanJarActor>(A)){
+  S.bBeanJar=true;S.InitialFill=0;
+  const float Capacity=FMath::IsFinite(Jar->BeanCapacityGrams)?FMath::Max(0.f,Jar->BeanCapacityGrams):0.f;
+  S.BeanSupplyG=FMath::IsFinite(Jar->InitialBeanGrams)?FMath::Clamp(Jar->InitialBeanGrams,0.f,Capacity):0.f;
+ }
  S.PourEntryRadius=A->PourEntryRadius;
  if(A->PourEntryPoint){S.PourEntryRelativeTransform=A->PourEntryPoint->GetRelativeTransform();S.bEntryAbsoluteLocation=A->PourEntryPoint->IsUsingAbsoluteLocation();S.bEntryAbsoluteRotation=A->PourEntryPoint->IsUsingAbsoluteRotation();S.bEntryAbsoluteScale=A->PourEntryPoint->IsUsingAbsoluteScale();}
  if(!P)P=A->GlassBreakProfile;
  S.Profile=P;
- S.bCanPour=A->bCanPour;S.bAcceptLiquid=A->bAcceptLiquidFromOthers;
+ S.bCanPour=!S.bBeanJar&&A->bCanPour;S.bAcceptLiquid=!S.bBeanJar&&A->bAcceptLiquidFromOthers;
  S.Mesh=A->ContainerMesh->GetStaticMesh();S.MeshRelativeTransform=A->ContainerMesh->GetAttachParent()?A->ContainerMesh->GetRelativeTransform():FTransform::Identity;
  for(int32 M=0;M<A->ContainerMesh->GetNumMaterials();++M){UMaterialInterface* Material=A->ContainerMesh->GetMaterial(M);while(auto* MID=Cast<UMaterialInstanceDynamic>(Material))Material=MID->Parent;S.Materials.Add(Material);}
  if(auto* B=Cast<ABottleActor>(A)){S.CapClass=B->CapClass;S.CapSocket=B->CapSocketName;S.bStartCapped=B->bStartCapped;S.CapturedCap=B->CapActor;}
@@ -169,7 +175,7 @@ bool AGlassRecoveryActor::PreflightRestore(TArray<ALiquidContainerActor*>& OldTo
  }
  for(const auto& S:Slots){if(!S.bInitialized)continue;
   if(!S.ContainerClass||S.ContainerClass->HasAnyClassFlags(CLASS_Abstract)||!IsValid(S.Mesh.Get())||S.SpawnTransform.ContainsNaN()||S.SpawnTransform.GetScale3D().GetAbs().GetMin()<=KINDA_SMALL_NUMBER||!FMath::IsFinite(S.InitialFill)||!FMath::IsFinite(S.Capacity))return Fail(TEXT("CHECK SUPPLY SETUP"));
-  if(S.bStartCapped&&S.CapClass&&S.CapClass->HasAnyClassFlags(CLASS_Abstract))return Fail(TEXT("CHECK SUPPLY SETUP"));
+  if(S.bStartCapped&&(!IsValid(S.CapClass.Get())||S.CapClass->HasAnyClassFlags(CLASS_Abstract)))return Fail(TEXT("CHECK SUPPLY SETUP"));
   auto* A=S.Current.Get();
   if(IsValid(A)&&!A->IsActorBeingDestroyed()){if(A->GetWorld()!=World)return Fail(TEXT("CHECK SUPPLY SETUP"));if(A->IsLiquidFrozen())continue;if(Busy(A->GrabComp.Get()))return Fail(TEXT("PUT DOWN SUPPLIES"));OldToRestore.AddUnique(A);}
   if(auto* Cap=S.CapturedCap.Get())CapsToRestore.AddUnique(Cap);
@@ -225,9 +231,26 @@ bool AGlassRecoveryActor::AdvanceRestoreHold(float Dt,bool Touching)
  if(RestoreHoldElapsed<Threshold)return false;
  bRestoreHoldLatched=true;return RestoreWorkbench();
 }
-// @trace RS-01 RS-02 RS-03 分阶段提交：Deferred 预建失败不碰旧物；FinishSpawning 的蓝图回调不承诺强事务回滚。
+// @trace RS-01 RS-02 RS-03 新供给全部初始化和校验后才发布、销毁旧罐；工具、盖、冰清理及任意回调不承诺强事务回滚。
 bool AGlassRecoveryActor::RestoreWorkbench()
 {
+ if(bRestoreInProgress||!GetWorld()){RestoreStatus=FText::FromString(TEXT("WAIT"));return false;}
+ // 每次事务入口读取真实运行时历史；不保存 BeginPlay 快照，也不凭初始供给补造已丢失的账本。
+ TArray<FBeanJarLedgerSnapshot> BeanSnapshotsPerSlot;BeanSnapshotsPerSlot.SetNum(Slots.Num());
+ TArray<bool> HasValidBeanSnapshot;HasValidBeanSnapshot.Init(false,Slots.Num());
+ auto FailBeanSetup=[this](const TCHAR* Text){RestoreStatus=FText::FromString(Text);return false;};
+ for(int32 I=0;I<Slots.Num();++I){const auto& S=Slots[I];if(!S.bInitialized||!S.bBeanJar)continue;
+  auto* Jar=Cast<ADirectBeanJarActor>(S.Current.Get());
+  if(!IsValid(Jar)||Jar->IsActorBeingDestroyed()||Jar->GetWorld()!=GetWorld())return FailBeanSetup(TEXT("CHECK SUPPLY SETUP - MISSING BEAN LEDGER"));
+  if(!FMath::IsFinite(S.BeanSupplyG)||S.BeanSupplyG<0)return FailBeanSetup(TEXT("CHECK SUPPLY SETUP - BEAN SUPPLY"));
+  const auto Snapshot=Jar->GetBeanLedger();
+  for(double Value:{Snapshot.InitialGrams,Snapshot.InjectedGrams,Snapshot.AcceptedGrams,Snapshot.SpilledGrams,Snapshot.DiscardedGrams,Snapshot.CurrentGrams,Snapshot.TotalPouredGrams})
+   if(!FMath::IsFinite(Value)||Value<0)return FailBeanSetup(TEXT("CHECK SUPPLY SETUP - INVALID BEAN LEDGER"));
+  const double Input=Snapshot.InitialGrams+Snapshot.InjectedGrams;
+  const double Output=Snapshot.CurrentGrams+Snapshot.AcceptedGrams+Snapshot.SpilledGrams+Snapshot.DiscardedGrams;
+  if(!FMath::IsFinite(Input)||!FMath::IsFinite(Output)||FMath::Abs(Input-Output)>1.e-5)return FailBeanSetup(TEXT("CHECK SUPPLY SETUP - INVALID BEAN LEDGER"));
+  BeanSnapshotsPerSlot[I]=Snapshot;HasValidBeanSnapshot[I]=true;
+ }
  TArray<ALiquidContainerActor*> OldToRestore;TArray<ABottleCapActor*> CapsToRestore;
  if(!PreflightRestore(OldToRestore,CapsToRestore))return false;
  TStrongObjectPtr<AGlassRecoveryActor> Self(this);bRestoreInProgress=true;
@@ -253,7 +276,7 @@ bool AGlassRecoveryActor::RestoreWorkbench()
  TArray<FEmissionGuard> EmissionGuards;for(auto* A:OldToRestore)EmissionGuards.Emplace(A);
  TArray<TStrongObjectPtr<ABottleCapActor>> CapGuards;for(auto* Cap:CapsToRestore)CapGuards.Emplace(Cap);
  TArray<TStrongObjectPtr<ALiquidContainerActor>> Staged;Staged.SetNum(Slots.Num());
- bool Published=false;
+ TArray<bool> StagedCommitted;StagedCommitted.Init(false,Slots.Num());
  auto Alive=[&](){
   if(!IsValid(Self.Get())||Self->IsActorBeingDestroyed())return false;
   auto Fail=[&Self](const TCHAR* Text){Self->RestoreStatus=FText::FromString(Text);UE_LOG(LogTemp,Warning,TEXT("Workbench restore aborted: %s"),Text);return false;};
@@ -269,7 +292,7 @@ bool AGlassRecoveryActor::RestoreWorkbench()
   return true;
  };
  ON_SCOPE_EXIT{
-  if(!Published)for(auto& Item:Staged){auto* A=Item.Get();if(!IsValid(A)||A->IsActorBeingDestroyed())continue;if(auto* B=Cast<ABottleActor>(A)){TStrongObjectPtr<ABottleCapActor> Cap(B->CapActor.Get());if(IsValid(Cap.Get())&&!Cap->IsActorBeingDestroyed()){Cap->InvalidateBrokenBottle();if(IsValid(Cap.Get())&&!Cap->IsActorBeingDestroyed())Cap->Destroy();}}if(IsValid(A)&&!A->IsActorBeingDestroyed())A->Destroy();}
+  for(int32 I=0;I<Staged.Num();++I){if(StagedCommitted[I])continue;auto* A=Staged[I].Get();if(!IsValid(A)||A->IsActorBeingDestroyed())continue;if(auto* B=Cast<ABottleActor>(A)){TStrongObjectPtr<ABottleCapActor> Cap(B->CapActor.Get());if(IsValid(Cap.Get())&&!Cap->IsActorBeingDestroyed()){Cap->InvalidateBrokenBottle();if(IsValid(Cap.Get())&&!Cap->IsActorBeingDestroyed())Cap->Destroy();}}if(IsValid(A)&&!A->IsActorBeingDestroyed())A->Destroy();}
   for(auto& Guard:EmissionGuards)if(auto* A=Guard.Actor.Get())A->bWorkbenchRestoreEmissionBlocked=Guard.OldFlag;
   if(IsValid(Self.Get())&&!Self->IsActorBeingDestroyed())Self->bRestoreInProgress=false;
  };
@@ -334,16 +357,9 @@ bool AGlassRecoveryActor::RestoreWorkbench()
   }else if(auto* Grinder=Cast<ACoffeeGrinderActor>(Tool)){const bool Reset=Grinder->ResetForWorkbench(S.InitialTransform);if(!Alive())return false;if(!Reset)return FailTool(TEXT("GRINDER RESET FAILED"));}
   else return FailTool(TEXT("CHECK SUPPLIES - UNSUPPORTED TOOL"));
  }
- // 旧引用先迁移到全部有效的新身份，订单、ServedCup、配方和全息图不改。
- for(int32 I=0;I<Slots.Num();++I){auto& S=Slots[I];if(!S.bInitialized||OldSlotFrozen[I])continue;auto* Old=S.Current.Get();auto* A=Staged[I].Get();
-  if(Old){if(PrototypeCup.Get()==Old)PrototypeCup=A;if(PrototypeBottle.Get()==Old)PrototypeBottle=A;for(auto& Target:RestoreTargets)if(Target.Get()==Old)Target=A;
-   for(TActorIterator<ATutorialDirector> D(World);D;++D)for(const auto& Step:D->Steps)if(auto* G=Cast<UTutorialStep_Grab>(Step.Get()))if(G->RequiredActor==Old)G->RequiredActor=A;
-   for(TActorIterator<AIceStationActor> It(World);It;++It)if(It->Cup.Get()==Old)It->Cup=Cast<ACupActor>(A);
-  }S.Current=A;S.CapturedCap.Reset();
- }
- for(auto* A:OldToRestore){if(IsToolLiquid(A)||!IsValid(A)||A->IsActorBeingDestroyed()||A->IsLiquidFrozen())continue;A->SetActorEnableCollision(false);if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed())continue;A->SetActorHiddenInGame(true);A->SetActorTickEnabled(false);if(IsValid(A->ContainerMesh.Get())){A->ContainerMesh->SetSimulatePhysics(false);A->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);}if(!Alive())return false;if(IsValid(A)&&!A->IsActorBeingDestroyed())A->Destroy();if(!Alive())return false;}
- for(int32 I=0;I<Slots.Num();++I){auto& S=Slots[I];if(!S.bInitialized||OldSlotFrozen[I])continue;auto* A=Staged[I].Get();if(!IsValid(A)||A->IsActorBeingDestroyed()){RestoreStatus=FText::FromString(TEXT("SUPPLY SPAWN FAILED"));return false;}
-  A->FillAmount=Cast<ACupActor>(A)?0:S.InitialFill;A->MaxVolumeML=S.Capacity;A->InitialIngredientId=S.Ingredient;A->LiquidColor=S.Color;A->bCanPour=S.bCanPour;A->bAcceptLiquidFromOthers=S.bAcceptLiquid;
+ // 初始化阶段仍保留旧槽引用和旧罐账本；失败清理只处理未发布的新供给。
+ for(int32 I=0;I<Slots.Num();++I){const auto& S=Slots[I];if(!S.bInitialized||OldSlotFrozen[I])continue;auto* A=Staged[I].Get();if(!IsValid(A)||A->IsActorBeingDestroyed()){RestoreStatus=FText::FromString(TEXT("SUPPLY SPAWN FAILED"));return false;}
+  A->FillAmount=(S.bBeanJar||Cast<ACupActor>(A))?0:S.InitialFill;A->MaxVolumeML=S.Capacity;A->InitialIngredientId=S.Ingredient;A->LiquidColor=S.Color;A->bCanPour=S.bCanPour;A->bAcceptLiquidFromOthers=S.bAcceptLiquid;
   A->PourEntryRadius=S.PourEntryRadius;
   if(A->PourEntryPoint){A->PourEntryPoint->SetAbsolute(S.bEntryAbsoluteLocation,S.bEntryAbsoluteRotation,S.bEntryAbsoluteScale);A->PourEntryPoint->SetRelativeTransform(S.PourEntryRelativeTransform);}
   A->ContainerMesh->SetStaticMesh(S.Mesh);if(A->ContainerMesh->GetAttachParent())A->ContainerMesh->SetRelativeTransform(S.MeshRelativeTransform);for(int32 M=0;M<S.Materials.Num();++M)A->ContainerMesh->SetMaterial(M,S.Materials[M]);
@@ -352,6 +368,13 @@ bool AGlassRecoveryActor::RestoreWorkbench()
   if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed()){RestoreStatus=FText::FromString(TEXT("SUPPLY SPAWN FAILED"));return false;}
   A->RestoreReceiveCooldown=ReceiveDelay;
   A->FinishSpawning(S.SpawnTransform);if(!Alive())return false;
+  if(S.bBeanJar){auto* Jar=Cast<ADirectBeanJarActor>(A);
+   // BeginPlay 默认初始账本只被覆盖一次；旧 Current 在新历史中仅转为 Discarded。
+   if(!Jar||!HasValidBeanSnapshot[I]||!Jar->ApplyRestoredBeanLedger(BeanSnapshotsPerSlot[I],S.BeanSupplyG)){RestoreStatus=FText::FromString(TEXT("BEAN LEDGER RESTORE FAILED"));return false;}
+   if(!Alive())return false;
+   const double Expected=FMath::IsFinite(Jar->BeanCapacityGrams)?FMath::Clamp(static_cast<double>(S.BeanSupplyG),0.0,FMath::Max(0.0,static_cast<double>(Jar->BeanCapacityGrams))):0.0;
+   if(!FMath::IsFinite(Jar->GetBeanGrams())||FMath::Abs(Jar->GetBeanGrams()-Expected)>1.e-5||!FMath::IsFinite(Jar->GetBeanBalanceError())||FMath::Abs(Jar->GetBeanBalanceError())>1.e-5||Jar->GetPreciseVolumeML()!=0||Jar->FillAmount!=0){RestoreStatus=FText::FromString(TEXT("BEAN LEDGER RESTORE FAILED - INVENTORY CHANGED"));return false;}
+  }
   if(A->GrabComp)A->GrabComp->Activate();if(!Alive())return false;
   // 构造脚本可能重写视觉配置；初始化后的权威体积不重复灌注。
   A->PourEntryRadius=S.PourEntryRadius;
@@ -362,7 +385,6 @@ bool AGlassRecoveryActor::RestoreWorkbench()
   if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed()){RestoreStatus=FText::FromString(TEXT("SUPPLY SPAWN FAILED"));return false;}
   if(S.bHasCupIce&&Cast<ACupActor>(A)){auto* Ice=A->FindComponentByClass<UCupIceComponent>();if(!Ice){Ice=NewObject<UCupIceComponent>(A);A->AddInstanceComponent(Ice);}Ice->InteriorRadiusCM=S.IceRadiusCM;Ice->InteriorDepthCM=S.IceDepthCM;Ice->MaxCupIce=S.MaxCupIce;Ice->ClinkSound=S.ClinkSound;if(!Ice->IsRegistered())Ice->RegisterComponent();}
   if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed()){RestoreStatus=FText::FromString(TEXT("SUPPLY SPAWN FAILED"));return false;}
-  if(auto* B=Cast<ABottleActor>(A))S.CapturedCap=B->CapActor;
  }
  if(!Alive())return false;
  // 补液通知可能改变源姿态；全部回调后再固定工具姿态，不留下倾斜后立即出流的供给。
@@ -380,7 +402,32 @@ bool AGlassRecoveryActor::RestoreWorkbench()
   if(!FMath::IsFinite(ActualVolume)||FMath::Abs(ActualVolume-ToolSlots[I].InitialVolumeML)>1.e-4)return FailTool(TEXT("TOOL REFILL FAILED - INVENTORY CHANGED"));
   A->RestoreReceiveCooldown=FMath::Max(A->RestoreReceiveCooldown,FinalReceiveDelay);
  }
- Published=true;++RestoreGeneration;RestoreStatus=FText::FromString(bHasProtected?TEXT("RESTORED - PROTECTED"):TEXT("RESTORED"));return true;
+ if(!Alive())return false;
+ // 最后一个槽或工具回调也可能改变前面已初始化的供给；发布前重读全部真实库存和盖归属。
+ for(int32 I=0;I<Slots.Num();++I){const auto& S=Slots[I];if(!S.bInitialized||OldSlotFrozen[I])continue;auto* A=Staged[I].Get();
+  if(!IsValid(A)||A->IsActorBeingDestroyed()||A->IsBroken()||A->IsLiquidFrozen()||!IsValid(A->ContainerMesh.Get())){RestoreStatus=FText::FromString(TEXT("SUPPLY RESET FAILED - STATE CHANGED"));return false;}
+  if(S.bBeanJar){auto* Jar=Cast<ADirectBeanJarActor>(A);
+   if(!Jar){RestoreStatus=FText::FromString(TEXT("BEAN LEDGER RESTORE FAILED"));return false;}
+   const double Expected=FMath::IsFinite(Jar->BeanCapacityGrams)?FMath::Clamp(static_cast<double>(S.BeanSupplyG),0.0,FMath::Max(0.0,static_cast<double>(Jar->BeanCapacityGrams))):0.0;
+   if(!FMath::IsFinite(Jar->GetBeanGrams())||FMath::Abs(Jar->GetBeanGrams()-Expected)>1.e-5||!FMath::IsFinite(Jar->GetBeanBalanceError())||FMath::Abs(Jar->GetBeanBalanceError())>1.e-5||Jar->GetPreciseVolumeML()!=0||Jar->FillAmount!=0){RestoreStatus=FText::FromString(TEXT("BEAN LEDGER RESTORE FAILED - INVENTORY CHANGED"));return false;}
+  }else{
+   const double Expected=Cast<ACupActor>(A)?0.0:FMath::Clamp(static_cast<double>(S.InitialFill),0.0,1.0)*FMath::Max(0.f,S.Capacity);
+   const double Actual=A->GetPreciseVolumeML();
+   if(!FMath::IsFinite(Actual)||FMath::Abs(Actual-Expected)>1.e-4){RestoreStatus=FText::FromString(TEXT("SUPPLY RESET FAILED - INVENTORY CHANGED"));return false;}
+  }
+  if(S.bStartCapped){auto* B=Cast<ABottleActor>(A);auto* Cap=B?B->CapActor.Get():nullptr;
+   if(!IsValid(Cap)||Cap->IsActorBeingDestroyed()||Cap->OwnerBottle.Get()!=B||!Cap->bIsAttached||!B->bIsCapped){RestoreStatus=FText::FromString(TEXT("SUPPLY RESET FAILED - CAP CHANGED"));return false;}
+  }
+ }
+ // 全部新供给与工具校验完成才迁移引用；发布标记先于旧罐 Destroy 回调，失败清理不再销毁已发布的新账本。
+ for(int32 I=0;I<Slots.Num();++I){auto& S=Slots[I];if(!S.bInitialized||OldSlotFrozen[I])continue;auto* Old=S.Current.Get();auto* A=Staged[I].Get();
+  if(Old){if(PrototypeCup.Get()==Old)PrototypeCup=A;if(PrototypeBottle.Get()==Old)PrototypeBottle=A;for(auto& Target:RestoreTargets)if(Target.Get()==Old)Target=A;
+   for(TActorIterator<ATutorialDirector> D(World);D;++D)for(const auto& Step:D->Steps)if(auto* G=Cast<UTutorialStep_Grab>(Step.Get()))if(G->RequiredActor==Old)G->RequiredActor=A;
+   for(TActorIterator<AIceStationActor> It(World);It;++It)if(It->Cup.Get()==Old)It->Cup=Cast<ACupActor>(A);
+  }S.Current=A;StagedCommitted[I]=true;S.CapturedCap.Reset();if(auto* B=Cast<ABottleActor>(A))S.CapturedCap=B->CapActor;
+ }
+ for(auto* A:OldToRestore){if(IsToolLiquid(A)||!IsValid(A)||A->IsActorBeingDestroyed()||A->IsLiquidFrozen())continue;A->SetActorEnableCollision(false);if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed())continue;A->SetActorHiddenInGame(true);A->SetActorTickEnabled(false);if(IsValid(A->ContainerMesh.Get())){A->ContainerMesh->SetSimulatePhysics(false);A->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);}if(!Alive())return false;if(IsValid(A)&&!A->IsActorBeingDestroyed())A->Destroy();if(!Alive())return false;}
+ ++RestoreGeneration;RestoreStatus=FText::FromString(bHasProtected?TEXT("RESTORED - PROTECTED"):TEXT("RESTORED"));return true;
 }
 bool AGlassRecoveryActor::Recover(int32 I)
 {

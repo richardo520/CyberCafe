@@ -1,4 +1,5 @@
 #include "Coffee/Brew/HandPourKettleActor.h"
+#include "Coffee/Brew/HotWaterSteamComponent.h"
 #include "Liquid/LiquidTransferSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -9,6 +10,7 @@
 #include "GrabComponent.h"
 AHandPourKettleActor::AHandPourKettleActor()
 {
+ HotWaterSteamComponent=CreateDefaultSubobject<UHotWaterSteamComponent>(TEXT("HotWaterSteamComponent"));
  MaxVolumeML=500;FillAmount=1;InitialIngredientId=TEXT("Water");bStartCapped=false;CapClass=nullptr;bCanPour=false;bAcceptLiquidFromOthers=false;bUseRibbonTrajectory=false;
  // P_Ribbon has a -User.Offset spawn displacement and a thickness compensation
  // proportional to (1-FlowStrength). Zero both for a nozzle-anchored thin jet.
@@ -98,4 +100,6 @@ void AHandPourKettleActor::StopPouring()
 {
  Super::StopPouring();CurrentFlowMLPerSecond=0;
  if(WaterJet){WaterJet->ClearInstances();WaterJet->SetHiddenInGame(true);WaterJet->SetVisibility(false);WaterJet->PrimaryComponentTick.bCanEverTick=false;WaterJet->SetComponentTickEnabled(false);}
+ // 普通收壶/空壶不截断在途包落点；停蒸汽放在最后，避免其回调销毁源后再访问成员。
+ if(IsValid(this)&&!IsActorBeingDestroyed()&&HotWaterSteamComponent&&(bWorkbenchRestoreEmissionBlocked||IsBroken()||IsLiquidFrozen()))HotWaterSteamComponent->StopSteam(true);
 }

@@ -2,6 +2,7 @@
 
 #include "Liquid/BottleCapActor.h"
 #include "Liquid/BottleActor.h"
+#include "Coffee/Bean/DirectBeanJarActor.h"
 #include "GrabComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "MotionControllerComponent.h"
@@ -9,6 +10,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Sound/SoundBase.h"
+#include "Engine/World.h"
 
 ABottleCapActor::ABottleCapActor()
 {
@@ -91,6 +93,17 @@ void ABottleCapActor::Tick(float DeltaTime)
         return;
     }
 
+    if (bRequireScrewTwist)
+    {
+        if (!GrabComp->IsHeld() || !MC->IsTracked())
+        {
+            bScrewSampleReady = false;
+            return;
+        }
+        SampleScrewHandPose(MC->GetComponentTransform(), DeltaTime);
+        return;
+    }
+
     UStaticMeshComponent* BottleMesh = OwnerBottle->ContainerMesh;
     const FVector SocketWS = BottleMesh->GetSocketLocation(CapSocketName);
     const float HandToSocketDist = FVector::Dist(MC->GetComponentLocation(), SocketWS);
@@ -125,7 +138,8 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
     {
         // 关键：Weld 到瓶身刚体上，让盖子成为瓶身刚体的一部分（虽已 QueryOnly 但 Weld 依然是好习惯）
         FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
-        AttachRule.bWeldSimulatedBodies = true;
+        // 旋盖仍是查询碰撞体，但不焊接到瓶体刚体，允许相对 Socket 转动。
+        AttachRule.bWeldSimulatedBodies = !bRequireScrewTwist;
         AttachToComponent(BottleMesh, AttachRule, CapSocketName);
 
         // 盖着时订阅瓶身碰撞事件——实现"握着瓶子重砸桌面开盖"
@@ -135,6 +149,10 @@ void ABottleCapActor::AttachToBottle(ABottleActor* InBottle, FName InSocketName)
 
     bIsAttached            = true;
     bGrabbedButNotDetached = false;
+    TwistProgress = 0.f;
+    bScrewSampleReady = false;
+    ScrewSampleController.Reset();
+    if (bRequireScrewTwist) UpdateScrewVisual();
 
     // 盖在瓶口上时禁止远程抓取/高亮（仅支持贴身抓，避免远程召唤弄乱拧盖交互）
     if (GrabComp)
@@ -187,7 +205,8 @@ void ABottleCapActor::ReattachToBottle()
     if (BottleMesh)
     {
         FAttachmentTransformRules AttachRule = FAttachmentTransformRules::SnapToTargetNotIncludingScale;
-        AttachRule.bWeldSimulatedBodies = true;
+        // 旋盖仍是查询碰撞体，但不焊接到瓶体刚体，允许相对 Socket 转动。
+        AttachRule.bWeldSimulatedBodies = !bRequireScrewTwist;
         AttachToComponent(BottleMesh, AttachRule, CapSocketName);
 
         // 重新盖上了：订阅瓶身 Hit，支持另一次砸桌开盖
@@ -196,6 +215,10 @@ void ABottleCapActor::ReattachToBottle()
 
     bIsAttached            = true;
     bGrabbedButNotDetached = false;
+    TwistProgress = 0.f;
+    bScrewSampleReady = false;
+    ScrewSampleController.Reset();
+    if (bRequireScrewTwist) UpdateScrewVisual();
 
     // 重新盖回瓶口：同样关闭远程抓取/高亮（盖在瓶口时只支持贴身拧）
     if (GrabComp)
@@ -216,6 +239,16 @@ void ABottleCapActor::ReattachToBottle()
 void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionController)
 {
     if (!MotionController || !bGrabbedButNotDetached || (OwnerBottle && OwnerBottle->IsBroken()))
+    {
+        return;
+    }
+
+    if (bRequireScrewTwist &&
+        (!FMath::IsFinite(UnlockAngleDegrees) || !FMath::IsFinite(TwistProgress)
+            || TwistProgress < FMath::Clamp(UnlockAngleDegrees, 1.f, 360.f)
+            || !bIsAttached || !IsValid(OwnerBottle) || OwnerBottle->IsLiquidFrozen()
+            || OwnerBottle->bWorkbenchRestoreEmissionBlocked || !GrabComp || !GrabComp->IsHeld()
+            || GrabComp->GetHoldingController() != MotionController))
     {
         return;
     }
@@ -278,6 +311,8 @@ void ABottleCapActor::DetachFromBottle(UMotionControllerComponent* MotionControl
     if (OwnerBottle)
     {
         OwnerBottle->OnCapDetached();
+        // 父类开盖接口非虚函数；仅克数豆罐不恢复液体权限，旧酒瓶保持原行为。
+        if (Cast<ADirectBeanJarActor>(OwnerBottle.Get())) OwnerBottle->bCanPour = false;
         UE_LOG(LogTemp, Log, TEXT("[BottleCap] After OnCapDetached: bCanPour=%d, bIsCapped=%d"),
                OwnerBottle->bCanPour ? 1 : 0, OwnerBottle->bIsCapped ? 1 : 0);
     }
@@ -307,6 +342,15 @@ void ABottleCapActor::HandleGrabbed()
         // 进入"抓住但还没拔下"状态；Tick 里检测手柄距瓶口 Socket 的距离，
         // 一旦超过 DetachPullDistance，就在 DetachFromBottle 里正式 Attach 到手上。
         bGrabbedButNotDetached = true;
+        if (bRequireScrewTwist)
+        {
+            bScrewSampleReady = false;
+            ScrewSampleController.Reset();
+            if (MC->IsTracked())
+            {
+                SampleScrewHandPose(MC->GetComponentTransform(), GetWorld() ? GetWorld()->GetDeltaSeconds() : 1.f / 90.f);
+            }
+        }
     }
     else
     {
@@ -347,6 +391,20 @@ void ABottleCapActor::HandleDropped()
     // 没有关物理，TrySimulateOnDrop 逻辑对我们影响可控；此处再显式接管一次以保证行为清晰。
 
     bGrabbedButNotDetached = false;
+    bScrewSampleReady = false;
+    ScrewSampleController.Reset();
+    if (bRequireScrewTwist && bIsAttached && IsValid(OwnerBottle) && !OwnerBottle->IsBroken())
+    {
+        // 未拧开的盖仍留在螺纹上；保留部分净角，不走回吸附的清零路径。
+        if (CapMesh)
+        {
+            CapMesh->SetSimulatePhysics(false);
+            CapMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+            CapMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
+        }
+        UpdateScrewVisual();
+        return;
+    }
     // 注：原地控制标志 GrabComp->IsGrabbingInPlace() 已由 UGrabComponent::TryRelease 自动重置
 
     if (!IsValid(OwnerBottle) || OwnerBottle->IsBroken())
@@ -399,6 +457,7 @@ void ABottleCapActor::HandleBottleHit(UPrimitiveComponent* HitComp, AActor* Othe
                                       UPrimitiveComponent* OtherComp, FVector NormalImpulse,
                                       const FHitResult& Hit)
 {
+    if (bRequireScrewTwist) return;
     // 触发条件一层层校验：任何一条不满足都直接跳过
 
     // 1) 盖子必须还盖着（已经拔下就不用管了）
@@ -438,6 +497,7 @@ void ABottleCapActor::HandleBottleHit(UPrimitiveComponent* HitComp, AActor* Othe
 
 void ABottleCapActor::SlamOpenCap(const FVector& HitNormal)
 {
+    if (bRequireScrewTwist) return;
     if (!IsValid(OwnerBottle) || OwnerBottle->IsBroken() || !OwnerBottle->ContainerMesh || !CapMesh)
     {
         return;
@@ -513,6 +573,7 @@ void ABottleCapActor::SlamOpenCap(const FVector& HitNormal)
 
     // 9) 通知瓶子解锁倒液（与手动拔盖走同一条通知路径）
     OwnerBottle->OnCapDetached();
+    if (Cast<ADirectBeanJarActor>(OwnerBottle.Get())) OwnerBottle->bCanPour = false;
 
     UE_LOG(LogTemp, Log, TEXT("[BottleCap] SlamOpenCap done. LaunchDir=%s Speed=%.1f"),
         *LaunchDir.ToString(), SlamOpenLaunchSpeed);
@@ -522,4 +583,84 @@ void ABottleCapActor::SlamOpenCap(const FVector& HitNormal)
 // 工具
 //=====================================================================
 
-// （旧 GetHandTwistAngleDegrees 已移除：现在用位移触发拔盖，不再检测扭转角度）
+void ABottleCapActor::SampleScrewHandPose(const FTransform& HandWorld, float DeltaTime)
+{
+    UMotionControllerComponent* Controller = GrabComp ? GrabComp->GetHoldingController() : nullptr;
+    if (!bRequireScrewTwist || !bIsAttached || !bGrabbedButNotDetached || !GrabComp || !GrabComp->IsHeld()
+        || !IsValid(Controller) || !IsValid(OwnerBottle) || OwnerBottle->IsBroken() || OwnerBottle->IsLiquidFrozen()
+        || OwnerBottle->bWorkbenchRestoreEmissionBlocked || !IsValid(OwnerBottle->ContainerMesh.Get())
+        || !OwnerBottle->ContainerMesh->DoesSocketExist(CapSocketName)
+        || !FMath::IsFinite(UnlockAngleDegrees) || !FMath::IsFinite(DeltaTime) || DeltaTime <= 0.f
+        || HandWorld.ContainsNaN())
+    {
+        bScrewSampleReady = false;
+        return;
+    }
+    if (ScrewSampleController.Get() != Controller)
+    {
+        bScrewSampleReady = false;
+        ScrewSampleController = Controller;
+    }
+    const FTransform Socket = OwnerBottle->ContainerMesh->GetSocketTransform(CapSocketName, RTS_World);
+    if (Socket.ContainsNaN() || FVector::Dist(HandWorld.GetLocation(), Socket.GetLocation()) > 12.0)
+    {
+        // 拉离瓶口只丢弃采样基线，绝不累加旋角或直接解锁。
+        bScrewSampleReady = false;
+        return;
+    }
+    FQuat HandRotation = HandWorld.GetRotation();
+    FQuat SocketRotation = Socket.GetRotation();
+    if (HandRotation.SizeSquared() <= UE_SMALL_NUMBER || SocketRotation.SizeSquared() <= UE_SMALL_NUMBER)
+    {
+        bScrewSampleReady = false;
+        return;
+    }
+    HandRotation.Normalize();
+    SocketRotation.Normalize();
+    const FQuat Relative = SocketRotation.Inverse() * HandRotation;
+    // Swing-Twist 分解：只保留瓶口局部 +Z 的旋转，不以欧拉角/世界 Yaw 代替腕部旋拧。
+    const double TwistNormSquared = Relative.W * Relative.W + Relative.Z * Relative.Z;
+    if (!FMath::IsFinite(TwistNormSquared) || TwistNormSquared <= 1.e-8)
+    {
+        bScrewSampleReady = false;
+        return;
+    }
+    const double Angle = FMath::RadiansToDegrees(2.0 * FMath::Atan2(Relative.Z, Relative.W));
+    const FVector Location = HandWorld.GetLocation();
+    if (!bScrewSampleReady)
+    {
+        PreviousScrewAngleDegrees = Angle;
+        PreviousScrewHandLocation = Location;
+        bScrewSampleReady = true;
+        return;
+    }
+    const double Delta = FMath::UnwindDegrees(Angle - PreviousScrewAngleDegrees);
+    const double PositionJump = FVector::Dist(Location, PreviousScrewHandLocation);
+    PreviousScrewAngleDegrees = Angle;
+    PreviousScrewHandLocation = Location;
+    if (!FMath::IsFinite(Delta) || FMath::Abs(Delta) > 45.0 || FMath::Abs(Delta) / DeltaTime > 720.0
+        || !FMath::IsFinite(PositionJump) || PositionJump > 35.0)
+    {
+        // 异常帧和下一帧重新建立基线，不把追踪跳变补计成进度。
+        bScrewSampleReady = false;
+        return;
+    }
+    const float Target = FMath::Clamp(UnlockAngleDegrees, 1.f, 360.f);
+    const double Progress = FMath::IsFinite(TwistProgress) ? TwistProgress : 0.0;
+    const int32 Direction = OpeningDirection < 0 ? -1 : 1;
+    TwistProgress = static_cast<float>(FMath::Clamp(Progress + Delta * Direction, 0.0, static_cast<double>(Target)));
+    UpdateScrewVisual();
+    if (TwistProgress >= Target) DetachFromBottle(Controller);
+}
+
+void ABottleCapActor::UpdateScrewVisual()
+{
+    if (!bRequireScrewTwist || !bIsAttached || !IsValid(OwnerBottle) || !OwnerBottle->ContainerMesh
+        || !FMath::IsFinite(UnlockAngleDegrees) || !FMath::IsFinite(TwistProgress)) return;
+    const float Target = FMath::Clamp(UnlockAngleDegrees, 1.f, 360.f);
+    const float Ratio = FMath::Clamp(TwistProgress / Target, 0.f, 1.f);
+    const float Lift = FMath::IsFinite(ThreadLiftCM) ? FMath::Max(0.f, ThreadLiftCM) : 0.f;
+    const int32 Direction = OpeningDirection < 0 ? -1 : 1;
+    SetActorRelativeRotation(FRotator(0.f, Direction * TwistProgress, 0.f));
+    SetActorRelativeLocation(FVector(0.f, 0.f, Ratio * Lift));
+}

@@ -237,7 +237,7 @@ void ALiquidContainerActor::InitializeLiquidState()
     if (bLiquidStateInitialized) return;
     MaxVolumeML = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.f;
     const double InitialFill = FMath::IsFinite(FillAmount) ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) : 0.0;
-    CurrentVolumeML = InitialFill * MaxVolumeML;
+    CurrentVolumeML = SupportsLiquidInventory() ? InitialFill * MaxVolumeML : 0.0;
     Composition = FLiquidComposition::Pure(InitialIngredientId, CurrentVolumeML);
     bLiquidStateInitialized = true;
     if (GetWorld())
@@ -247,6 +247,7 @@ void ALiquidContainerActor::InitializeLiquidState()
 
 double ALiquidContainerActor::GetPreciseVolumeML() const
 {
+    if (!SupportsLiquidInventory()) return 0.0;
     if (bLiquidStateInitialized) return CurrentVolumeML;
     return FMath::IsFinite(FillAmount) && FMath::IsFinite(MaxVolumeML)
         ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) * FMath::Max(0.f, MaxVolumeML) : 0.0;
@@ -303,6 +304,7 @@ double ALiquidContainerActor::ConsumeForCustomer(UCustomerDrinkComponent* Consum
 }
 double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition)
 {
+    if (!SupportsLiquidInventory()) return 0;
     InitializeLiquidState();
     if (!FMath::IsFinite(RequestedML) || RequestedML <= 0) return 0;
     const double Actual = FMath::Min(RequestedML, CurrentVolumeML);
@@ -318,7 +320,7 @@ double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidCom
 
 double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition)
 {
-    if (bLiquidFrozen || bBroken) return 0;
+    if (!SupportsLiquidInventory() || bLiquidFrozen || bBroken) return 0;
     InitializeLiquidState();
     if (!FMath::IsFinite(RequestedML) || RequestedML <= 0 || !FMath::IsFinite(InColor.R) || !FMath::IsFinite(InColor.G) || !FMath::IsFinite(InColor.B) || !FMath::IsFinite(InColor.A)) return 0;
     const double Capacity = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.0;

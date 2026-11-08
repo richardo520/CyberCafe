@@ -4,6 +4,7 @@
 #include "Liquid/BottleActor.h"
 #include "HandPourKettleActor.generated.h"
 class UInstancedStaticMeshComponent;
+class UHotWaterSteamComponent;
 UCLASS(Blueprintable)
 class CYBERCAFE_API AHandPourKettleActor:public ABottleActor
 {
@@ -15,6 +16,8 @@ public:
  UPROPERTY(EditAnywhere,BlueprintReadWrite) TObjectPtr<UMaterialInterface> WaterLiquidMaterial;
  UFUNCTION(BlueprintCallable) float PourWater(float Dt);
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UInstancedStaticMeshComponent> WaterJet;
+ UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Kettle|Steam") TObjectPtr<UHotWaterSteamComponent> HotWaterSteamComponent;
+ UFUNCTION(BlueprintPure,Category="Kettle|Steam") UHotWaterSteamComponent* GetHotWaterSteamComponent() const { return HotWaterSteamComponent.Get(); }
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float PourTiltDegrees=40;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float MaxFlowMLPerSecond=28;
  UPROPERTY(BlueprintReadOnly) float CurrentFlowMLPerSecond=0;

@@ -20,6 +20,7 @@ void UPourAudioTestProbe::CloseDuringEmission(float Fill,FLinearColor Color)
 #include "Liquid/BottleCapActor.h"
 #include "Liquid/CupActor.h"
 #include "Liquid/GlassRecoveryActor.h"
+#include "Coffee/Bean/DirectBeanJarActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -70,6 +71,18 @@ USoundWave* LoadSoundWave(FAutomationTestBase& Test)
 void CheckDefaults(FAutomationTestBase& Test, const ALiquidContainerActor* A, const USoundWave* Sound)
 {
     const FString Label = A->GetPathName();
+    if (const auto* Jar = Cast<ADirectBeanJarActor>(A))
+    {
+        Test.TestFalse(Label + TEXT(" 豆罐明确禁用液体循环水声"), Jar->bEnablePourAudio);
+        Test.TestFalse(Label + TEXT(" 豆罐不允许倒液或接液"), Jar->bCanPour || Jar->bAcceptLiquidFromOthers);
+        Near(Test, Label + TEXT(" 豆罐初始Fill恒零"), Jar->FillAmount, 0);
+        Near(Test, Label + TEXT(" 豆罐权威液体恒零"), Jar->GetPreciseVolumeML(), 0);
+        Test.TestNull(Label + TEXT(" 豆罐不分配倒水声音组件"), Jar->GetPourAudioComponent());
+        Test.TestFalse(Label + TEXT(" 豆罐无倒水声音请求"), Jar->IsPourAudioRequested());
+        Near(Test, Label + TEXT(" 豆罐液体音频流量恒零"), Jar->PourAudioActualFlow, 0);
+        Test.TestEqual(Label + TEXT(" 豆罐水声启动次数恒零"), Jar->AudioStartCount, 0);
+        return;
+    }
     Test.TestTrue(Label + TEXT(" 继承启用音频"), A->bEnablePourAudio);
     Test.TestTrue(Label + TEXT(" 共用已保存声音"), A->PourLoopSound.Get() == Sound);
     Near(Test, Label + TEXT(" 默认音量"), A->PourAudioVolume, .45);
@@ -306,7 +319,7 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
         Before.Add({Actor, Actor->GetActorTransform(), Liquid ? Liquid->FillAmount : 0.f,
             Liquid ? Liquid->MaxVolumeML : 0.f, Liquid ? Liquid->GetPreciseVolumeML() : 0.0});
     }
-    TestEqual(TEXT("用户新版布局与Editor枚举同源的312个Actor"), ActorCount, 312);
+    TestEqual(TEXT("仅新增一个豆罐后的保存场景有313个Actor"), ActorCount, 313);
     const bool bMapDirty = Map->GetOutermost()->IsDirty();
     auto* Sound = LoadSoundWave(*this);
     if (!Sound) return false;
@@ -318,13 +331,15 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
     Near(*this, TEXT("native 壶容量仍为 500mL"), NativeKettle->MaxVolumeML, 500);
     Near(*this, TEXT("native 壶阈值仍为 40 度"), NativeKettle->PourTiltDegrees, 40);
     Near(*this, TEXT("native 壶最大流量仍为 28mL/s"), NativeKettle->MaxFlowMLPerSecond, 28);
-    int32 Kettles = 0, Bottles = 0, Cups = 0, Liquids = 0;
+    int32 Kettles = 0, Bottles = 0, Cups = 0, Liquids = 0, PourEnabled = 0, BeanJars = 0;
     for (const auto& Snapshot : Before)
     {
         auto* A = Cast<ALiquidContainerActor>(Snapshot.Actor);
         if (!A) continue;
         ++Liquids;
-        if (A->IsA<AHandPourKettleActor>()) ++Kettles;
+        PourEnabled += A->bEnablePourAudio;
+        if (A->IsA<ADirectBeanJarActor>()) ++BeanJars;
+        else if (A->IsA<AHandPourKettleActor>()) ++Kettles;
         else if (A->IsA<ABottleActor>()) ++Bottles;
         else if (A->IsA<ACupActor>()) ++Cups;
         CheckDefaults(*this, A, Sound);
@@ -334,7 +349,10 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
         Near(*this, TEXT("保存权威 mL 不改变"), A->GetPreciseVolumeML(), Snapshot.ML);
     }
     TestTrue(TEXT("遍历到壶、瓶、杯，未只检查一个基类"), Kettles > 0 && Bottles > 0 && Cups > 0 && Liquids > 3);
-    TestEqual(TEXT("新版布局17个实际液体容器全部保留出流水声"), Liquids, 17);
+    TestEqual(TEXT("新版布局18个液体适配器，含零液体豆罐"), Liquids, 18);
+    TestEqual(TEXT("原17个实际液体容器保留出流水声"), PourEnabled, 17);
+    TestEqual(TEXT("额外唯一豆罐不计入实际液体或水声源"), BeanJars, 1);
+    TestEqual(TEXT("液体适配器恰好等于17水声容器加1豆罐"), Liquids, PourEnabled + BeanJars);
     for (const auto& Snapshot : Before)
         TestTrue(TEXT("全部已保存 Actor 布局和缩放均不改变"), Snapshot.Actor->GetActorTransform().Equals(Snapshot.Pose, Tolerance));
     TestEqual(TEXT("只读断言不使地图变脏"), Map->GetOutermost()->IsDirty(), bMapDirty);

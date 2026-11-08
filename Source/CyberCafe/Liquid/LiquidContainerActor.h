@@ -109,6 +109,8 @@ public:
     virtual void Destroyed() override;
     virtual void Tick(float DeltaTime) override;
 
+    // 继承液体容器的非液体道具也须通过基类入口拒绝毫升库存。
+    virtual bool SupportsLiquidInventory() const { return true; }
     // @trace LQ-01. Initializes from saved FillAmount once; runtime mL is authoritative.
     void InitializeLiquidState();
     double GetPreciseVolumeML() const;

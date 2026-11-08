@@ -91,6 +91,7 @@ void UAllSuppliesCallbackProbe::OnLiquidChange(float Fill, FLinearColor Color)
 #include "Coffee/Brew/HandDripperActor.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
 #include "Coffee/Grinder/GrinderHandleActor.h"
+#include "Coffee/Bean/DirectBeanJarActor.h"
 #include "Coffee/Grinder/GrinderDrawerActor.h"
 #include "Serving/DrinkRecipe.h"
 #include "Serving/ServingSpotActor.h"
@@ -101,7 +102,7 @@ namespace AllSuppliesRestoreTests
 {
 constexpr EAutomationTestFlags Flags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double Tolerance = 1.e-4;
-const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/restore_all_facing/current_before.json");
+const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/bean_jar_steam/current_before.json");
 const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
 const FName Water(TEXT("Water")), Milk(TEXT("Milk")), Coffee(TEXT("Coffee"));
 
@@ -117,7 +118,7 @@ struct FBeforeActor
     FTransform Pose;
 };
 
-// 只读取已给定导出器的 actors/name/config 模式；不是通用 JSON 解析器，不增加 Json 模块依赖。
+// 只读取本轮探针的 actors/path/class/pose/label 模式；前置资产信息不参与 Actor 计数。
 struct FBeforeLayout
 {
     FString Text;
@@ -126,15 +127,15 @@ struct FBeforeLayout
     {
         if (!Test.TestTrue(TEXT("读取指定最新布局，缺失即失败而非使用旧坐标兜底"),
             FFileHelper::LoadFileToString(Text, BeforePath))) return false;
-        const int32 End = Text.Find(TEXT("\"interactives\""));
-        if (!Test.TestTrue(TEXT("布局含 actors 和 interactives 分界"), End > 0)) return false;
-        const FString ActorText = Text.Left(End);
-        const FRegexPattern Pattern(TEXT("\"([^\"]+)\"\\s*:\\s*\\{\\s*\"class\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"label\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*\"pose\"\\s*:\\s*\\[([^\\]]+)\\]"));
+        const int32 Start = Text.Find(TEXT("\"actors\""));
+        if (!Test.TestTrue(TEXT("本轮 Before 含独立 actors 区块"), Start != INDEX_NONE)) return false;
+        const FString ActorText = Text.Mid(Start);
+        const FRegexPattern Pattern(TEXT("\"([^\"]+)\"\\s*:\\s*\\{\\s*\"path\"\\s*:\\s*\"[^\"]+\"\\s*,\\s*\"class\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"pose\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\"label\"\\s*:\\s*\"([^\"]*)\""));
         FRegexMatcher Match(Pattern, ActorText);
         while (Match.FindNext())
         {
             TArray<FString> Values;
-            Match.GetCaptureGroup(4).ParseIntoArray(Values, TEXT(","), false);
+            Match.GetCaptureGroup(3).ParseIntoArray(Values, TEXT(","), false);
             if (!Test.TestEqual(TEXT("每个布局 pose 恰好九个数"), Values.Num(), 9)) return false;
             double V[9];
             for (int32 I = 0; I < 9; ++I)
@@ -142,7 +143,7 @@ struct FBeforeLayout
                     FDefaultValueHelper::ParseDouble(Values[I].TrimStartAndEnd(), V[I]) && FMath::IsFinite(V[I]))) return false;
             const FString Name = Match.GetCaptureGroup(1);
             if (!Test.TestFalse(TEXT("基线 actor 名称不重复"), Actors.Contains(Name))) return false;
-            Actors.Add(Name, {Match.GetCaptureGroup(2), Match.GetCaptureGroup(3),
+            Actors.Add(Name, {Match.GetCaptureGroup(2), Match.GetCaptureGroup(4),
                 FTransform(FRotator(V[3], V[4], V[5]), FVector(V[0], V[1], V[2]), FVector(V[6], V[7], V[8]))});
         }
         return Test.TestEqual(TEXT("Before 布局真实记录 312 个 actor"), Actors.Num(), 312);
@@ -196,6 +197,7 @@ struct FSavedSupplies
     TArray<ALiquidContainerActor*> Vessels;
     TArray<AActor*> Tools;
     AIceScoopActor* Scoop = nullptr;
+    ADirectBeanJarActor* BeanJar = nullptr;
     TMap<FString, AActor*> Actors;
     bool Load(FAutomationTestBase& Test)
     {
@@ -219,9 +221,22 @@ struct FSavedSupplies
             Actors.Add(A->GetName(), A);
             if (auto* M = Cast<AGlassRecoveryActor>(A)) { ++Managers; Manager = M; }
         }
+        int32 Added = 0, JarCount = 0;
+        for (const auto& Pair : Actors)
+        {
+            auto* Jar = Cast<ADirectBeanJarActor>(Pair.Value);
+            if (Jar) { ++JarCount; BeanJar = Jar; }
+            if (Before.Actors.Contains(Pair.Key)) continue;
+            ++Added;
+            if (!Test.TestTrue(TEXT("本轮仅允许新增原生 DirectBeanJar 派生的保存 BP，不能用未知根凑313"),
+                Jar && !Pair.Key.IsEmpty() && Jar->GetClass()->GetName() == TEXT("BP_DirectBeanJar_C"))) return false;
+        }
+        if (!Test.TestEqual(TEXT("Before312之外严格只新增一个豆罐"), Added, 1)
+            || !Test.TestEqual(TEXT("保存地图仅一个 DirectBeanJar"), JarCount, 1)
+            || !Test.TestEqual(TEXT("保存地图数量等于本轮Before加一"), Actors.Num(), Before.Actors.Num() + 1)) return false;
         if (!Test.TestEqual(TEXT("全地图仅一个 GlassRecoveryActor，不按 label 筛掉额外经理"), Managers, 1)
             || !Test.TestNotNull(TEXT("保存恢复经理"), Manager)) return false;
-        Test.TestEqual(TEXT("保存替换清单必须为十五项"), Manager->RestoreTargets.Num(), 15);
+        Test.TestEqual(TEXT("保存替换清单必须为十六项"), Manager->RestoreTargets.Num(), 16);
         Test.TestEqual(TEXT("保存显式工具清单必须为三项"), Manager->RestoreToolTargets.Num(), 3);
         Test.TestTrue(TEXT("保存地图显式 opt-in 全用品"), Manager->bRestoreAllSupplies);
         if (!Test.TestNotNull(TEXT("保存首杯原型有效"), Manager->PrototypeCup.Get())
@@ -230,11 +245,11 @@ struct FSavedSupplies
         TSet<ALiquidContainerActor*> ReplacementSet;
         for (const auto& A : Manager->RestoreTargets)
         {
-            if (!Test.TestNotNull(TEXT("十五项不允许空引用"), A.Get())) return false;
+            if (!Test.TestNotNull(TEXT("十六项不允许空引用"), A.Get())) return false;
             Test.TestFalse(TEXT("保存替换清单不重复"), ReplacementSet.Contains(A.Get()));
             ReplacementSet.Add(A.Get()); Vessels.AddUnique(A.Get());
         }
-        Test.TestTrue(TEXT("十五项显式包含首杯首瓶"), ReplacementSet.Contains(Manager->PrototypeCup.Get())
+        Test.TestTrue(TEXT("十六项显式包含首杯首瓶"), ReplacementSet.Contains(Manager->PrototypeCup.Get())
             && ReplacementSet.Contains(Manager->PrototypeBottle.Get()));
         for (const auto& A : Manager->RestoreToolTargets)
         {
@@ -242,7 +257,8 @@ struct FSavedSupplies
             Tools.AddUnique(A.Get());
         }
         Scoop = Manager->RestoreScoop.Get();
-        return Test.TestEqual(TEXT("原型与替换清单 union 仍是十五槽"), Vessels.Num(), 15)
+        Test.TestTrue(TEXT("唯一新豆罐必须在 replacement 清单内"), ReplacementSet.Contains(BeanJar));
+        return Test.TestEqual(TEXT("原型与替换清单 union 为十六槽"), Vessels.Num(), 16)
             && Test.TestEqual(TEXT("工具无重复"), Tools.Num(), 3)
             && Test.TestNotNull(TEXT("冰铲单独列出"), Scoop);
     }
@@ -328,7 +344,14 @@ struct FAllWorld
     AActor* SpawnSaved(AActor* Original)
     {
         const auto* Baseline = Saved.Before.Actors.Find(Original->GetName());
-        if (!Test.TestNotNull(TEXT("每个根来自 Before，而非旧脚本硬编码位置"), Baseline)) return nullptr;
+        FBeforeActor AddedJar;
+        if (!Baseline && Original == Saved.BeanJar)
+        {
+            // 本轮 Before 尚无新罐；仅这一个已验证的新增身份使用实际保存类与位姿。
+            AddedJar.Class = Original->GetClass()->GetPathName(); AddedJar.Pose = Original->GetActorTransform();
+            Baseline = &AddedJar;
+        }
+        if (!Test.TestNotNull(TEXT("旧根必须来自本轮Before；仅唯一新豆罐使用保存实例"), Baseline)) return nullptr;
         UClass* Class = LoadClass<AActor>(nullptr, *Baseline->Class);
         if (!Test.TestNotNull(TEXT("从最新布局加载真实保存 class，无原生替代兜底"), Class)) return nullptr;
         AActor* A = World->SpawnActorDeferred<AActor>(Class, Baseline->Pose, nullptr, nullptr,
@@ -346,6 +369,12 @@ struct FAllWorld
             Target->bAcceptLiquidFromOthers = Source->bAcceptLiquidFromOthers;
             Target->LiquidColor = Source->LiquidColor;
             Target->GlassBreakProfile = Source->GlassBreakProfile;
+            if (auto* Jar = Cast<ADirectBeanJarActor>(Target))
+            {
+                const auto* OldJar = CastChecked<ADirectBeanJarActor>(Source);
+                Jar->BeanCapacityGrams = OldJar->BeanCapacityGrams; Jar->InitialBeanGrams = OldJar->InitialBeanGrams;
+                Jar->FillAmount = 0; Jar->bCanPour = false; Jar->bAcceptLiquidFromOthers = false;
+            }
             Target->PourEntryRadius = Source->PourEntryRadius;
             Target->PourEntryPoint->SetAbsolute(Source->PourEntryPoint->IsUsingAbsoluteLocation(),
                 Source->PourEntryPoint->IsUsingAbsoluteRotation(), Source->PourEntryPoint->IsUsingAbsoluteScale());
@@ -452,9 +481,14 @@ struct FAllWorld
             auto* Bottle = Cast<ABottleActor>(Slot.Identity);
             if (Bottle && Bottle->CapActor) StopSimulation(Bottle->CapActor.Get());
         }
-        Test.TestEqual(TEXT("经理实际捕获十五槽"), Manager->GetRestoreSlotCount(), 15);
+        for (const auto& Slot : Slots) if (auto* Jar = Cast<ADirectBeanJarActor>(Slot.Identity))
+        {
+            Near(Test, TEXT("新豆罐BeginPlay只初始化150g"), Jar->GetBeanGrams(), 150);
+            Near(Test, TEXT("新豆罐BeginPlay液体始终零"), Slot.Volume, 0);
+        }
+        Test.TestEqual(TEXT("经理实际捕获十六槽"), Manager->GetRestoreSlotCount(), 16);
         Test.TestEqual(TEXT("经理实际捕获三工具"), Manager->GetRestoreToolCount(), 3);
-        Test.TestEqual(TEXT("实际 Game World 可抓根是十九，不把盖柄抽屉冰计为根"), GrabRoots(World, false).Num(), 19);
+        Test.TestEqual(TEXT("实际 Game World 可抓根是二十，不把盖柄抽屉冰计为根"), GrabRoots(World, false).Num(), 20);
         return !Test.HasAnyErrors();
     }
 
@@ -575,6 +609,7 @@ struct FUnchanged
         UMotionControllerComponent* Controller = nullptr;
     };
     TArray<FActorState> Actors;
+    TMap<ADirectBeanJarActor*, FBeanJarLedgerSnapshot> BeanLedgers;
     FLiquidBalance Balance;
     int32 Generation, CapCount, Loaded, PartCount;
     double Beans, Grounds, DrawerGrounds, DripperGrounds, Budget, Consumed, Output, Loss;
@@ -597,6 +632,7 @@ struct FUnchanged
         {
             AActor* A = *It; if (!Alive(A)) continue;
             FActorState S{A, A->GetActorTransform(), A->GetRootComponent(), A->GetOwner()};
+            if (auto* Jar = Cast<ADirectBeanJarActor>(A)) BeanLedgers.Add(Jar, Jar->GetBeanLedger());
             if (auto* L = Cast<ALiquidContainerActor>(A))
             {
                 S.Volume = L->GetPreciseVolumeML(); S.Revision = L->GetLiquidRevision();
@@ -634,6 +670,14 @@ struct FUnchanged
                 Test.TestTrue(TEXT("拒绝不强制 Drop/StopPull"), Grab->IsHeld() == S.Held && Grab->IsPulled() == S.Pulled
                     && Grab->GetHoldingController() == S.Controller);
         }
+        for (const auto& Pair : BeanLedgers)
+        {
+            if (!Test.TestTrue(TEXT("拒绝后豆罐身份保留"), Alive(Pair.Key))) continue;
+            const auto A = Pair.Key->GetBeanLedger(); const auto& B = Pair.Value;
+            Test.TestTrue(TEXT("预检拒绝不修改任一豆账历史字段"), A.InitialGrams == B.InitialGrams &&
+                A.InjectedGrams == B.InjectedGrams && A.AcceptedGrams == B.AcceptedGrams && A.SpilledGrams == B.SpilledGrams &&
+                A.DiscardedGrams == B.DiscardedGrams && A.CurrentGrams == B.CurrentGrams && A.TotalPouredGrams == B.TotalPouredGrams);
+        }
         Test.TestEqual(TEXT("拒绝不推进代数"), T.Manager->GetRestoreGeneration(), Generation);
         Test.TestEqual(TEXT("拒绝不预建盖"), Caps(T.World), CapCount);
         Test.TestEqual(TEXT("拒绝不丢铲内冰"), T.Scoop->GetLoadedCount(), Loaded);
@@ -655,7 +699,8 @@ struct FUnchanged
         Near(Test, TEXT("拒绝保留柄角"), T.Grinder->HandleRef->CurrentAngleDeg, HandleAngle);
         Test.TestTrue(TEXT("拒绝保留抽屉状态"), T.Grinder->DrawerRef->State == DrawerState);
         for (int32 I = 0; I < T.Slots.Num(); ++I)
-            Test.TestTrue(TEXT("拒绝保留全部十五槽引用"), T.Manager->GetCurrent(I) == T.Slots[I].Identity);
+            Test.TestTrue(TEXT("拒绝保留全部十六槽引用，已丢失身份仍返回空"),
+                T.Manager->GetCurrent(I) == (Alive(T.Slots[I].Identity) ? T.Slots[I].Identity : nullptr));
     }
 };
 
@@ -691,6 +736,13 @@ bool CheckRestored(FAutomationTestBase& Test, FAllWorld& T, const TArray<ALiquid
         Test.TestTrue(TEXT("新槽为 replacement、非冻结破碎并激活抓取"), A->bInitialVolumeIsReplacement
             && !A->IsLiquidFrozen() && !A->IsBroken() && A->GrabComp->IsActive());
         Test.TestFalse(TEXT("成功退出不遗留新槽发量门"), A->bWorkbenchRestoreEmissionBlocked);
+        if (auto* Jar = Cast<ADirectBeanJarActor>(A))
+        {
+            Near(Test, TEXT("恢复豆罐为150g，非150mL"), Jar->GetBeanGrams(), 150);
+            Near(Test, TEXT("恢复豆罐液体恒零"), Jar->GetPreciseVolumeML(), 0);
+            Near(Test, TEXT("恢复豆账历史守恒"), Jar->GetBeanBalanceError(), 0);
+            Test.TestFalse(TEXT("豆罐不启用液体发射或循环水声"), Jar->bCanPour || Jar->bEnablePourAudio);
+        }
         for (int32 M = 0; M < S.Materials.Num(); ++M)
             Test.TestTrue(TEXT("材质保持捕获资产，不继承运行时 MID"), MaterialParent(A->ContainerMesh->GetMaterial(M)) == S.Materials[M]);
         if (auto* Cup = Cast<ACupActor>(A))
@@ -713,10 +765,10 @@ bool CheckRestored(FAutomationTestBase& Test, FAllWorld& T, const TArray<ALiquid
         StopSimulation(A);
         QuietPresentation(A);
     }
-    Test.TestEqual(TEXT("新鲜槽恰好十五或冻结保护后的十四"), Fresh, Protected ? 14 : 15);
-    Test.TestEqual(TEXT("当前十五身份无重复"), Current.Num(), 15);
+    Test.TestEqual(TEXT("新鲜槽恰好十六或冻结保护后的十五"), Fresh, Protected ? 15 : 16);
+    Test.TestEqual(TEXT("当前十六身份无重复"), Current.Num(), 16);
     Test.TestEqual(TEXT("盖数量与初始封口数精确一致"), Caps(T.World), ExpectedCaps);
-    Test.TestEqual(TEXT("恢复后十九根总数恒定，包括冻结根，不计动态子件"), GrabRoots(T.World, false).Num(), 19);
+    Test.TestEqual(TEXT("恢复后二十根总数恒定，包括冻结根，不计动态子件"), GrabRoots(T.World, false).Num(), 20);
     Test.TestEqual(TEXT("研磨器只有一柄一抽屉"), OwnedParts(T.World, T.Grinder), 2);
     for (int32 I = 0; I < T.ToolPoses.Num(); ++I)
     {
@@ -746,7 +798,7 @@ bool FAllSuppliesSavedManifest::RunTest(const FString&)
 {
     FSavedSupplies S;
     if (!S.Load(*this)) return false;
-    TestEqual(TEXT("保存地图仍是 Before 的 312 actor，没有删除"), S.Actors.Num(), S.Before.Actors.Num());
+    TestEqual(TEXT("保留Before312并严格新增一个豆罐，不盲改基线为313"), S.Actors.Num(), S.Before.Actors.Num() + 1);
     for (const auto& Pair : S.Before.Actors)
     {
         AActor* const* Found = S.Actors.Find(Pair.Key);
@@ -765,7 +817,7 @@ bool FAllSuppliesSavedManifest::RunTest(const FString&)
     TSet<AActor*> Manifest;
     for (auto* A : S.Vessels)
     {
-        TestTrue(TEXT("十五替换根确为瓶杯，不把壶滤杯放入 replacement"),
+        TestTrue(TEXT("十六替换根确为瓶杯，不把壶滤杯放入 replacement"),
             (Cast<ABottleActor>(A) || Cast<ACupActor>(A)) && !Cast<AHandPourKettleActor>(A));
         Manifest.Add(A);
     }
@@ -781,14 +833,34 @@ bool FAllSuppliesSavedManifest::RunTest(const FString&)
     TestEqual(TEXT("显式壶一个"), Kettles, 1); TestEqual(TEXT("显式滤杯一个"), Drippers, 1); TestEqual(TEXT("显式研磨器一个"), Grinders, 1);
     TestEqual(TEXT("指定原冰铲"), S.Scoop->GetName(), FString(TEXT("IceScoop_Practice")));
     Manifest.Add(S.Scoop);
-    TestEqual(TEXT("完整清单 union 恰好十九根"), Manifest.Num(), 19);
+    TestEqual(TEXT("完整清单 union 恰好二十根"), Manifest.Num(), 20);
     const TSet<AActor*> AllMap = GrabRoots(S.Map, true);
-    TestEqual(TEXT("地图 UGrabComponent owner 去除运行时子件后恰好十九根"), AllMap.Num(), 19);
+    TestEqual(TEXT("地图 UGrabComponent owner 去除运行时子件后恰好二十根"), AllMap.Num(), 20);
     for (auto* A : AllMap) TestTrue(TEXT("每个真实可抓根都在 union，不能只凭数量声称全覆盖"), Manifest.Contains(A));
     for (auto* A : Manifest) TestTrue(TEXT("每个清单根都是真实 map UGrab owner"), AllMap.Contains(A));
+    int32 Bottles = 0, Cups = 0, Jars = 0, LiquidAdapters = 0;
+    for (auto* A : S.Vessels)
+    {
+        if (auto* Jar = Cast<ADirectBeanJarActor>(A))
+        {
+            ++Jars;
+            TestTrue(TEXT("清单豆罐必须是唯一新增保存身份"), Jar == S.BeanJar);
+            Near(*this, TEXT("保存豆罐库存150g"), Jar->GetBeanGrams(), 150);
+            Near(*this, TEXT("保存豆罐Fill与实际液量均零"), Jar->FillAmount + Jar->GetPreciseVolumeML(), 0);
+        }
+        else if (Cast<ABottleActor>(A)) ++Bottles;
+        else if (Cast<ACupActor>(A)) ++Cups;
+    }
+    TestEqual(TEXT("原九瓶完整保留"), Bottles, 9); TestEqual(TEXT("原六杯完整保留"), Cups, 6);
+    TestEqual(TEXT("replacement额外恰好一个豆罐"), Jars, 1);
     for (const auto& Pair : S.Actors)
-        TestFalse(TEXT("保存布局无 beanJar/beanScoop，不能从其他地图偷偷补根"),
-            Pair.Value->GetClass()->GetName().Contains(TEXT("BeanJar")) || Pair.Value->GetClass()->GetName().Contains(TEXT("CoffeeScoop")));
+    {
+        LiquidAdapters += Cast<ALiquidContainerActor>(Pair.Value) != nullptr;
+        TestFalse(TEXT("仅允许DirectBeanJar，不额外加入旧BeanJar或CoffeeScoop"),
+            (Pair.Value->GetClass()->GetName().Contains(TEXT("BeanJar")) && !Cast<ADirectBeanJarActor>(Pair.Value))
+            || Pair.Value->GetClass()->GetName().Contains(TEXT("CoffeeScoop")));
+    }
+    TestEqual(TEXT("保存液体适配器18，其中17液体加1零液豆罐"), LiquidAdapters, 18);
     auto* Screen = Cast<AOrderHologramActor>(S.Actors.FindRef(TEXT("BP_OrderHologram_Tutorial")));
     if (!TestNotNull(TEXT("原菜单仍在地图"), Screen)) return false;
     TestTrue(TEXT("新菜单朝向在保存实例 opt-in"), Screen->bFaceHeadset);
@@ -843,6 +915,11 @@ bool FAllSuppliesRestoreRoots::RunTest(const FString&)
             Near(*this, TEXT("每只旧杯真实加入一百二十毫升"), Cup->AddIngredientLiquid(120, Milk, FLinearColor::White), 120);
             if (!PutIce(*this, T, Cup, 3)) return false;
         }
+        else if (auto* Jar = Cast<ADirectBeanJarActor>(A))
+        {
+            Near(*this, TEXT("旧豆罐库存仍150g，不消耗假毫升"), Jar->GetBeanGrams(), 150);
+            Near(*this, TEXT("旧豆罐液体库存恒零"), Jar->GetPreciseVolumeML(), 0);
+        }
         else Near(*this, TEXT("每只旧瓶真实消耗二十毫升"), A->ConsumeLiquid(20), 20);
     }
     if (!LoadScoop(*this, T)) return false;
@@ -855,7 +932,7 @@ bool FAllSuppliesRestoreRoots::RunTest(const FString&)
     const double DiscardBeans = T.Grinder->DiscardedBeanGrams, DiscardGround = T.Grinder->DiscardedGroundGrams;
     const double DiscardDrawer = Drawer->DiscardedGroundGrams, DiscardFilter = T.Dripper->DiscardedGroundsGrams;
     const int32 CapsBefore = Caps(T.World);
-    if (!TestTrue(TEXT("真实配置十九根整批恢复成功"), T.Manager->RestoreWorkbench())) return false;
+    if (!TestTrue(TEXT("真实配置二十根整批恢复成功"), T.Manager->RestoreWorkbench())) return false;
     if (!CheckRestored(*this, T, Old)) return false;
     TestTrue(TEXT("三个工具 identity 原封保留"), T.Kettle == KettleIdentity && T.Dripper == DripperIdentity && T.Grinder == GrinderIdentity);
     TestTrue(TEXT("柄、抽屉、铲抓取 identity 原封保留"), T.Grinder->HandleRef.Get() == Handle && T.Grinder->DrawerRef.Get() == Drawer && T.Scoop->Grab.Get() == ScoopGrab);
@@ -931,14 +1008,14 @@ bool FAllSuppliesHold::RunTest(const FString&)
     for (int32 I = 0; I < 4; ++I) TestFalse(TEXT("继续两秒锁存，不重复创建"), T.Manager->AdvanceRestoreHold(.5f, true));
     TestEqual(TEXT("持续按代数仍为一"), T.Manager->GetRestoreGeneration(), 1);
     SameBalance(*this, Balance, T.Transfer()->GetBalance());
-    TestTrue(TEXT("持续按保留首次十五身份"), CurrentSlots(T) == First);
+    TestTrue(TEXT("持续按保留首次十六身份"), CurrentSlots(T) == First);
     TestEqual(TEXT("持续按盖数不变"), Caps(T.World), CapCount);
     T.Manager->AdvanceRestoreHold(0, false);
     Near(*this, TEXT("松开清零进度"), T.Manager->GetRestoreProgress(), 0);
     TestFalse(TEXT("松开后半秒仍不足"), T.Manager->AdvanceRestoreHold(.5f, true));
     TestTrue(TEXT("松开后完整一秒可触发第二代"), T.Manager->AdvanceRestoreHold(.5f, true));
     TestEqual(TEXT("代数恰好二"), T.Manager->GetRestoreGeneration(), 2);
-    TestEqual(TEXT("长按恢复十九根恒定"), GrabRoots(T.World, false).Num(), 19);
+    TestEqual(TEXT("长按恢复二十根恒定"), GrabRoots(T.World, false).Num(), 20);
     Balanced(*this, T);
     AddInfo(TEXT("只验证 AdvanceRestoreHold 明确时间和实体键几何；未调用要求真实 MC.IsTracked 的 Tick 轮询，不声称硬件输入验收。"));
     return !HasAnyErrors();
@@ -992,7 +1069,7 @@ bool FAllSuppliesBusy::RunTest(const FString&)
     for (int32 I = 0; I < 4; ++I) TestFalse(TEXT("放下但不松键，失败仍锁存"), T.Manager->AdvanceRestoreHold(.5f, true));
     AfterDrop.Check(*this, T);
     T.Manager->AdvanceRestoreHold(0, false);
-    TestTrue(TEXT("松键之后全部闲置才允许十九根恢复"), T.Manager->RestoreWorkbench());
+    TestTrue(TEXT("松键之后全部闲置才允许二十根恢复"), T.Manager->RestoreWorkbench());
     TestEqual(TEXT("仅成功推进一代"), T.Manager->GetRestoreGeneration(), 1);
     Balanced(*this, T);
     return !HasAnyErrors();
@@ -1047,7 +1124,7 @@ bool FAllSuppliesFrozen::RunTest(const FString&)
     const auto Balance = T.Transfer()->GetBalance();
     double ExpectedRemoved = T.Kettle->GetPreciseVolumeML() + T.Dripper->GetPreciseVolumeML();
     for (auto* A : Old) if (A != Cup) ExpectedRemoved += A->GetPreciseVolumeML();
-    if (!TestTrue(TEXT("目标内冻结杯不阻断其他十八根恢复"), T.Manager->RestoreWorkbench())) return false;
+    if (!TestTrue(TEXT("目标内冻结杯不阻断其他十九根恢复"), T.Manager->RestoreWorkbench())) return false;
     Near(*this, TEXT("冻结液体不计入 Removed"), T.Transfer()->GetBalance().RemovedML - Balance.RemovedML, ExpectedRemoved);
     if (!CheckRestored(*this, T, Old, Cup)) return false;
     TestTrue(TEXT("冻结身份保持，状态文案明确 protected"), Alive(Cup) && Cup->IsLiquidFrozen()
@@ -1122,7 +1199,7 @@ bool FAllSuppliesFlight::RunTest(const FString&)
     const auto Before = T.Transfer()->GetBalance();
     const int32 AudioStarts = T.Kettle->AudioStartCount;
     auto* Loop = T.Kettle->PourLoopSound.Get();
-    if (!TestTrue(TEXT("十九根整批准备和恢复"), T.Manager->RestoreWorkbench())) return false;
+    if (!TestTrue(TEXT("二十根整批准备和恢复"), T.Manager->RestoreWorkbench())) return false;
     if (!CheckRestored(*this, T, Old)) return false;
     TestFalse(TEXT("恢复实际清除壶 pouring"), T.Kettle->bIsPouring);
     Near(*this, TEXT("恢复实际清除壶 flow"), T.Kettle->CurrentFlowMLPerSecond, 0);
@@ -1244,7 +1321,7 @@ bool FAllSuppliesRestoreEmissionFlagExit::RunTest(const FString&)
         Before.Check(*this, T);
         if (!TestTrue(TEXT("真实 Drop 后允许恢复"), Bottle->GrabComp->TryRelease())) return false;
         StopSimulation(Bottle);
-        if (!TestTrue(TEXT("已有门状态不影响十九根真实恢复"), T.Manager->RestoreWorkbench())) return false;
+        if (!TestTrue(TEXT("已有门状态不影响二十根真实恢复"), T.Manager->RestoreWorkbench())) return false;
         TestTrue(TEXT("成功退出恢复原地壶原来 true 的门"), T.Kettle->bWorkbenchRestoreEmissionBlocked);
         TestFalse(TEXT("原地滤杯不遗留新门"), T.Dripper->bWorkbenchRestoreEmissionBlocked);
         for (const auto& Guard : Old)
@@ -1257,7 +1334,7 @@ bool FAllSuppliesRestoreEmissionFlagExit::RunTest(const FString&)
             if (!TestTrue(TEXT("全部新槽仍有效"), Alive(A))) return false;
             TestFalse(TEXT("所有完成 FinishSpawning 的新槽已解除发量门"), A->bWorkbenchRestoreEmissionBlocked);
         }
-        TestEqual(TEXT("恢复后仍十九根"), GrabRoots(T.World, false).Num(), 19);
+        TestEqual(TEXT("恢复后仍二十根"), GrabRoots(T.World, false).Num(), 20);
         TestEqual(TEXT("只成功发布一次"), T.Manager->GetRestoreGeneration(), 1);
     }
     TestFalse(TEXT("调用者原有临时门自行退出"), T.Kettle->bWorkbenchRestoreEmissionBlocked);
@@ -1340,7 +1417,7 @@ bool FAllSuppliesInvalid::RunTest(const FString&)
         }
         Blocking->SetActorLocation(Far.GetLocation());
         const auto FrozenPose = Blocking->GetActorTransform();
-        TestTrue(TEXT("移开占位后真实十九根可恢复"), T.Manager->RestoreWorkbench());
+        TestTrue(TEXT("移开占位后真实二十根可恢复"), T.Manager->RestoreWorkbench());
         TestTrue(TEXT("非目标冻结杯不删不移"), Alive(Blocking) && Blocking->GetActorTransform().Equals(FrozenPose) && Blocking->IsLiquidFrozen());
         Near(*this, TEXT("非目标冻结液体保留"), Blocking->GetPreciseVolumeML(), 20);
         Balanced(*this, T);
@@ -1413,7 +1490,7 @@ bool FAllSuppliesFunctional::RunTest(const FString&)
     T.Grinder->AdvanceGrinding(360, .3f);
     Near(*this, TEXT("二次恢复后的抽屉仍仅新增二点五"), Drawer->GetGroundsGrams(), 2.5);
     TestEqual(TEXT("两次后子件不积累"), OwnedParts(T.World, T.Grinder), 2);
-    TestEqual(TEXT("两次后仍十九根"), GrabRoots(T.World, false).Num(), 19);
+    TestEqual(TEXT("两次后仍二十根"), GrabRoots(T.World, false).Num(), 20);
     Balanced(*this, T);
     return !HasAnyErrors();
 }
@@ -1422,7 +1499,7 @@ bool FAllSuppliesFunctional::RunTest(const FString&)
 bool PrepareRestorableScene(FAutomationTestBase& Test, FAllWorld& T)
 {
     if (!T.Init()) return false;
-    Test.TestEqual(TEXT("回调夹具从真实保存配置加载十九个可抓根"), GrabRoots(T.World, false).Num(), 19);
+    Test.TestEqual(TEXT("回调夹具从真实保存配置加载二十个可抓根"), GrabRoots(T.World, false).Num(), 20);
     for (int32 I = 0; I < T.ToolPoses.Num(); ++I)
         Test.TestTrue(TEXT("回调夹具三工具使用原捕获指针"),
             T.Manager->GetCapturedTool(I) == T.Spawned.FindChecked(T.Saved.Tools[I]));
@@ -1512,7 +1589,7 @@ bool FAllSuppliesFrozenDuringReset::RunTest(const FString&)
         TestTrue(TEXT("失败没有迁移任何经理槽或公开目标指针"), T.Manager->GetCurrent(I) == Old[I]
             && T.Manager->RestoreTargets[I].Get() == Old[I] && Alive(OldGuards[I].Get()));
     TestEqual(TEXT("含 Deferred 的液体根数前后相等，无未发布预建残留"), LiquidRootsIncludingDeferred(T.World), LiquidCount);
-    TestEqual(TEXT("十九个原可抓根前后相等"), GrabRoots(T.World, false).Num(), RootCount);
+    TestEqual(TEXT("二十个原可抓根前后相等"), GrabRoots(T.World, false).Num(), RootCount);
     CheckCallbackEmissionFlags(*this, T, OldGuards);
     return !HasAnyErrors();
 }
@@ -1558,7 +1635,7 @@ bool FAllSuppliesToolChildKilledDuringReset::RunTest(const FString&)
         TestTrue(TEXT("失败保留所有原槽和公开目标引用"), T.Manager->GetCurrent(I) == Old[I]
             && T.Manager->RestoreTargets[I].Get() == Old[I] && Alive(OldGuards[I].Get()));
     TestEqual(TEXT("失败清理全部 Deferred 液体根，数量不增加"), LiquidRootsIncludingDeferred(T.World), LiquidCount);
-    TestEqual(TEXT("子件销毁不替换十九个原用品根"), GrabRoots(T.World, false).Num(), RootCount);
+    TestEqual(TEXT("子件销毁不替换二十个原用品根"), GrabRoots(T.World, false).Num(), RootCount);
     CheckCallbackEmissionFlags(*this, T, OldGuards);
     return !HasAnyErrors();
 }
@@ -1669,6 +1746,78 @@ bool FAllSuppliesNoReentrantKettleEmitDuringRefill::RunTest(const FString&)
     T.Transfer()->Simulate(FinalHorizon + .15);
     Near(*this, TEXT("重复结算不再次洒出旧包"), T.Transfer()->GetBalance().SpilledML, SettledSpilled);
     CheckCallbackEmissionFlags(*this, T, OldGuards);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAllSuppliesBeanLedgerHistory,
+    "CyberCafe.AllSupplies.BeanJarRuntimeLedgerAcrossRestores", Flags)
+bool FAllSuppliesBeanLedgerHistory::RunTest(const FString&)
+{
+    FAllWorld T(*this); if (!T.Init()) return false;
+    int32 JarIndex = INDEX_NONE;
+    for (int32 I = 0; I < T.Slots.Num(); ++I) if (Cast<ADirectBeanJarActor>(T.Manager->GetCurrent(I))) JarIndex = I;
+    if (!TestTrue(TEXT("真实保存清单含豆罐槽"), JarIndex != INDEX_NONE)) return false;
+    for (int32 Round = 0; Round < 3; ++Round)
+    {
+        auto* Jar = Cast<ADirectBeanJarActor>(T.Manager->GetCurrent(JarIndex));
+        if (!TestNotNull(TEXT("当前真实豆罐"), Jar)) return false;
+        TStrongObjectPtr<ADirectBeanJarActor> OldJar(Jar);
+        if (Round == 1)
+        {
+            if (!TestTrue(TEXT("第二轮真实打碎豆罐，不手写洒落历史"), Jar->BreakContainerForImpact())) return false;
+            TestTrue(TEXT("碎罐保留Actor而非销毁，仍可读取历史"), Alive(Jar) && Jar->IsBroken());
+            Near(*this, TEXT("碎罐账本当前克数归零"), Jar->GetBeanLedger().CurrentGrams, 0);
+            Near(*this, TEXT("碎罐真实余豆150g计入洒落"), Jar->GetBeanLedger().SpilledGrams, 150);
+        }
+        const FBeanJarLedgerSnapshot Before = Jar->GetBeanLedger();
+        const auto Old = CurrentSlots(T);
+        if (!TestTrue(TEXT("真实豆罐整批恢复成功"), T.Manager->RestoreWorkbench())) return false;
+        if (!CheckRestored(*this, T, Old)) return false;
+        auto* NewJar = Cast<ADirectBeanJarActor>(T.Manager->GetCurrent(JarIndex));
+        if (!TestNotNull(TEXT("恢复发布新豆罐"), NewJar)) return false;
+        const auto After = NewJar->GetBeanLedger();
+        const auto Retired = OldJar->GetBeanLedger();
+        Near(*this, TEXT("最初150g历史不被新罐默认初始库存覆盖或累加"), After.InitialGrams, Before.InitialGrams);
+        Near(*this, TEXT("每轮仅实际新供给150g记Injected"), After.InjectedGrams, Before.InjectedGrams + 150);
+        Near(*this, TEXT("旧剩余库存仅一次转入Discarded"), After.DiscardedGrams, Before.DiscardedGrams + Before.CurrentGrams);
+        Near(*this, TEXT("新旧退役账核算相同Discarded，不双计"), After.DiscardedGrams, Retired.DiscardedGrams);
+        Near(*this, TEXT("接纳历史保留"), After.AcceptedGrams, Before.AcceptedGrams);
+        Near(*this, TEXT("运行时洒落历史保留，不回退至BeginPlay快照"), After.SpilledGrams, Before.SpilledGrams);
+        Near(*this, TEXT("出豆历史保留"), After.TotalPouredGrams, Before.TotalPouredGrams);
+        Near(*this, TEXT("退役旧豆罐库存结清"), Retired.CurrentGrams, 0);
+        Near(*this, TEXT("新库存始终150g而非累积"), After.CurrentGrams, 150);
+        Near(*this, TEXT("新豆罐不注入任何液体"), NewJar->GetPreciseVolumeML(), 0);
+        Near(*this, TEXT("跨三轮豆账守恒"), NewJar->GetBeanBalanceError(), 0);
+        TestFalse(TEXT("成功退出后豆罐公共发量门恢复原值"), NewJar->bWorkbenchRestoreEmissionBlocked);
+    }
+    TestEqual(TEXT("仅发布三代，根数恒为20"), T.Manager->GetRestoreGeneration(), 3);
+    TestEqual(TEXT("豆罐不累积额外根"), GrabRoots(T.World, false).Num(), 20);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAllSuppliesMissingBeanLedger,
+    "CyberCafe.AllSupplies.BeanJarMissingOrInvalidLedgerRejectsBeforeMutation", Flags)
+bool FAllSuppliesMissingBeanLedger::RunTest(const FString&)
+{
+    for (int32 Case = 0; Case < 2; ++Case)
+    {
+        FAllWorld T(*this); if (!T.Init()) return false;
+        ADirectBeanJarActor* Jar = nullptr;
+        for (auto* A : CurrentSlots(T)) if (auto* Found = Cast<ADirectBeanJarActor>(A)) Jar = Found;
+        if (!TestNotNull(TEXT("负例使用真实捕获豆罐"), Jar)) return false;
+        TStrongObjectPtr<ADirectBeanJarActor> JarGuard(Jar);
+        if (Case == 0)
+        {
+            if (!TestTrue(TEXT("负例提前Destroy旧豆罐"), Jar->Destroy())) return false;
+        }
+        else Jar->RestoredBeanGrams = -1; // 明确损坏输入负例，禁止管理器用新库存修正历史。
+        const FUnchanged Before(T);
+        TestFalse(TEXT("缺失或非法豆账须在预建/Prepare前整批拒绝"), T.Manager->RestoreWorkbench());
+        Before.Check(*this, T);
+        TestEqual(TEXT("豆账setup失败状态明确"), T.Manager->RestoreStatus.ToString(),
+            FString(Case == 0 ? TEXT("CHECK SUPPLY SETUP - MISSING BEAN LEDGER") : TEXT("CHECK SUPPLY SETUP - INVALID BEAN LEDGER")));
+        TestEqual(TEXT("失败不发布任何恢复代数"), T.Manager->GetRestoreGeneration(), 0);
+    }
     return !HasAnyErrors();
 }
 }

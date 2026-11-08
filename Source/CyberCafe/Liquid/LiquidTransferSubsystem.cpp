@@ -2,6 +2,7 @@
 #include "Liquid/LiquidTransferSubsystem.h"
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/LiquidTransferMath.h"
+#include "Coffee/Brew/HotWaterSteamComponent.h"
 #include "Components/SceneComponent.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
@@ -35,7 +36,7 @@ void ULiquidTransferSubsystem::Tick(float DeltaTime)
 #endif
 }
 void ULiquidTransferSubsystem::Deinitialize()
-{Packets.Empty();Containers.Empty();PreviousMouths.Empty();Super::Deinitialize();}
+{OnWaterImpactNative.Clear();Packets.Empty();Containers.Empty();PreviousMouths.Empty();Super::Deinitialize();}
 
 void ULiquidTransferSubsystem::RegisterContainer(ALiquidContainerActor* A,double ML)
 {
@@ -96,6 +97,8 @@ bool ULiquidTransferSubsystem::PrepareWorkbenchRestore(const TArray<ALiquidConta
     for(const FRestoreSource& Source:RestoreSources)
     {
         if(ALiquidContainerActor* A=Source.Actor.Get())A->ALiquidContainerActor::StopPouring();
+        if(ALiquidContainerActor* A=Source.Actor.Get())
+            if(auto* Steam=A->FindComponentByClass<UHotWaterSteamComponent>())Steam->StopSteam(true);
         if(UNiagaraComponent* FX=Source.PourFX.Get())FX->DeactivateImmediate();
     }
     return true;
@@ -115,7 +118,7 @@ double ULiquidTransferSubsystem::GetUnsettledFlightHorizon() const
 }
 double ULiquidTransferSubsystem::EmitVolume(ALiquidContainerActor* Source,double ML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay,const FTransform* RibbonTransform)
 {
-    if(!IsValid(Source)||Source->bWorkbenchRestoreEmissionBlocked||!FMath::IsFinite(ML)||ML<=0||Position.ContainsNaN()||Velocity.ContainsNaN()||Gravity.ContainsNaN())return 0;
+    if(!IsValid(Source)||!Source->SupportsLiquidInventory()||Source->bWorkbenchRestoreEmissionBlocked||!FMath::IsFinite(ML)||ML<=0||Position.ContainsNaN()||Velocity.ContainsNaN()||Gravity.ContainsNaN())return 0;
     Source->InitializeLiquidState();
     FLinearColor Color=Source->LiquidColor;
     UMaterialInterface* Material=Source->LiquidMaterialAsset;
@@ -188,6 +191,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
     }
     struct FAccepted{TWeakObjectPtr<ALiquidContainerActor> Source,Target;double ML;};
     TArray<FAccepted> AcceptedEvents;
+    TArray<FHotWaterImpact> ImpactEventQueue;
     TSet<TWeakObjectPtr<ALiquidContainerActor>> Changed,ResetMID;
     double Elapsed=0;
     while(Elapsed<Dt-1.e-12)
@@ -213,13 +217,14 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
             const bool bBlocked=GetWorld()->LineTraceSingleByChannel(Hit,A,B,ECC_Visibility,Params);
             double BestTime=bBlocked?static_cast<double>(Hit.Time):2.0;
             ALiquidContainerActor* Target=nullptr;
+            FVector TargetNormal=FVector::UpVector;
             for(const FMouth& Mouth:Mouths)
             {
                 ALiquidContainerActor* Candidate=Mouth.Actor.Get();
                 if(!Candidate||Candidate==P.Source.Get())continue;
                 double T=0;
                 if(CyberCafeLiquid::CrossMouth(A,B,CyberCafeLiquid::Interpolate(Mouth.Start,Mouth.End,FrameA),CyberCafeLiquid::Interpolate(Mouth.Start,Mouth.End,FrameB),Mouth.Radius,T)&&T<=BestTime+1.e-6)
-                {BestTime=T;Target=Candidate;}
+                {BestTime=T;Target=Candidate;TargetNormal=Mouth.End.GetUnitAxis(EAxis::Z);}
             }
 #if ENABLE_DRAW_DEBUG
             bool bDraw=false;
@@ -232,6 +237,19 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
                 if(Target)DrawDebugPoint(GetWorld(),FMath::Lerp(A,B,BestTime),6,FColor::Green,false,.3f);
             }
 #endif
+            const double PacketML=P.VolumeML;
+            FHotWaterImpact Impact;
+            if(Target||bBlocked)
+            {
+                Impact.Source=P.Source;
+                Impact.Target=Target?Target:Cast<ALiquidContainerActor>(Hit.GetActor());
+                Impact.PacketId=P.Id;
+                Impact.WaterML=P.Composition.Get(TEXT("Water"));
+                const FVector Normal=Target?TargetNormal:Hit.ImpactNormal;
+                Impact.Normal=Normal.ContainsNaN()?FVector::UpVector:Normal.GetSafeNormal();
+                if(Impact.Normal.IsNearlyZero())Impact.Normal=FVector::UpVector;
+                Impact.Point=Target?FMath::Lerp(A,B,BestTime)+Impact.Normal*.3:Hit.ImpactPoint;
+            }
             if(Target)
             {
                 const bool bEmpty=Target->GetPreciseVolumeML()<=0;
@@ -241,6 +259,7 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
                 {
                     if(P.Material){Target->LiquidMaterialAsset=P.Material;if(bEmpty)ResetMID.Add(Target);}
                     Changed.Add(Target);AcceptedEvents.Add({P.Source,Target,Received});
+                    Impact.AcceptedWaterML=Impact.WaterML*Received/PacketML;
                 }
                 P.VolumeML=0;
             }
@@ -251,6 +270,9 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
                 if(P.Age>=3.0||FVector::DistSquared(P.Position,P.Origin)>2000.0*2000.0)
                 {SpilledML+=P.VolumeML;P.VolumeML=0;}
             }
+            // 只收集真实命中；溢出仍有物理水落点，超龄/超距消包不生成事件。
+            if((Target||bBlocked)&&PacketML>0&&FMath::IsFinite(Impact.WaterML)&&Impact.WaterML>0)
+                ImpactEventQueue.Add(MoveTemp(Impact));
         }
         Elapsed+=Step;
     }
@@ -264,4 +286,8 @@ void ULiquidTransferSubsystem::Simulate(double Dt)
         for(const FAccepted& E:AcceptedEvents)if(ALiquidContainerActor* Target=E.Target.Get())
             Events->OnLiquidPoured.Broadcast(E.Source.Get(),Target,static_cast<float>(E.ML));
     }
+    // 保持 bSimulating 护栏；此时已离开 Packets 迭代，允许既有发包回调安全追加。
+    for(const FHotWaterImpact& Impact:ImpactEventQueue)
+        if(ALiquidContainerActor* Source=Impact.Source.Get();Source&&!Source->IsActorBeingDestroyed())
+            OnWaterImpactNative.Broadcast(Impact);
 }

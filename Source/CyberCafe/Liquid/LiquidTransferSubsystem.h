@@ -7,6 +7,17 @@
 class ALiquidContainerActor;
 class UMaterialInterface;
 
+// 真实在途包结算后的只读视觉通知，不参与计量，也不表示温度。
+struct CYBERCAFE_API FHotWaterImpact
+{
+    TWeakObjectPtr<ALiquidContainerActor> Source,Target;
+    FVector Point=FVector::ZeroVector;
+    FVector Normal=FVector::UpVector;
+    double WaterML=0,AcceptedWaterML=0;
+    uint64 PacketId=0;
+};
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnWaterImpactNative,const FHotWaterImpact&);
+
 USTRUCT(BlueprintType)
 struct CYBERCAFE_API FLiquidBalance
 {
@@ -68,6 +79,7 @@ public:
     double EmitVolume(ALiquidContainerActor* Source,double RequestedML,const FVector& Position,const FVector& Velocity,const FVector& Gravity,double BirthDelay=0,const FTransform* RibbonTransform=nullptr);
     double EmitPour(ALiquidContainerActor* Source,double DeltaTime,const FTransform& PourTransform);
     void Simulate(double DeltaTime);
+    FOnWaterImpactNative OnWaterImpactNative;
     double GetUnsettledFlightHorizon() const;
     UFUNCTION(BlueprintPure,Category="Liquid|Debug") FLiquidBalance GetBalance() const;
 private:

@@ -13,6 +13,8 @@ struct FGlassRecoverySlot
  UPROPERTY() TSubclassOf<ALiquidContainerActor> ContainerClass;
  FTransform SpawnTransform;
  float InitialFill=0,Capacity=0;
+ UPROPERTY() float BeanSupplyG=0;
+ UPROPERTY() bool bBeanJar=false;
  FName Ingredient;
  FLinearColor Color;
  UPROPERTY() TObjectPtr<UStaticMesh> Mesh;

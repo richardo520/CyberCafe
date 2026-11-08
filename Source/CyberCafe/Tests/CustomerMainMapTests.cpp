@@ -20,6 +20,7 @@
 #include "Serving/ServingSpotActor.h"
 #include "Liquid/CupActor.h"
 #include "Liquid/GlassRecoveryActor.h"
+#include "Coffee/Bean/DirectBeanJarActor.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -330,16 +331,34 @@ struct FRun
         if (!Cup) Cup = PrototypeCup;
         if (!Need(Wait && Consume && IsValid(Cup) && Cup == PrototypeCup && IsValid(Wait->RequiredSpot) && IsValid(Wait->RequiredRecipe),
             TEXT("保存步骤/原恢复经理唯一教学杯/Spot/配方引用缺失或不一致"))) return false;
-        if (!Need(Recovery->bRestoreAllSupplies && Recovery->RestoreTargets.Num() == 15 && Recovery->RestoreToolTargets.Num() == 3 && IsValid(Recovery->RestoreScoop.Get()), TEXT("新版统一恢复必须覆盖15瓶杯、3工具与冰铲"))) return false;
+        if (!Need(Recovery->bRestoreAllSupplies && Recovery->RestoreTargets.Num() == 16 && Recovery->RestoreToolTargets.Num() == 3 && IsValid(Recovery->RestoreScoop.Get()), TEXT("新版统一恢复必须覆盖9瓶6杯1豆罐、3工具与冰铲，共20目标"))) return false;
         for (const auto& Tool : Recovery->RestoreToolTargets)
             if (!Need(IsValid(Tool.Get()) && Tool->GetWorld() == World, TEXT("新版工具引用必须重映射到真实完整地图副本"))) return false;
-        int32 CupTargetCount = 0;
+        int32 CupTargetCount = 0, BeanJarTargetCount = 0;
+        TSet<AActor*> RestoreUnion;
         for (const auto& Target : Recovery->RestoreTargets)
         {
             if (!Need(IsValid(Target.Get()) && Target->GetWorld() == World, TEXT("保存恢复目标失效或仍指向源地图"))) return false;
+            if (!Need(!RestoreUnion.Contains(Target.Get()), TEXT("16个替换目标不能重复"))) return false;
+            RestoreUnion.Add(Target.Get());
             if (Target.Get() == Cup) ++CupTargetCount;
+            if (auto* Jar = Cast<ADirectBeanJarActor>(Target.Get()))
+            {
+                ++BeanJarTargetCount;
+                if (!Need(Jar->GetClass()->GetName() == TEXT("BP_DirectBeanJar_C") && Jar->FillAmount == 0 &&
+                    Jar->GetPreciseVolumeML() == 0 && FMath::Abs(Jar->GetBeanGrams() - 150.) < VolumeTolerance,
+                    TEXT("唯一保存豆罐必须是新BP、150g且始终零液体"))) return false;
+            }
         }
-        if (!Need(CupTargetCount == 1, TEXT("保存恢复目标未唯一引用新的教学杯"))) return false;
+        for (const auto& Tool : Recovery->RestoreToolTargets)
+        {
+            if (!Need(!RestoreUnion.Contains(Tool.Get()), TEXT("原地工具不能与替换目标重叠或重复"))) return false;
+            RestoreUnion.Add(Tool.Get());
+        }
+        if (!Need(!RestoreUnion.Contains(Recovery->RestoreScoop.Get()), TEXT("冰铲必须是单独原身份"))) return false;
+        RestoreUnion.Add(Recovery->RestoreScoop.Get());
+        if (!Need(CupTargetCount == 1 && BeanJarTargetCount == 1 && RestoreUnion.Num() == 20,
+            TEXT("保存恢复须唯一引用教学杯与新豆罐，16替换加3工具1铲共20"))) return false;
         Spot = Wait->RequiredSpot.Get();
         SavedSpotTM = Spot->GetActorTransform();
         if (!Need(Cup->GetWorld() == World && Spot->GetWorld() == World && Wait->GetOuter() == Director && Consume->GetOuter() == Director,
@@ -388,6 +407,8 @@ struct FRun
         Record(TEXT("BeginPlay 前"));
         World->GetWorldSettings()->NotifyBeginPlay();
         bBeganPlay = true;
+        if (!Need(Recovery->GetRestoreSlotCount() == 16 && Recovery->GetRestoreToolCount() == 3,
+            TEXT("完整地图BeginPlay后实际捕获16替换槽和3原地工具"))) return false;
         DisableHeadlessDependencies();
         if (!RuntimeValid()) return false;
         Cup->ContainerMesh->SetSimulatePhysics(false);
