@@ -26,7 +26,7 @@ public class CyberCafe : ModuleRules
 		// Editor-only UMG identity repair. These modules are never linked into game targets.
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "UMGEditor", "UnrealEd", "SlateRHIRenderer" });
+			PrivateDependencyModuleNames.AddRange(new string[] { "UMGEditor", "UnrealEd", "SlateRHIRenderer", "SignalProcessing" });
 		}
 
 		// 显式将模块根目录及所有子目录加入头文件搜索路径，
