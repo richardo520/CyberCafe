@@ -1,5 +1,6 @@
 // @trace NAR-01 NAR-04 NAR-05 -- Dialogue presentation is separate from task completion.
 #include "Tutorial/TutorialDirector.h"
+#include "CafeSceneMusicComponent.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
@@ -14,6 +15,7 @@
 ATutorialDirector::ATutorialDirector()
 {
     PrimaryActorTick.bCanEverTick = false;
+    SceneMusic = CreateDefaultSubobject<UCafeSceneMusicComponent>(TEXT("SceneMusic"));
     FinishedText = NSLOCTEXT("Tutorial", "DefaultFinished", "教学结束，欢迎来上班！");
     DialogueSpeakerName = NSLOCTEXT("Tutorial", "DefaultSpeaker", "咖啡馆向导");
 }

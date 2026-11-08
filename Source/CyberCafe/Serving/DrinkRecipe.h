@@ -50,5 +50,10 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe") TSubclassOf<ALiquidContainerActor> AcceptedCupClass;
     // -1 不检查冰；0 必须无冰；正数仅表示需要有冰（实际至少 1 块），数值作为建议量，兼容旧资产的 3。
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe",meta=(ClampMin="-1")) int32 ExpectedIceCount=-1;
+    // Optional authored dialogue; never changes numeric or ingredient validation.
+    // Directional feedback applies only to a two-ingredient Coffee/Milk recipe.
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText CoffeeHighFeedback;
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText MilkHighFeedback;
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText AcceptedFeedback;
     UFUNCTION(BlueprintPure,Category="Recipe") FDrinkValidationResult Evaluate(ALiquidContainerActor* Cup) const;
 };

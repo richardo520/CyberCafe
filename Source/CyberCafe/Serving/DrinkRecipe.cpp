@@ -66,12 +66,25 @@ FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
     {
         const double F=R.Composition.Get(Rule.IngredientId)/R.TotalML;
         if(F<Rule.MinFraction-1.e-9||F>Rule.MaxFraction+1.e-9)
+        {
+            // Choose the excess ingredient from the actual failing rule, not
+            // rule order, material colour, or a recipe display alias.
+            if(Rules.Num()==2&&Ids.Contains(TEXT("Coffee"))&&Ids.Contains(TEXT("Milk")))
+            {
+                const bool bCoffeeHigh=(Rule.IngredientId==TEXT("Coffee")&&F>Rule.MaxFraction+1.e-9)
+                    ||(Rule.IngredientId==TEXT("Milk")&&F<Rule.MinFraction-1.e-9);
+                const FText& Authored=bCoffeeHigh?CoffeeHighFeedback:MilkHighFeedback;
+                if(!Authored.IsEmpty())return Fail(EDrinkValidationReason::WrongRatio,Authored.ToString());
+            }
             return Fail(EDrinkValidationReason::WrongRatio,TEXT("配比还没对上。照订单调整；杯子太满时先倒掉一些。"));
+        }
     }
     if(ExpectedIceCount>0&&R.IceCount<1)
         return Fail(EDrinkValidationReason::WrongIce,TEXT("这杯需要加冰。有冰即可，不限块数；补一些冰再送来。"));
     if(ExpectedIceCount==0&&R.IceCount>0)
         return Fail(EDrinkValidationReason::WrongIce,FString::Printf(TEXT("这杯要求无冰，杯中有 %d 块冰。倒空后重做，或换一只空杯。"),R.IceCount));
     R.bAccepted=true;R.Reason=EDrinkValidationReason::Accepted;
-    R.Feedback=FText::FromString(ExpectedIceCount<0?TEXT("饮品份量和配比符合订单。"):TEXT("饮品份量、配比和冰要求符合订单。"));return R;
+    R.Feedback=AcceptedFeedback.IsEmpty()
+        ?FText::FromString(ExpectedIceCount<0?TEXT("饮品份量和配比符合订单。"):TEXT("饮品份量、配比和冰要求符合订单。"))
+        :AcceptedFeedback;return R;
 }

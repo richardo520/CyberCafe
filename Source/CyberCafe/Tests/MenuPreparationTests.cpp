@@ -96,6 +96,9 @@ bool FMenuIceCompatibility::RunTest(const FString&)
  const int32 Index=Menu->FindPinyinIndex(TEXT("BNT"));if(!TestTrue(TEXT("冰拿铁条目存在"),Menu->Entries.IsValidIndex(Index)))return false;
  auto* SourceRecipe=Menu->Entries[Index].Recipe.Get();if(!TestNotNull(TEXT("源配方存在"),SourceRecipe))return false;
  auto* Recipe=DuplicateObject<UDrinkRecipe>(SourceRecipe,GetTransientPackage());if(!TestNotNull(TEXT("独立瞬态配方副本"),Recipe))return false;
+ // This case tests unconfigured ice-policy feedback, independent of authored dialogue.
+ // Only the transient copy opts out; the saved ShiLing recipe is never modified.
+ Recipe->AcceptedFeedback=FText::GetEmpty();
  TestTrue(TEXT("副本不共享源资产身份"),Recipe!=SourceRecipe);TestEqual(TEXT("默认标记仍为-1"),GetDefault<UDrinkRecipe>()->ExpectedIceCount,-1);TestEqual(TEXT("源冰饮资产仍为建议量3"),SourceRecipe->ExpectedIceCount,3);
  MenuPreparationTests::FWorld F;auto* C=F.Cup(Recipe->AcceptedCupClass.Get());F.Begin();
  for(const auto& P:Menu->Entries[Index].Ingredients)C->AddIngredientLiquid(P.VolumeML,P.IngredientId,FLinearColor::White);

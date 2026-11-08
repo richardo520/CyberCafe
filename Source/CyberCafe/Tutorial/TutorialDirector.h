@@ -10,6 +10,7 @@
 class ATutorialNPC;
 class UTutorialStep;
 class UNarrativeWidget;
+class UCafeSceneMusicComponent;
 
 /**
  * 整个教学流程完成时广播（可供成就 / 关卡事件接）。
@@ -108,6 +109,10 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Director")
     TSubclassOf<UNarrativeWidget> NarrativeHUDWidgetClass;
+
+    /** Persistent native scene component; Music is configured only on the cafe instance. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Scene Music")
+    TObjectPtr<UCafeSceneMusicComponent> SceneMusic;
 
     /** Editable identity; never inferred from dialogue text. Empty hides the name row. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial|Dialogue")

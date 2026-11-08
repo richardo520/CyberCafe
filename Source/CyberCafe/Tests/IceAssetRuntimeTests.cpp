@@ -257,11 +257,11 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
     TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     const TCHAR* Names[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"), TEXT("TutorialStep_ShowMessage_2"),
         TEXT("TutorialStep_ShowMessage_3"), TEXT("TutorialStep_WaitForServe_0"), TEXT("TutorialStep_ConsumeServedDrink_0")};
-    const TCHAR* Hints[] = {TEXT("你就是新来的店长？我叫时零。\n这儿能坐吗？柱梯口挤得连转身都难。"),
-        TEXT("先来杯冰拿铁吧，咖啡和牛奶一半一半。\n一只手拿稳瓶身，另一只手抓住瓶盖，向上拔开。"),
-        TEXT("空杯在你左手边，先用那只直筒杯。\n这儿卡在上下城中间，往上赶的、往下赶的，都从门口过。"),
-        TEXT("够不到就别硬探身子，瓶子又不会跑。\n【操作提示】左手 X / 右手 A：远程抓取。"),
-        TEXT("冰拿铁：直筒杯，加冰即可。\n咖啡 100 mL＋牛奶 100 mL。照菜单上的瓶子慢慢倒，看杯旁的 mL 读数。\n做好后放到吧台前的交付位置，再松手。不合适可拿回调整。"),
+    const TCHAR* Hints[] = {TEXT("你醒了？……刚刚说到我教你做一杯拿铁，你就睡着了。快，先看看你的台子。"),
+        TEXT("台子上有咖啡液和牛奶，把瓶盖拿掉，往杯子里倒。"),
+        TEXT("空杯子在你左手边。"),
+        TEXT("够不着就别探身子了。左手按 X，或者右手按 A，隔空就能拿过来。"),
+        TEXT("给我做一杯拿铁。咖啡和牛奶差不多一半一半，加起来一百八到两百毫升。做好了放到吧台前面，不对的话拿回去改。"),
         TEXT("时零准备尝一口，稍等一下。")};
     const int32 OriginalStepIndices[] = {0, 1, 2, 3, 6, 7};
     for (int32 I = 0; I < 6 && Director->Steps.IsValidIndex(OriginalStepIndices[I]); ++I)
@@ -274,7 +274,7 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
         TestTrue(TEXT("旧步骤仍归属原导演"), Step->GetOuter() == Director);
         TestEqual(TEXT("步骤提示精确匹配批准的冰拿铁基线"), Step->HintText.ToString(), FString(Hints[I]));
         const FString Completed = I < 4 ? TEXT("") : (I == 4
-            ? TEXT("冰拿铁已收下。") : TEXT("嗯，奶没盖住咖啡味。\n我今天不赶柱梯。再坐一会儿，可以吧？"));
+            ? TEXT("分量对，比例也对。这杯我收下了。") : TEXT("……嗯，奶和咖啡融得挺好。这杯是给人喝的了。"));
         TestEqual(TEXT("步骤完成文本精确匹配批准基线"), Step->CompletedText.ToString(), Completed);
         FRow Row; Row.Text(TEXT("stage"), TEXT("savedOriginalStep")); Row.Number(TEXT("index"), OriginalStepIndices[I]);
         Row.Text(TEXT("path"), Step->GetPathName()); Row.Text(TEXT("class"), Step->GetClass()->GetPathName());
