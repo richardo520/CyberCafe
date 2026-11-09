@@ -23,6 +23,7 @@ class AActor;
 class UHapticFeedbackEffect_Base;
 class UMaterialInstanceDynamic;
 class UMeshComponent;
+class UMenuPointerComponent;
 
 /** 高亮 MID 缓存：一个 Mesh 上可能有多个材质 Slot，各自需要一个 MID */
 USTRUCT()
@@ -53,6 +54,9 @@ class CYBERCAFE_API AVRPawn : public APawn
 
 public:
     AVRPawn();
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VR|Components")
+    TObjectPtr<UMenuPointerComponent> MenuPointerComp;
 
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaTime) override;

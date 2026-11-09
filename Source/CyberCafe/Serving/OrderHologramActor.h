@@ -20,6 +20,14 @@ class UTextRenderComponent;
 struct FDrinkMenuEntry;
 class AOrderHologramActor;
 DECLARE_MULTICAST_DELEGATE_OneParam(FHologramMenuInteraction, AOrderHologramActor*);
+// 仅用于原生指针几何；不参与反射、输入映射或实体触摸锁存。
+struct CYBERCAFE_API FMenuPointerHit
+{
+    FVector Point=FVector::ZeroVector;
+    double Distance=0;
+    int32 Action=INDEX_NONE;
+    bool bPower=false,bPanel=false;
+};
 USTRUCT(BlueprintType)
 struct FHologramDeliveryRecord
 {
@@ -109,7 +117,15 @@ public:
     UOrderHologramWidget* GetDisplayWidget() const;
     // 仅在启用朝向时更新；Dt 为零立即对准，拒绝输入时保留当前朝向。
     bool UpdatePanelFacing(const FVector& CameraWorld,float Dt);
+    // 只报告当前几何；世界遮挡与成功后才提前返回的 Skip 回调由调用组件负责。
+    bool TraceMenuPointer(const FVector& Start,const FVector& NormalizedDir,double MaxDistance,FMenuPointerHit& Hit) const;
+    bool TryActivateMenuPointer(EControllerHand Hand,const FMenuPointerHit& Hit);
+    UFUNCTION(BlueprintPure,Category="Hologram|Menu") int32 GetPointerActionAtWorldPoint(const FVector& WorldPoint) const;
 private:
+    bool GetMenuPointerPanelGeometry(FTransform& Transform,FVector2D& DrawSize) const;
+    int32 GetMenuPointerActionAtLocalPoint(const FVector& Point) const;
+    // 只在指针动作接受前写入；仅阻止同帧重复动作，不改变实体触摸的重入阶段。
+    uint64 LastAcceptedPointerFrame=MAX_uint64;
     UFUNCTION() void HandleServed(AServingSpotActor* Spot,ALiquidContainerActor* Cup);
     void SetOpen(bool bValue,bool bByPlayer);
     void RefreshDisplay();

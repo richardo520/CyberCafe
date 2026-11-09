@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "VRPawn.h"
+#include "MenuPointerComponent.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -47,6 +48,7 @@
 AVRPawn::AVRPawn()
 {
     PrimaryActorTick.bCanEverTick = true;
+    MenuPointerComp = CreateDefaultSubobject<UMenuPointerComponent>(TEXT("MenuPointer"));
 
     // VROrigin：Pawn根下的偏移点，供相机和手柄挂载
     VROrigin = CreateDefaultSubobject<USceneComponent>(TEXT("VROrigin"));
@@ -177,6 +179,7 @@ void AVRPawn::BeginPlay()
 void AVRPawn::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    if (MenuPointerComp) MenuPointerComp->UpdatePointer(DeltaTime);
 
     // 目标高亮扫描：近距离 Grip 优先，其次远程 Aim（仅在按住 A/X 时）。
     // 已被抓取/拉拽中的手不做扫描，避免"抓着物体时手边其他物体又亮起来"。
@@ -470,6 +473,7 @@ void AVRPawn::OnRemoteGrabRightCompleted(const FInputActionValue& /*Value*/)
 
 void AVRPawn::OnSkipDialogPressed(const FInputActionValue& /*Value*/)
 {
+    if (MenuPointerComp && MenuPointerComp->TryClickFromOriginalTrigger()) return;
     // 单纯作为"跳过意图"信号广播到事件总线，
     // 由上层 UI 流程（教学叙事 Step 等）各自决定如何响应。
     // 本函数不做任何业务判断，保持 VRPawn 的"输入入口"职责单一。

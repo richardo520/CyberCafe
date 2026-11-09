@@ -21,6 +21,27 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "UObject/ConstructorHelpers.h"
+#include "CoreGlobals.h"
+
+namespace
+{
+    constexpr double MenuPointerEpsilon=1.e-4;
+    constexpr double MenuPointerMaxDistance=250.;
+
+    bool IsMenuPointerTransformValid(const FTransform& Transform)
+    {
+        const FVector Scale=Transform.GetScale3D();
+        return !Transform.ContainsNaN()&&Scale.X>0&&Scale.Y>0&&Scale.Z>0;
+    }
+
+    bool IsMenuPointerInsideBox(const FVector& Point,const FVector& Extent)
+    {
+        return !Point.ContainsNaN()&&!Extent.ContainsNaN()&&Extent.X>0&&Extent.Y>0&&Extent.Z>0
+            &&FMath::Abs(Point.X)<=Extent.X+MenuPointerEpsilon
+            &&FMath::Abs(Point.Y)<=Extent.Y+MenuPointerEpsilon
+            &&FMath::Abs(Point.Z)<=Extent.Z+MenuPointerEpsilon;
+    }
+}
 
 AOrderHologramActor::AOrderHologramActor()
 {
@@ -245,6 +266,168 @@ void AOrderHologramActor::Tick(float Dt)
     if(CloseRemaining>=0){CloseRemaining-=FMath::Max(0.f,Dt);if(CloseRemaining<=0){CloseRemaining=-1;if(bDelivered&&bOpen&&!bPlayerOpened)SetOpen(false,false);}}
     UpdateFacingFromPlayer(Dt);UpdateVisual(Dt);PollHands();
 }
+bool AOrderHologramActor::GetMenuPointerPanelGeometry(FTransform& Transform,FVector2D& DrawSize) const
+{
+    if(!IsValid(this)||IsActorBeingDestroyed()||IsHidden()||!bOpen||!FMath::IsFinite(AnimationValue)||AnimationValue<=.95f
+        ||!IsValid(Panel)||!Panel->IsRegistered()||Panel->bHiddenInGame||!Panel->IsWidgetVisible()
+        ||Panel->GetWidgetSpace()!=EWidgetSpace::World||Panel->GetGeometryMode()!=EWidgetGeometryMode::Plane
+        ||!IsValid(RecipeMenu)||!RecipeMenu->IsValidMenu()||!IsValid(GetDisplayWidget()))return false;
+    Transform=Panel->GetComponentTransform();DrawSize=Panel->GetCurrentDrawSize();
+    const FVector2D Pivot=Panel->GetPivot();
+    // 固定 UMG 矩形必须对应实际已绘制的 1200×750 面；不伪造未生成的几何。
+    return IsMenuPointerTransformValid(Transform)&&!DrawSize.ContainsNaN()&&!Pivot.ContainsNaN()
+        &&DrawSize.X==1200&&DrawSize.Y==750&&Pivot.X==.5&&Pivot.Y==.5;
+}
+
+int32 AOrderHologramActor::GetMenuPointerActionAtLocalPoint(const FVector& Point) const
+{
+    if(Point.ContainsNaN())return INDEX_NONE;
+    UOrderHologramWidget* Widget=GetDisplayWidget();
+    if(!IsValid(Widget))return INDEX_NONE;
+    const FVector2D Pixel(600-Point.Y,375-Point.Z);
+    TArray<int32> Actions={0,1};
+    if(bRecipeMenuMode)
+    {
+        Actions.Append({10,11,12});
+        const int32 Count=FMath::Min(10,GetVisibleMenuIndices().Num());
+        for(int32 I=0;I<Count;++I)Actions.Add(100+I);
+    }
+    else if(IsValid(GetPresentedRecipe()))Actions.Add(2);
+    for(int32 Action:Actions)
+    {
+        const FIntRect Rect=UOrderHologramWidget::GetScreenActionRect(Action);
+        if(Pixel.X<Rect.Min.X||Pixel.X>=Rect.Max.X||Pixel.Y<Rect.Min.Y||Pixel.Y>=Rect.Max.Y)continue;
+        FString Name;
+        if(Action==0)Name=TEXT("OrderTabButton");
+        else if(Action==1)Name=TEXT("RecipeTabButton");
+        else if(Action==2)Name=TEXT("OrderRecipeButton");
+        else if(Action>=10&&Action<=12)Name=FString::Printf(TEXT("MenuFilterButton%d"),Action-10);
+        else Name=FString::Printf(TEXT("MenuIndexButton%d"),Action-100);
+        const URecipeScreenButton* Button=Cast<URecipeScreenButton>(Widget->GetWidgetFromName(FName(*Name)));
+        if(!IsValid(Button)||Button->Action!=Action||Button->Host.Get()!=this||!Button->GetIsEnabled()
+            ||Button->GetVisibility()!=ESlateVisibility::Visible)return INDEX_NONE;
+        if(Action==2)
+        {
+            const UDrinkRecipe* Presented=GetPresentedRecipe();
+            if(!RecipeMenu->Entries.ContainsByPredicate([Presented](const FDrinkMenuEntry& Entry){return Entry.Recipe.Get()==Presented;}))return INDEX_NONE;
+        }
+        return Action;
+    }
+    return INDEX_NONE;
+}
+
+int32 AOrderHologramActor::GetPointerActionAtWorldPoint(const FVector& WorldPoint) const
+{
+    FTransform Transform;FVector2D DrawSize;
+    if(WorldPoint.ContainsNaN()||!GetMenuPointerPanelGeometry(Transform,DrawSize))return INDEX_NONE;
+    const FVector Local=Transform.InverseTransformPosition(WorldPoint);
+    if(Local.ContainsNaN()||FMath::Abs(Local.X)>.01
+        ||FMath::Abs(Local.Y)>DrawSize.X*.5+MenuPointerEpsilon||FMath::Abs(Local.Z)>DrawSize.Y*.5+MenuPointerEpsilon)return INDEX_NONE;
+    return GetMenuPointerActionAtLocalPoint(Local);
+}
+
+bool AOrderHologramActor::TraceMenuPointer(const FVector& Start,const FVector& NormalizedDir,double MaxDistance,FMenuPointerHit& Hit) const
+{
+    Hit=FMenuPointerHit();
+    if(!IsValid(this)||IsActorBeingDestroyed()||Start.ContainsNaN()||NormalizedDir.ContainsNaN()
+        ||!FMath::IsFinite(MaxDistance)||MaxDistance<=0)return false;
+    const double LengthSquared=NormalizedDir.SizeSquared();
+    if(!FMath::IsFinite(LengthSquared)||FMath::Abs(LengthSquared-1.)>MenuPointerEpsilon)return false;
+    const FVector Direction=NormalizedDir/FMath::Sqrt(LengthSquared);
+    const double Limit=FMath::Min(MaxDistance,MenuPointerMaxDistance);
+    bool Found=false;
+    FTransform Transform;FVector2D DrawSize;
+    if(GetMenuPointerPanelGeometry(Transform,DrawSize))
+    {
+        const FVector LocalStart=Transform.InverseTransformPosition(Start);
+        const FVector LocalDirection=Transform.InverseTransformVector(Direction);
+        const double Facing=FVector::DotProduct(Transform.GetRotation().GetAxisX(),Direction);
+        if(!LocalStart.ContainsNaN()&&!LocalDirection.ContainsNaN()&&FMath::IsFinite(Facing)
+            &&LocalStart.X>0&&Facing<-.01&&LocalDirection.X<0)
+        {
+            const double Distance=-LocalStart.X/LocalDirection.X;
+            if(FMath::IsFinite(Distance)&&Distance>0&&Distance<=Limit+MenuPointerEpsilon)
+            {
+                FVector Local=LocalStart+LocalDirection*Distance;Local.X=0;
+                if(!Local.ContainsNaN()&&FMath::Abs(Local.Y)<=DrawSize.X*.5+MenuPointerEpsilon&&FMath::Abs(Local.Z)<=DrawSize.Y*.5+MenuPointerEpsilon)
+                {
+                    const FVector Point=Transform.TransformPosition(Local);
+                    if(!Point.ContainsNaN())
+                    {
+                        Hit.Point=Point;Hit.Distance=Distance;Hit.Action=GetMenuPointerActionAtLocalPoint(Local);Hit.bPanel=true;Found=true;
+                    }
+                }
+            }
+        }
+    }
+    // 原实体 ButtonZone 即使隐藏或无碰撞仍是电源几何；不使用球扫或扩大盒体。
+    if(IsValid(ButtonZone))
+    {
+        const FTransform BoxTransform=ButtonZone->GetComponentTransform();
+        const FVector Extent=ButtonZone->GetUnscaledBoxExtent();
+        if(IsMenuPointerTransformValid(BoxTransform)&&IsMenuPointerInsideBox(FVector::ZeroVector,Extent))
+        {
+            const FVector LocalStart=BoxTransform.InverseTransformPosition(Start);
+            const FVector LocalDirection=BoxTransform.InverseTransformVector(Direction);
+            double Enter=-TNumericLimits<double>::Max(),Exit=TNumericLimits<double>::Max();
+            bool Intersects=!LocalStart.ContainsNaN()&&!LocalDirection.ContainsNaN();
+            for(int32 Axis=0;Intersects&&Axis<3;++Axis)
+            {
+                if(LocalDirection[Axis]==0)
+                {
+                    Intersects=FMath::Abs(LocalStart[Axis])<=Extent[Axis]+MenuPointerEpsilon;
+                    continue;
+                }
+                const double A=(-Extent[Axis]-LocalStart[Axis])/LocalDirection[Axis];
+                const double B=(Extent[Axis]-LocalStart[Axis])/LocalDirection[Axis];
+                if(!FMath::IsFinite(A)||!FMath::IsFinite(B)){Intersects=false;break;}
+                Enter=FMath::Max(Enter,FMath::Min(A,B));Exit=FMath::Min(Exit,FMath::Max(A,B));
+                Intersects=Enter<=Exit+MenuPointerEpsilon;
+            }
+            // 起点在盒内时取真实出射面，不把 MaxDistance 截断点当作盒面。
+            const double Distance=Enter>0?Enter:Exit;
+            if(Intersects&&FMath::IsFinite(Distance)&&Distance>0&&Distance<=Limit+MenuPointerEpsilon&&(!Found||Distance<Hit.Distance))
+            {
+                const FVector Local=LocalStart+LocalDirection*Distance;
+                if(IsMenuPointerInsideBox(Local,Extent))
+                {
+                    const FVector Point=BoxTransform.TransformPosition(Local);
+                    if(!Point.ContainsNaN())
+                    {
+                        Hit.Point=Point;Hit.Distance=Distance;Hit.Action=INDEX_NONE;Hit.bPanel=false;Hit.bPower=true;Found=true;
+                    }
+                }
+            }
+        }
+    }
+    return Found;
+}
+
+bool AOrderHologramActor::TryActivateMenuPointer(EControllerHand Hand,const FMenuPointerHit& Hit)
+{
+    if(!IsValid(this)||IsActorBeingDestroyed()||(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)
+        ||Hit.bPanel==Hit.bPower||Hit.Point.ContainsNaN()||!FMath::IsFinite(Hit.Distance)
+        ||Hit.Distance<=0||Hit.Distance>MenuPointerMaxDistance+MenuPointerEpsilon||LastAcceptedPointerFrame==GFrameCounter)return false;
+    if(Hit.bPower)
+    {
+        if(Hit.Action!=INDEX_NONE||!IsValid(ButtonZone)||(bTouchLatched&&(!bLeftOutside||!bRightOutside)))return false;
+        const FTransform Transform=ButtonZone->GetComponentTransform();
+        if(!IsMenuPointerTransformValid(Transform)
+            ||!IsMenuPointerInsideBox(Transform.InverseTransformPosition(Hit.Point),ButtonZone->GetUnscaledBoxExtent()))return false;
+        LastAcceptedPointerFrame=GFrameCounter;PressButton();return true;
+    }
+    if(bScreenTouchLatched&&(!bScreenLeftOutside||!bScreenRightOutside))return false;
+    const int32 Action=GetPointerActionAtWorldPoint(Hit.Point);
+    if(Action==INDEX_NONE||Action!=Hit.Action)return false;
+    const uint64 PreviousFrame=LastAcceptedPointerFrame;
+    const TWeakObjectPtr<AOrderHologramActor> Guard(this);
+    LastAcceptedPointerFrame=GFrameCounter;
+    const bool Accepted=ActivateScreenAction(Action);
+    // 接受后的回调即使销毁 Actor 也返回成功；失败才恢复帧标记，不消费空白。
+    if(!Accepted&&Guard.IsValid()&&!Guard->IsActorBeingDestroyed())Guard->LastAcceptedPointerFrame=PreviousFrame;
+    return Accepted;
+}
+
 bool AOrderHologramActor::ProcessTouchSample(EControllerHand Hand,const FVector& Point,bool Tracked,bool Holding)
 {
     if(Hand!=EControllerHand::Left&&Hand!=EControllerHand::Right)return false;
@@ -265,7 +448,7 @@ bool AOrderHologramActor::ProcessTouchSample(EControllerHand Hand,const FVector&
     (Hand==EControllerHand::Left?bLeftOutside:bRightOutside)=Outside;
     if(bLeftOutside&&bRightOutside)bTouchLatched=false;
     const bool Inside=FMath::Abs(Local.X)<=Extent.X&&FMath::Abs(Local.Y)<=Extent.Y&&FMath::Abs(Local.Z)<=Extent.Z;
-    if(Inside&&!Holding&&!bTouchLatched){bTouchLatched=true;PressButton();return true;}return false;
+    if(Inside&&!Holding&&!bTouchLatched&&LastAcceptedPointerFrame!=GFrameCounter){bTouchLatched=true;PressButton();return true;}return false;
 }
 TArray<int32> AOrderHologramActor::GetVisibleMenuIndices() const
 {
@@ -330,7 +513,7 @@ bool AOrderHologramActor::ProcessMenuTouchSample(EControllerHand Hand,const FVec
     if(Outside)NeedsExit=false;else if(NeedsExit)return false;
     (Hand==EControllerHand::Left?bScreenLeftOutside:bScreenRightOutside)=Outside;
     if(bScreenLeftOutside&&bScreenRightOutside)bScreenTouchLatched=false;
-    if(Hit!=INDEX_NONE&&!Holding&&!bScreenTouchLatched)
+    if(Hit!=INDEX_NONE&&!Holding&&!bScreenTouchLatched&&LastAcceptedPointerFrame!=GFrameCounter)
     {
         bScreenTouchLatched=true;return ActivateScreenAction(Hit);
     }
