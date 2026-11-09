@@ -11,6 +11,8 @@
 #endif
 #include "Coffee/Bean/DirectBeanJarActor.h"
 #include "Coffee/Brew/HandDripperActor.h"
+#include "Coffee/Brew/HandDripperAssemblyActor.h"
+#include "Misc/DefaultValueHelper.h"
 #include "Coffee/Brew/HandPourKettleActor.h"
 #include "Coffee/Brew/HotWaterSteamComponent.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
@@ -46,6 +48,9 @@
 #include "Particles/ParticleSystemComponent.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "Sound/SoundCue.h"
+#include "Sound/SoundNodeWavePlayer.h"
+#include "Sound/SoundWave.h"
 #include <cmath>
 #include <limits>
 
@@ -59,12 +64,16 @@ const TCHAR* BodyPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_Bean
 const TCHAR* LidMeshPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_BeanJar_Lid.SM_BeanJar_Lid");
 const TCHAR* BeansPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_BeanJar_Beans.SM_BeanJar_Beans");
 const TCHAR* ProfilePath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/DA_BeanJarBreak.DA_BeanJarBreak");
-const TCHAR* SteamPath = TEXT("/Game/Coffee_Equipment/Particles/P_Steam_Lit.P_Steam_Lit");
+const TCHAR* SteamPath = TEXT("/Game/VRTemplate/CoffeeBrew/Particles/P_Steam_Pour_Feedback.P_Steam_Pour_Feedback");
 const TCHAR* GrinderPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
 const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
 const TCHAR* CupPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C");
 const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/bean_jar_steam/current_before.json");
+const TCHAR* DripperBeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/dripper_grab_polish/current_before.json");
+const TCHAR* AssemblyPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
+const TCHAR* LegacyDripperPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C");
+const TCHAR* FilterName = TEXT("HandDripper_Practice");
+const TCHAR* OldStandName = TEXT("HandDripperStand_Practice");
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)
 {
@@ -117,7 +126,9 @@ struct FJarAssets
     bool Check(FAutomationTestBase& Test) const
     {
         bool Good = Test.TestNotNull(TEXT("保存豆罐 BP，缺失不使用原生兜底"), JarClass);
-        Good &= Test.TestNotNull(TEXT("保存旋盖 BP"), LidClass);
+        Good &= Test.TestNotNull(TEXT("保存盖 BP（保留兼容资产名称）"), LidClass);
+        if (LidClass) Good &= Test.TestFalse(TEXT("保存盖 CDO 严格为拉拔 false，runtime opt-in 不得掩盖保存字段"),
+            LidClass->GetDefaultObject<ABottleCapActor>()->bRequireScrewTwist);
         Good &= Test.TestNotNull(TEXT("分离玻璃体"), Body);
         Good &= Test.TestNotNull(TEXT("分离金属盖"), Lid);
         Good &= Test.TestNotNull(TEXT("分离豆堆"), Beans);
@@ -235,17 +246,36 @@ bool GrabCap(FAutomationTestBase& Test, FWorld& Fixture, ADirectBeanJarActor* Ja
     Test.TestTrue(TEXT("GrabType 保持 Custom"), Cap->GrabComp->GrabType == EGrabType::Custom);
     Test.TestTrue(TEXT("实际持盖且 controller 身份一致"), Cap->GrabComp->IsHeld() && Cap->GrabComp->GetHoldingController() == MC);
     Test.TestEqual(TEXT("实际持有手分类"), static_cast<int32>(Cap->GrabComp->GetHeldByHand()), static_cast<int32>(Side));
-    Sample(Cap, MC, 0);
-    return Test.TestTrue(TEXT("首次相对零姿态只建立基线"), Cap->bIsAttached && FMath::IsNearlyZero(Cap->TwistProgress));
+    if (Cap->bRequireScrewTwist) Sample(Cap, MC, 0);
+    return Test.TestTrue(TEXT("真实抓盖后仍附着封口且进度零；仅旧旋盖 opt-in 建立采样基线"),
+        Cap->bIsAttached && Jar->bIsCapped && FMath::IsNearlyZero(Cap->TwistProgress));
 }
 bool Open(FAutomationTestBase& Test, FWorld& Fixture, ADirectBeanJarActor* Jar,
     UMotionControllerComponent*& MC, EControllerHand Side = EControllerHand::Left)
 {
     if (!GrabCap(Test, Fixture, Jar, MC, Side)) return false;
     auto* Cap = Jar->CapActor.Get();
-    for (int32 Angle = 5; Angle <= 120; Angle += 5) Sample(Cap, MC, Angle);
-    return Test.TestTrue(TEXT("实际120度路径开盖，归属与本体身份不误改"),
-        !Cap->bIsAttached && !Jar->bIsCapped && Cap->OwnerBottle == Jar && !Jar->bCanPour && Cap->GrabComp->IsHeld());
+    if (Cap->bRequireScrewTwist)
+    {
+        // 旧旋盖 opt-in 兼容非当前交互：保持原120度真实采样路径。
+        for (int32 Angle = 5; Angle <= 120; Angle += 5) Sample(Cap, MC, Angle);
+    }
+    else
+    {
+        const FTransform Mouth = Socket(Jar);
+        if (!Test.TestTrue(TEXT("保存拉拔阈值允许沿 Socket Z 移动4cm，不改实际配置"),
+            FMath::IsFinite(Cap->DetachPullDistance) && Cap->DetachPullDistance > 0 && Cap->DetachPullDistance <= 4)) return false;
+        MC->SetWorldTransform(FTransform(Mouth.GetRotation(), Mouth.GetLocation() + Mouth.GetUnitAxis(EAxis::Z) * 4),
+            false, nullptr, ETeleportType::TeleportPhysics);
+        // 当前交互只调用生产 Tick 拉拔分支，不直接 Detach 或调用旋盖采样。
+        Cap->Tick(.01f);
+        Near(Test, TEXT("真实拉拔不累计旋盖进度"), Cap->TwistProgress, 0);
+    }
+    return Test.TestTrue(Cap->bRequireScrewTwist
+        ? TEXT("旧旋盖 opt-in 兼容非当前交互：实际120度开盖且身份不误改")
+        : TEXT("当前实际 TryGrab/沿 Socket Z 拉4cm/Tick .01 开盖且身份不误改"),
+        !Cap->bIsAttached && !Jar->bIsCapped && Cap->OwnerBottle == Jar && Jar->CapActor == Cap
+        && !Jar->bCanPour && Cap->GrabComp->IsHeld() && Cap->GrabComp->GetHoldingController() == MC);
 }
 bool ReleaseAway(FAutomationTestBase& Test, ADirectBeanJarActor* Jar)
 {
@@ -294,12 +324,13 @@ struct FSteamFixture
     ACupActor* Cup = nullptr;
     UHotWaterSteamComponent* Steam = nullptr;
     UParticleSystem* Template = nullptr;
+    float SavedSteamScale = 0;
     explicit FSteamFixture(FAutomationTestBase& Test) : Runtime(Test) {}
     bool Init()
     {
         auto& Test = Runtime.Test;
         Template = LoadObject<UParticleSystem>(nullptr, SteamPath);
-        if (!Test.TestNotNull(TEXT("原 Cascade P_Steam_Lit"), Template)) return false;
+        if (!Test.TestNotNull(TEXT("原P_Steam_Lit的倒水专用Cascade副本"), Template)) return false;
         Kettle = Runtime.Spawn<AHandPourKettleActor>(LoadClass<AHandPourKettleActor>(nullptr, KettlePath), FTransform(FVector(300, 0, 100)));
         Cup = Runtime.Spawn<ACupActor>(LoadClass<ACupActor>(nullptr, CupPath), FTransform(FVector(0, 0, 100)));
         if (!Kettle || !Cup) return false;
@@ -307,6 +338,12 @@ struct FSteamFixture
         Steam = Kettle->GetHotWaterSteamComponent();
         if (!Test.TestNotNull(TEXT("保存壶自带原生蒸汽组件，测试不补造组件"), Steam)) return false;
         if (!Test.TestTrue(TEXT("保存壶配置原模板而非测试赋值"), Steam->SteamSystem == Template)) return false;
+        const auto* SavedSteam = Kettle->GetClass()->GetDefaultObject<AHandPourKettleActor>()->GetHotWaterSteamComponent();
+        if (!Test.TestNotNull(TEXT("实际保存壶 CDO 的蒸汽配置"), SavedSteam)) return false;
+        SavedSteamScale = SavedSteam->SteamScale;
+        if (!Test.TestTrue(TEXT("实读保存蒸汽缩放有效，视觉增大不改变原模板或液体"),
+            FMath::IsFinite(SavedSteamScale) && SavedSteamScale >= .4f)
+            || !Near(Test, TEXT("蒸汽实例继承实际保存缩放，不写旧 .12 常量"), Steam->SteamScale, SavedSteamScale)) return false;
         if (!Runtime.Begin()) return false;
         return Test.TestTrue(TEXT("落点前无请求且未创建PS组件"), !Steam->IsSteamRequested() && !Steam->GetSteamComponent());
     }
@@ -383,7 +420,18 @@ bool FBeanJarSteamAssets::RunTest(const FString&)
     if (!F.Begin()) return false;
     auto* Cap = Jar->CapActor.Get(); if (!TestNotNull(TEXT("保存类生成配套盖"), Cap)) return false;
     TestTrue(TEXT("保存body/beans/lid组件用分离网格"), Jar->ContainerMesh->GetStaticMesh() == A.Body && Jar->BeanPileMesh->GetStaticMesh() == A.Beans && Cap->CapMesh->GetStaticMesh() == A.Lid);
-    TestTrue(TEXT("仅新盖opt-in120度正向"), Cap->bRequireScrewTwist && Cap->UnlockAngleDegrees == 120 && Cap->OpeningDirection == 1 && Jar->CapClass.Get() == A.LidClass);
+    TestFalse(TEXT("保存新盖实例严格拉拔 false，兼容 BP_ScrewBeanJarLid 名称不改"), Cap->bRequireScrewTwist);
+    TestTrue(TEXT("保存类身份与闲置旧旋盖120度正向参数保留，非当前交互要求"),
+        Cap->GetClass() == A.LidClass && Jar->CapClass.Get() == A.LidClass
+        && Cap->UnlockAngleDegrees == 120 && Cap->OpeningDirection == 1);
+    TestTrue(TEXT("保存豆流仅视觉缩放迁移到 .4，克数契约不变"), Jar->BeanStream->GetRelativeScale3D().Equals(FVector(.4), BeanJarSteamTests::Tolerance));
+    auto* OldBottleClass = LoadClass<ABottleActor>(nullptr,
+        TEXT("/Game/VRTemplate/MenuIngredients/Bottles/BP_Ingredient_Water.BP_Ingredient_Water_C"));
+    if (!TestNotNull(TEXT("原保存水瓶资产，旧盖开盖方式不使用原生兜底"), OldBottleClass)) return false;
+    const auto* OldBottle = OldBottleClass->GetDefaultObject<ABottleActor>();
+    if (!TestNotNull(TEXT("原水瓶保存真实 CapClass"), OldBottle->CapClass.Get())) return false;
+    TestTrue(TEXT("原盖资产保持独立身份且实际 CDO 仍为拉拔 false"),
+        OldBottle->CapClass.Get() != A.LidClass && !OldBottle->CapClass->GetDefaultObject<ABottleCapActor>()->bRequireScrewTwist);
     TestTrue(TEXT("旧原生盖仍默认拉拔"), !GetDefault<ABottleCapActor>()->bRequireScrewTwist);
     TestTrue(TEXT("保存profile绑定到真实Glass组件"), Jar->GlassBreakProfile == A.Profile && Jar->FindComponentByClass<UGlassBreakableComponent>() && Jar->FindComponentByClass<UGlassBreakableComponent>()->Profile == A.Profile);
     for (int32 I = 0; I < 3; ++I)
@@ -401,17 +449,44 @@ bool FBeanJarSteamAssets::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamSavedMap, "CyberCafe.BeanJarSteam.SavedMap313AndUnified20", BeanJarSteamTests::TestFlags)
 bool FBeanJarSteamSavedMap::RunTest(const FString&)
 {
+    using namespace BeanJarSteamTests;
     FString Before;
-    if (!TestTrue(TEXT("读取本轮312布局基线"), FFileHelper::LoadFileToString(Before, BeanJarSteamTests::BeforePath))) return false;
+    if (!TestTrue(TEXT("读取本轮已包含豆罐的313源布局，不回退旧bean快照"), FFileHelper::LoadFileToString(Before, DripperBeforePath))) return false;
     const int32 Start = Before.Find(TEXT("\"actors\""));
-    if (!TestTrue(TEXT("基线含actors区块"), Start != INDEX_NONE)) return false;
-    TMap<FString, FString> Originals;
-    FRegexMatcher Matcher(FRegexPattern(TEXT("\"([^\"]+)\"\\s*:\\s*\\{\\s*\"path\"\\s*:\\s*\"[^\"]+\"\\s*,\\s*\"class\"\\s*:\\s*\"([^\"]+)\"")), Before.Mid(Start));
-    while (Matcher.FindNext()) Originals.Add(Matcher.GetCaptureGroup(1), Matcher.GetCaptureGroup(2));
-    if (!TestEqual(TEXT("原布局严格312个身份"), Originals.Num(), 312)) return false;
+    if (!TestTrue(TEXT("源基线含actors区块"), Start != INDEX_NONE)) return false;
+    struct FOriginal { FString Path, Class, Label; FTransform Pose; };
+    TMap<FString, FOriginal> Originals;
+    const FRegexPattern Pattern(TEXT("\"([^\"]+)\"\\s*:\\s*\\{\\s*\"path\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"class\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"pose\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\"label\"\\s*:\\s*\"([^\"]*)\""));
+    const FString ActorText = Before.Mid(Start);
+    FRegexMatcher Matcher(Pattern, ActorText);
+    while (Matcher.FindNext())
+    {
+        TArray<FString> Values; Matcher.GetCaptureGroup(4).ParseIntoArray(Values, TEXT(","), false);
+        if (!TestEqual(TEXT("源每个pose恰好九个数"), Values.Num(), 9)) return false;
+        double V[9];
+        for (int32 I = 0; I < 9; ++I)
+            if (!TestTrue(TEXT("源pose数值可解析且有限"), FDefaultValueHelper::ParseDouble(Values[I].TrimStartAndEnd(), V[I]) && FMath::IsFinite(V[I]))) return false;
+        const FString Name = Matcher.GetCaptureGroup(1);
+        if (!TestFalse(TEXT("源身份名不重复"), Originals.Contains(Name))) return false;
+        Originals.Add(Name, {Matcher.GetCaptureGroup(2), Matcher.GetCaptureGroup(3), Matcher.GetCaptureGroup(5),
+            FTransform(FRotator(V[3], V[4], V[5]), FVector(V[0], V[1], V[2]), FVector(V[6], V[7], V[8]))});
+    }
+    if (!TestEqual(TEXT("源布局严格313个完整身份"), Originals.Num(), 313)) return false;
+    const auto* OldFilter = Originals.Find(FilterName); const auto* OldStand = Originals.Find(OldStandName);
+    if (!TestNotNull(TEXT("源精确旧滤杯"), OldFilter) || !TestNotNull(TEXT("源精确唯一旧支架"), OldStand)) return false;
+    TestEqual(TEXT("源滤杯是固定旧BP"), OldFilter->Class, FString(LegacyDripperPath));
+    TestEqual(TEXT("源独立支架是原Actor"), OldStand->Class, FString(TEXT("/Script/Engine.Actor")));
     auto* Map = LoadObject<UWorld>(nullptr, BeanJarSteamTests::MapPath);
     if (!TestNotNull(TEXT("只读保存地图"), Map) || !TestNotNull(TEXT("保存PersistentLevel"), Map->PersistentLevel.Get())) return false;
-    TestFalse(TEXT("不开始保存地图的游戏"), Map->HasBegunPlay());
+    if (!TestFalse(TEXT("不开始保存地图的游戏"), Map->HasBegunPlay())) return false;
+    if (!Map->bIsWorldInitialized)
+    {
+        UWorld::InitializationValues IV;
+        IV.AllowAudioPlayback(false).CreatePhysicsScene(true).CreateNavigation(false)
+            .CreateAISystem(false).ShouldSimulatePhysics(false);
+        Map->InitWorld(IV);
+    }
+    Map->UpdateWorldComponents(true, false); // 只注册以读取真实组件世界TM，不BeginPlay、Tick或保存。
     TMap<FString, AActor*> Actors;
     ADirectBeanJarActor* Jar = nullptr; AGlassRecoveryActor* Manager = nullptr;
     int32 Jars = 0, Managers = 0, Added = 0;
@@ -421,18 +496,73 @@ bool FBeanJarSteamSavedMap::RunTest(const FString&)
         Actors.Add(Actor->GetName(), Actor);
         if (auto* J = Cast<ADirectBeanJarActor>(Actor)) { ++Jars; Jar = J; }
         if (auto* M = Cast<AGlassRecoveryActor>(Actor)) { ++Managers; Manager = M; }
-        if (!Originals.Contains(Actor->GetName())) { ++Added; TestTrue(TEXT("新增身份只能是保存DirectBeanJar BP"), Cast<ADirectBeanJarActor>(Actor) && Actor->GetClass()->GetPathName() == BeanJarSteamTests::JarPath); }
+        if (!Originals.Contains(Actor->GetName())) ++Added;
         TestFalse(TEXT("未引入BeanScoopActor根"), Actor->GetClass()->GetName().Contains(TEXT("BeanScoopActor")));
     }
-    TestEqual(TEXT("保存地图313而不是用未知Actor凑数"), Actors.Num(), 313);
-    TestEqual(TEXT("仅新增一个身份"), Added, 1); TestEqual(TEXT("豆罐唯一"), Jars, 1); TestEqual(TEXT("经理唯一"), Managers, 1);
+    TestEqual(TEXT("当前保存地图是源313减一个独立支架"), Actors.Num(), Originals.Num() - 1);
+    TestEqual(TEXT("源已包含豆罐，不新增任何身份"), Added, 0); TestEqual(TEXT("豆罐唯一"), Jars, 1); TestEqual(TEXT("经理唯一"), Managers, 1);
+    TestFalse(TEXT("旧独立支架已移除，不仅比较数量"), Actors.Contains(OldStandName));
+    int32 Preserved = 0, OtherClasses = 0, ChangedFilter = 0;
     for (const auto& Pair : Originals)
     {
+        if (Pair.Key == OldStandName) continue;
         auto* const* Found = Actors.Find(Pair.Key);
-        if (!TestNotNull(TEXT("原312身份仍存在"), Found)) return false;
-        TestEqual(TEXT("原身份class未改变"), (*Found)->GetClass()->GetPathName(), Pair.Value);
+        if (!TestNotNull(Pair.Key + TEXT(" 源保留身份必须存在"), Found)) return false;
+        ++Preserved;
+        if (Pair.Key == FilterName)
+        {
+            ++ChangedFilter;
+            TestEqual(TEXT("滤杯仅允许精确新组合BP"), (*Found)->GetClass()->GetPathName(), FString(AssemblyPath));
+            TestTrue(TEXT("实际新滤杯继承组合原生类"), (*Found)->IsA<AHandDripperAssemblyActor>());
+        }
+        else
+        {
+            ++OtherClasses;
+            TestEqual(Pair.Key + TEXT(" 原身份class未改变"), (*Found)->GetClass()->GetPathName(), Pair.Value.Class);
+        }
+        TestEqual(Pair.Key + TEXT(" 保存Actor路径不变"), (*Found)->GetPathName(), Pair.Value.Path);
+        TestEqual(Pair.Key + TEXT(" 源label不变"), (*Found)->GetActorLabel(), Pair.Value.Label);
+        TestTrue(Pair.Key + TEXT(" 源完整位置旋转缩放不变"), (*Found)->GetActorTransform().Equals(Pair.Value.Pose, .001));
     }
-    if (!TestNotNull(TEXT("豆罐"), Jar) || !TestNotNull(TEXT("统一经理"), Manager)) return false;
+    TestEqual(TEXT("原名完整保留312个Actor"), Preserved, 312);
+    TestEqual(TEXT("其余311个Actor含豆罐class和pose不变"), OtherClasses, 311);
+    TestEqual(TEXT("只有一个指定滤杯class授权变化"), ChangedFilter, 1);
+    if (!TestNotNull(TEXT("源豆罐"), Jar) || !TestNotNull(TEXT("统一经理"), Manager)) return false;
+    TestTrue(TEXT("豆罐使用源已有精确保存类"), Originals.Contains(Jar->GetName()) && Jar->GetClass()->GetPathName() == JarPath);
+    auto* D = Cast<AHandDripperAssemblyActor>(Actors.FindRef(FilterName));
+    if (!TestNotNull(TEXT("实际保存组合滤杯，无旧类兜底"), D)) return false;
+    TestTrue(TEXT("滤杯原ContainerMesh仍是root，完整世界TM未动"), D->GetRootComponent() == D->ContainerMesh.Get()
+        && D->ContainerMesh->GetComponentTransform().Equals(OldFilter->Pose, Tolerance)
+        && OldFilter->Pose.Equals(FTransform(FVector(-33, 131, 67)), Tolerance));
+    const TArray<UStaticMeshComponent*> Pieces = {D->StandLeftLeg.Get(), D->StandRightLeg.Get(), D->StandLeftShelf.Get(), D->StandRightShelf.Get()};
+    const TCHAR* PieceNames[] = {TEXT("StandLeftLeg"), TEXT("StandRightLeg"), TEXT("StandLeftShelf"), TEXT("StandRightShelf")};
+    for (int32 I = 0; I < Pieces.Num(); ++I)
+    {
+        auto* Piece = Pieces[I]; if (!TestNotNull(TEXT("继承四件支架组件齐全"), Piece)) return false;
+        TestEqual(TEXT("继承支架声明名准确"), Piece->GetName(), FString(PieceNames[I]));
+        TestTrue(TEXT("四件支架直接附属同一滤杯根且可见"), Piece->GetOwner() == D
+            && Piece->GetAttachParent() == D->ContainerMesh.Get() && Piece->IsVisible() && !Piece->bHiddenInGame);
+    }
+    const int32 StandStart = Before.Find(TEXT("\"stands\""));
+    const int32 DrawerStart = Before.Find(TEXT("\"drawer\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, StandStart);
+    if (!TestTrue(TEXT("源支架元数据独立存在且位于drawer之前"), StandStart != INDEX_NONE && DrawerStart > StandStart)) return false;
+    const FString StandText = Before.Mid(StandStart, DrawerStart - StandStart);
+    const FRegexPattern WorldPattern(TEXT("\"world_transform\"\\s*:\\s*\"[^\"]*rotation:\\s*\\{x:\\s*([^,]+),\\s*y:\\s*([^,]+),\\s*z:\\s*([^,]+),\\s*w:\\s*([^}]+)\\},\\s*translation:\\s*\\{x:\\s*([^,]+),\\s*y:\\s*([^,]+),\\s*z:\\s*([^}]+)\\},\\s*scale3d:\\s*\\{x:\\s*([^,]+),\\s*y:\\s*([^,]+),\\s*z:\\s*([^}]+)\\}"));
+    FRegexMatcher WorldMatch(WorldPattern, StandText);
+    int32 PieceIndex = 0;
+    while (WorldMatch.FindNext())
+    {
+        if (!TestTrue(TEXT("源支架不能超过四件"), Pieces.IsValidIndex(PieceIndex))) return false;
+        double V[10];
+        for (int32 I = 0; I < 10; ++I)
+            if (!TestTrue(TEXT("源支架worldTM各数值有限"), FDefaultValueHelper::ParseDouble(WorldMatch.GetCaptureGroup(I + 1).TrimStartAndEnd(), V[I]) && FMath::IsFinite(V[I]))) return false;
+        const FQuat Q(V[0], V[1], V[2], V[3]);
+        if (!TestTrue(TEXT("源支架四元数有效且缩放非零"), Q.IsNormalized() && V[7] > 0 && V[8] > 0 && V[9] > 0)) return false;
+        const FTransform OldWorld(Q, FVector(V[4], V[5], V[6]), FVector(V[7], V[8], V[9]));
+        TestTrue(TEXT("继承四支架的完整世界TM与原源网格逐件相同"), Pieces[PieceIndex]->GetComponentTransform().Equals(OldWorld, Tolerance));
+        ++PieceIndex;
+    }
+    TestEqual(TEXT("源恰好解析四个旧支架世界TM，不用空循环跳过"), PieceIndex, 4);
     TestTrue(TEXT("保存统一全用品opt-in"), Manager->bUnifiedRestore && Manager->bRestoreAllSupplies);
     TestEqual(TEXT("保存replacement16"), Manager->RestoreTargets.Num(), 16);
     TestEqual(TEXT("保存tool3"), Manager->RestoreToolTargets.Num(), 3);
@@ -440,7 +570,39 @@ bool FBeanJarSteamSavedMap::RunTest(const FString&)
     for (const auto& Target : Manager->RestoreTargets) { if (!TestNotNull(TEXT("replacement非空"), Target.Get())) return false; Roots.Add(Target.Get()); }
     TestEqual(TEXT("replacement无重复"), Roots.Num(), 16); TestTrue(TEXT("豆罐在replacement内"), Roots.Contains(Jar));
     TestTrue(TEXT("原型首杯首瓶属于replacement集合"), Roots.Contains(Manager->PrototypeCup.Get()) && Roots.Contains(Manager->PrototypeBottle.Get()));
-    for (const auto& Tool : Manager->RestoreToolTargets) { if (!TestNotNull(TEXT("tool非空"), Tool.Get())) return false; Roots.Add(Tool.Get()); }
+    int32 AssemblyTools = 0;
+    for (const auto& Tool : Manager->RestoreToolTargets)
+    {
+        if (!TestNotNull(TEXT("tool非空"), Tool.Get())) return false;
+        Roots.Add(Tool.Get()); AssemblyTools += Tool.Get() == D;
+        TestFalse(TEXT("工具不能残留独立支架引用"), Tool->GetName() == OldStandName);
+    }
+    TestEqual(TEXT("原滤杯工具槽精确remap为当前组合体且仅一次"), AssemblyTools, 1);
+    for (const auto& Target : Manager->RestoreTargets)
+        TestFalse(TEXT("接液杯不附着组合体"), Target->IsA<ACupActor>() && Target->IsAttachedTo(D));
+    const int32 RecoveryStart = Before.Find(TEXT("\"recovery\""));
+    const int32 FilterStart = Before.Find(TEXT("\"filter\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, RecoveryStart);
+    if (!TestTrue(TEXT("源recovery区块存在且先于filter元数据"), RecoveryStart != INDEX_NONE && FilterStart > RecoveryStart)) return false;
+    const FString RecoveryText = Before.Mid(RecoveryStart, FilterStart - RecoveryStart);
+    for (const auto* Key : {TEXT("targets"), TEXT("tools")})
+    {
+        const FRegexPattern ArrayPattern(FString::Printf(TEXT("\"%s\"\\s*:\\s*\\[([^\\]]*)\\]"), Key));
+        FRegexMatcher ArrayMatch(ArrayPattern, RecoveryText);
+        if (!TestTrue(TEXT("源恢复成员数组必须存在"), ArrayMatch.FindNext())) return false;
+        const FString NamesText = ArrayMatch.GetCaptureGroup(1);
+        const FRegexPattern NamePattern(TEXT("\"([^\"]+)\""));
+        FRegexMatcher NameMatch(NamePattern, NamesText);
+        TArray<FString> Names; while (NameMatch.FindNext()) Names.Add(NameMatch.GetCaptureGroup(1));
+        const bool IsTools = FString(Key) == TEXT("tools");
+        const int32 Count = IsTools ? Manager->RestoreToolTargets.Num() : Manager->RestoreTargets.Num();
+        if (!TestEqual(TEXT("源与当前恢复成员数量一致"), Names.Num(), Count)) return false;
+        for (int32 I = 0; I < Count; ++I)
+        {
+            AActor* A = IsTools ? Manager->RestoreToolTargets[I].Get() : static_cast<AActor*>(Manager->RestoreTargets[I].Get());
+            TestEqual(TEXT("源恢复成员名称和顺序保持，仅同名滤杯class换新"), A->GetName(), Names[I]);
+            TestTrue(TEXT("恢复成员必须来自当前保存地图"), A->GetLevel() == Map->PersistentLevel.Get());
+        }
+    }
     if (!TestNotNull(TEXT("独立ice scoop"), Manager->RestoreScoop.Get())) return false;
     Roots.Add(Manager->RestoreScoop.Get()); TestEqual(TEXT("16replacement+3tool+1ice严格20根"), Roots.Num(), 20);
     // 原 NPC 起始偏移不在本测试职责内；不修改、不测其阈值，也不宣称通过。
@@ -471,15 +633,18 @@ bool FBeanJarSteamZeroLiquid::RunTest(const FString&)
     BeanJarSteamTests::Balance(*this, F, Jar); return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamTwistUnlock, "CyberCafe.BeanJarSteam.ActualTwistUnlockUsingController", BeanJarSteamTests::TestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamTwistUnlock, "CyberCafe.BeanJarSteam.ActualTwistUnlockUsingController.LegacyScrewOptInCompatibilityNotCurrentInteraction", BeanJarSteamTests::TestFlags)
 bool FBeanJarSteamTwistUnlock::RunTest(const FString&)
 {
     BeanJarSteamTests::FJarAssets A; if (!A.Check(*this)) return false;
     for (bool Native : {false, true}) for (auto Side : {EControllerHand::Left, EControllerHand::Right})
     {
         BeanJarSteamTests::FWorld F(*this); auto* Jar = F.Jar(A, Native); if (!Jar || !F.Begin()) return false;
+        auto* Cap = Jar->CapActor.Get(); if (!TestNotNull(TEXT("旧旋盖 opt-in 的真实盖"), Cap)) return false;
+        // 旧旋盖 opt-in 兼容非当前交互：仅改本 fixture 实例，保存 CDO 必须仍为 false。
+        Cap->bRequireScrewTwist = true;
+        AddInfo(TEXT("旧旋盖 opt-in 兼容非当前交互：保留不足120度、逐5度、阈值开盖与左右手覆盖。"));
         UMotionControllerComponent* MC = nullptr; if (!BeanJarSteamTests::GrabCap(*this, F, Jar, MC, Side)) return false;
-        auto* Cap = Jar->CapActor.Get();
         TestFalse(TEXT("CPU夹具不是伪装Tracked控制器"), MC->IsTracked());
         for (int32 Angle = 5; Angle < 120; Angle += 5)
         {
@@ -498,13 +663,16 @@ bool FBeanJarSteamTwistUnlock::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamTwistFailClosed, "CyberCafe.BeanJarSteam.TwistPullReverseJumpFailClosed", BeanJarSteamTests::TestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamTwistFailClosed, "CyberCafe.BeanJarSteam.TwistPullReverseJumpFailClosed.LegacyScrewOptInCompatibilityNotCurrentInteraction", BeanJarSteamTests::TestFlags)
 bool FBeanJarSteamTwistFailClosed::RunTest(const FString&)
 {
     BeanJarSteamTests::FJarAssets A; if (!A.Check(*this)) return false;
     BeanJarSteamTests::FWorld F(*this); auto* Jar = F.Jar(A); if (!Jar || !F.Begin()) return false;
+    auto* Cap = Jar->CapActor.Get(); if (!TestNotNull(TEXT("旧旋盖 opt-in 的真实盖"), Cap)) return false;
+    // 旧旋盖 opt-in 兼容非当前交互：只设置本 fixture 的实际实例，不改保存资产。
+    Cap->bRequireScrewTwist = true;
+    AddInfo(TEXT("旧旋盖 opt-in 兼容非当前交互：原失败护栏、相对角或回盖重开断言保持。"));
     UMotionControllerComponent* MC = nullptr; if (!BeanJarSteamTests::GrabCap(*this, F, Jar, MC)) return false;
-    auto* Cap = Jar->CapActor.Get();
     BeanJarSteamTests::Sample(Cap, MC, 0, FVector(0, 0, 10)); Cap->Tick(.03f); Cap->DetachFromBottle(MC);
     TestTrue(TEXT("直接拉10cm和直接Detach均fail-closed"), Cap->bIsAttached && Jar->bIsCapped);
     BeanJarSteamTests::Near(*this, TEXT("仅拉动无旋角"), Cap->TwistProgress, 0);
@@ -531,13 +699,16 @@ bool FBeanJarSteamTwistFailClosed::RunTest(const FString&)
     BeanJarSteamTests::Balance(*this, F, Jar); return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamReclose, "CyberCafe.BeanJarSteam.WholeJarMotionAndActualReclose", BeanJarSteamTests::TestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeanJarSteamReclose, "CyberCafe.BeanJarSteam.WholeJarMotionAndActualReclose.LegacyScrewOptInCompatibilityNotCurrentInteraction", BeanJarSteamTests::TestFlags)
 bool FBeanJarSteamReclose::RunTest(const FString&)
 {
     BeanJarSteamTests::FJarAssets A; if (!A.Check(*this)) return false;
     BeanJarSteamTests::FWorld F(*this); auto* Jar = F.Jar(A); if (!Jar || !F.Begin()) return false;
+    auto* Cap = Jar->CapActor.Get(); if (!TestNotNull(TEXT("旧旋盖 opt-in 的真实盖"), Cap)) return false;
+    // 旧旋盖 opt-in 兼容非当前交互：只设置本 fixture 的实际实例，不改保存资产。
+    Cap->bRequireScrewTwist = true;
+    AddInfo(TEXT("旧旋盖 opt-in 兼容非当前交互：原失败护栏、相对角或回盖重开断言保持。"));
     UMotionControllerComponent* MC = nullptr; if (!BeanJarSteamTests::GrabCap(*this, F, Jar, MC)) return false;
-    auto* Cap = Jar->CapActor.Get();
     for (int32 Angle = 5; Angle <= 150; Angle += 5)
     {
         Jar->SetActorRotation(FRotator(Angle * .3, Angle, Angle * .2), ETeleportType::TeleportPhysics);
@@ -681,7 +852,7 @@ bool FBeanJarSteamBreakRestore::RunTest(const FString&)
         if (!TestNotNull(TEXT("恢复真实新Jar"), Fresh)) return false;
         BeanJarSteamTests::Quiet(Fresh); BeanJarSteamTests::Quiet(Fresh->CapActor.Get());
         TestTrue(TEXT("新身份同class和初始TM"), Fresh != Jar && Fresh->GetClass() == Class && Fresh->GetActorTransform().Equals(Initial, .01));
-        TestTrue(TEXT("新罐不碎、旋盖120度正向配置保留且封口"), !Fresh->IsBroken() && Fresh->CapActor && Fresh->CapActor->bRequireScrewTwist && Fresh->CapActor->UnlockAngleDegrees == 120 && Fresh->CapActor->OpeningDirection == 1 && Fresh->CapActor->bIsAttached && Fresh->bIsCapped);
+        TestTrue(TEXT("恢复新罐不碎、保存拉拔 false 和闲置120度正向参数保留且封口"), !Fresh->IsBroken() && Fresh->CapActor && !Fresh->CapActor->bRequireScrewTwist && Fresh->CapActor->GetClass() == A.LidClass && Fresh->CapActor->UnlockAngleDegrees == 120 && Fresh->CapActor->OpeningDirection == 1 && Fresh->CapActor->bIsAttached && Fresh->bIsCapped);
         TestTrue(TEXT("profile真实重绑定"), Fresh->FindComponentByClass<UGlassBreakableComponent>() && Fresh->FindComponentByClass<UGlassBreakableComponent>()->Profile == A.Profile);
         BeanJarSteamTests::Near(*this, TEXT("新库存150"), Fresh->GetBeanGrams(), 150);
         auto Ledger = Fresh->GetBeanLedger();
@@ -754,7 +925,9 @@ bool FBeanJarSteamActualImpact::RunTest(const FString&)
     TestTrue(TEXT("queue回调已离开包迭代且账本提交，并保留重入保护"), Observed.Committed && Observed.RestoreRejected && Observed.Count == 1 && Observed.Last.Target.Get() == F.Cup);
     auto* PS = F.Steam->GetSteamComponent();
     if (!TestNotNull(TEXT("首次真实impact才创建Cascade组件"), PS)) { F.Runtime.Transfer()->OnWaterImpactNative.Remove(Handle); return false; }
-    TestTrue(TEXT("模板是原P_Steam_Lit，归属为该壶"), PS->Template == F.Template && PS->GetOwner() == F.Kettle);
+    TestTrue(TEXT("模板是原Steam的倒水专用副本，归属为该壶"), PS->Template == F.Template && PS->GetOwner() == F.Kettle);
+    TestTrue(TEXT("实际蒸汽 PS 尺寸使用实读保存配置，而非旧 .12"),
+        PS->GetComponentScale().Equals(FVector(F.SavedSteamScale), BeanJarSteamTests::Tolerance));
     TestEqual(TEXT("只有一个PS组件"), F.ParticleComponents(), 1);
     for (int32 I = 0; I < 3; ++I) { F.Emit(); F.Settle(); }
     TestEqual(TEXT("连续包不逐包启动计数"), F.Steam->GetSteamStartCount(), 1);
@@ -934,7 +1107,7 @@ bool FBeanJarSteamConfiguredTiltThreshold::RunTest(const FString&)
     BeanJarSteamTests::Near(*this, TEXT("保存配置倾角仍是65度，不调阈值绕过"), Jar->PourBeanTiltDegrees, 65);
     BeanJarSteamTests::Near(*this, TEXT("保存配置出豆率仍是5g每秒"), Jar->BeanPourRateGramsPerSecond, 5);
     auto* Cap = Jar->CapActor.Get();
-    TestTrue(TEXT("真实旋开并远处释放后才测倾角"), !Cap->bIsAttached && !Jar->bIsCapped && !Cap->GrabComp->IsHeld());
+    TestTrue(TEXT("真实拉拔开盖并远处释放后才测倾角"), !Cap->bIsAttached && !Jar->bIsCapped && !Cap->GrabComp->IsHeld());
     // 读取当前ContainerMesh轴的真实角度；这里只测试罐体姿态，不代表真实HMD或追踪手柄。
     const auto TiltDegrees = [Jar]()
     {
@@ -1062,7 +1235,7 @@ bool FBeanJarSteamOpenMouthCollision::RunTest(const FString&)
 
         UMotionControllerComponent* MC = nullptr;
         if (!Open(*this, F, Jar, MC) || !ReleaseAway(*this, Jar) || !CookQueryBody(*this, Cap->CapMesh.Get())) return false;
-        TestTrue(TEXT("实际旋开和远处释放，独立盖不模拟、不加力"),
+        TestTrue(TEXT("实际拉拔和远处释放，独立盖不模拟、不加力"),
             !Cap->bIsAttached && !Jar->bIsCapped && !Cap->GrabComp->IsHeld() && !Cap->CapMesh->IsSimulatingPhysics());
         FCollisionQueryParams Query(SCENE_QUERY_STAT(BeanJarOpenMouthBody), false);
         Query.AddIgnoredActor(Cap); // 唯一忽略项是独立盖；绝不忽略 Jar 本体或其豆组件。
@@ -1163,8 +1336,18 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
     Near(*this, TEXT("壶实际初始 Water500"), K->GetIngredientVolumeML(TEXT("Water")), 500);
     Near(*this, TEXT("账本 Initial500"), S->GetBalance().InitialML, 500);
     Near(*this, TEXT("全链初始 Injected0"), S->GetBalance().InjectedML, 0);
-    TestTrue(TEXT("声音配置仍来自原实际 Source SFX，不补玩家音频 hook"),
+    TestTrue(TEXT("声音配置仍来自实际 Source SFX，不补玩家音频 hook"),
         (G->LoadedGrindSound || G->GrindSFX->Sound) && Drawer->GroundPourSound && D->DripSound && K->PourLoopSound);
+    auto* GrindCue = LoadObject<USoundCue>(nullptr,
+        TEXT("/Game/VRTemplate/CoffeeBrew/Audio/SC_Grind_Feedback_Loop.SC_Grind_Feedback_Loop"));
+    auto* GrindWave = LoadObject<USoundWave>(nullptr, TEXT("/Game/coffee_grinder_scene/Sound/S_Grind.S_Grind"));
+    if (!TestNotNull(TEXT("保存的新研磨 Cue，测试不补造"), GrindCue)
+        || !TestNotNull(TEXT("保留原研磨 Wave 资产"), GrindWave)) return false;
+    auto* WavePlayer = Cast<USoundNodeWavePlayer>(GrindCue->FirstNode.Get());
+    if (!TestNotNull(TEXT("新 Cue 的实际 WavePlayer"), WavePlayer)) return false;
+    TestTrue(TEXT("actual Loaded 读取保存新 Cue，循环复用原 Wave；不改 Wave/材质/Quiet 或全局状态"),
+        G->LoadedGrindSound == GrindCue && WavePlayer->GetSoundWave() == GrindWave && WavePlayer->bLooping);
+    Near(*this, TEXT("新 Cue 的保存音量 .65，不写原 Wave 音量"), GrindCue->VolumeMultiplier, .65);
 
     UMotionControllerComponent* MC = nullptr;
     if (!Open(*this, F, Jar, MC) || !ReleaseAway(*this, Jar)) return false;
@@ -1200,16 +1383,26 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
         DrawerTilt, false, nullptr, ETeleportType::TeleportPhysics);
     TestTrue(TEXT("真实出粉口在原入口正上方20cm，最大射程未扩大"),
         Drawer->GroundPourPoint->GetComponentLocation().Equals(WantedLip, .001) && Drawer->GroundPourTraceDistanceCM <= 40);
-    const float TipDown = FVector::DotProduct(Drawer->DrawerMesh->GetComponentQuat().RotateVector(FVector::YAxisVector), FVector::DownVector);
     Near(*this, TEXT("原抽屉出粉率仍8g/s"), Drawer->GroundPourRateGramsPerSecond, 8);
-    // 原 API 的实际速率是8*TipDown；65度两秒约14.50g，不伪造16g请求或修改出粉率。
-    Near(*this, TEXT("两秒公共出粉按实际倾角扣量"), Drawer->PourGrounds(2), FMath::Min(15.0, 16.0 * TipDown));
-    if (Drawer->GetGroundsGrams() > 0) TestTrue(TEXT("剩余尾粉仍通过公开 PourGrounds 倾倒"), Drawer->PourGrounds(.1f) > 0);
+    const auto* SavedDrawer = G->DrawerClass->GetDefaultObject<AGrinderDrawerActor>();
+    if (!TestTrue(TEXT("实际DrawerClass保存Instant=true/Assist=true，实例继承且隐藏粉流，不由测试切模式"),
+        SavedDrawer->bInstantGroundPour && SavedDrawer->bAssistInstantGroundTransfer && !SavedDrawer->bShowPowderStream
+        && Drawer->bInstantGroundPour && Drawer->bAssistInstantGroundTransfer && !Drawer->bShowPowderStream)) return false;
+    TestTrue(TEXT("出粉 API 前真实持有该抽屉与 controller，未人为改 State 或克数"),
+        Drawer->GrabComp->IsHeld() && Drawer->GrabComp->GetHoldingController() == DrawerHand);
+    // 严格迁移到保存 instant 契约：保留旧两秒调用，首 transfer 实际15g，不再期待14.50g。
+    Near(*this, TEXT("保存 instant 模式首个两秒公共出粉实际15g"), Drawer->PourGrounds(2), 15);
+    Near(*this, TEXT("instant 首次实际 accepted15g"), Drawer->LastAcceptedGroundGrams, 15);
+    const FVector AcceptedGroundPoint = Drawer->LastGroundPourEnd;
+    Near(*this, TEXT("instant 已出完，后续尾帧不得重复转移"), Drawer->PourGrounds(.1f), 0);
+    Drawer->UpdatePowderStream(.01f);
+    TestTrue(TEXT("保存 instant 全链无视觉粉流，实际粉质量不受表现开关影响"),
+        Drawer->PowderStream->GetInstanceCount() == 0 && !Drawer->PowderStream->IsVisible() && Drawer->PowderStream->bHiddenInGame);
     Near(*this, TEXT("实际抽屉出完15g"), Drawer->GetGroundsGrams(), 0);
     Near(*this, TEXT("原入口真实接纳15g粉"), D->GetGroundsGrams(), 15);
     Near(*this, TEXT("粉无洒漏"), Drawer->SpilledGroundGrams, 0);
     TestTrue(TEXT("实际最近入口命中且进入 Dry，不直接加粉或写状态"),
-        Drawer->LastGroundPourEnd.Equals(DripEntry.GetLocation(), .001) && D->BrewState == ECoffeeBrewState::Dry);
+        AcceptedGroundPoint.Equals(DripEntry.GetLocation(), .001) && D->BrewState == ECoffeeBrewState::Dry);
     Near(*this, TEXT("实际产粉质量闭合到粉床"), G->GetTotalGroundOutputGrams(),
         G->GetCurrentGroundGrams() + Drawer->GetGroundsGrams() + D->GetGroundsGrams() + Drawer->SpilledGroundGrams);
     Drawer->SetActorLocation(FVector(400, 100, 50), false, nullptr, ETeleportType::TeleportPhysics);
@@ -1220,6 +1413,11 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
     auto* Steam = K->GetHotWaterSteamComponent(); auto* Template = LoadObject<UParticleSystem>(nullptr, SteamPath);
     if (!TestNotNull(TEXT("保存壶原生蒸汽组件"), Steam) || !TestNotNull(TEXT("原 Cascade 模板"), Template)) return false;
     TestTrue(TEXT("蒸汽原模板来自保存配置，不由测试赋值"), Steam->SteamSystem == Template);
+    const auto* SavedSteam = KettleClass->GetDefaultObject<AHandPourKettleActor>()->GetHotWaterSteamComponent();
+    if (!TestNotNull(TEXT("全链实际保存蒸汽配置"), SavedSteam)) return false;
+    const float SavedSteamScale = SavedSteam->SteamScale;
+    TestTrue(TEXT("全链保存蒸汽视觉缩放已增大，不猜固定新尺寸"), FMath::IsFinite(SavedSteamScale) && SavedSteamScale >= .4f);
+    Near(*this, TEXT("全链蒸汽实例使用实际保存配置"), Steam->SteamScale, SavedSteamScale);
     TestTrue(TEXT("尚无实际水落点，不能预先请求蒸汽"), !Steam->IsSteamRequested() && !Steam->GetSteamComponent());
     // 仅剥离非蒸汽 FX 的测试表现资产；网格根、口点、碰撞、SFX 与业务参数均保留。
     for (auto* Actor : {static_cast<AActor*>(D), static_cast<AActor*>(K), static_cast<AActor*>(Cup)})
@@ -1272,7 +1470,9 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
         if (auto* PS = Steam->GetSteamComponent())
         {
             if (!OnlySteam) OnlySteam = PS;
-            TestTrue(TEXT("全链复用同一壶的原 Cascade，不按包新建"), PS == OnlySteam && PS->Template == Template && PS->GetOwner() == K);
+            TestTrue(TEXT("全链复用同一壶的原 Cascade 和实际保存缩放，不按包新建"),
+                PS == OnlySteam && PS->Template == Template && PS->GetOwner() == K
+                && PS->GetComponentScale().Equals(FVector(SavedSteamScale), Tolerance));
         }
         Near(*this, TEXT("每次 World Tick 全毫升账本误差零"), B.ErrorML, 0);
         Near(*this, TEXT("每帧无隔空注液或额外注入"), B.InjectedML, 0);

@@ -319,7 +319,7 @@ bool FPourAudioSavedLoopAndSceneDefaults::RunTest(const FString&)
         Before.Add({Actor, Actor->GetActorTransform(), Liquid ? Liquid->FillAmount : 0.f,
             Liquid ? Liquid->MaxVolumeML : 0.f, Liquid ? Liquid->GetPreciseVolumeML() : 0.0});
     }
-    TestEqual(TEXT("仅新增一个豆罐后的保存场景有313个Actor"), ActorCount, 313);
+    TestEqual(TEXT("源313仅合并独立支架后的当前保存场景有312个Actor"), ActorCount, 312);
     const bool bMapDirty = Map->GetOutermost()->IsDirty();
     auto* Sound = LoadSoundWave(*this);
     if (!Sound) return false;

@@ -68,6 +68,8 @@ public:
     UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Drawer|Feedback") TObjectPtr<UInstancedStaticMeshComponent> PowderStream;
     float PowderVisualAge=0,PourSoundCooldown=0;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Drawer|Feedback") TObjectPtr<USoundBase> GroundPourSound;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Feedback")
+    bool bShowPowderStream = true;
     void UpdatePowderStream(float Dt);
 
     /** 抓取组件（EGrabType::Custom） */
@@ -127,6 +129,25 @@ public:
     /** 抽屉可容纳的最大粉量 (g)。超过后不再从研磨器抽取。 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Grind", meta = (ClampMin = "0.0"))
     float DrawerCapacityGrams;
+
+    /** 首次合法倾倒即出清本批库存；默认保持连续转移。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour")
+    bool bInstantGroundPour = false;
+
+    /** 仅瞬时模式可选的近口辅助；未接纳的粉仍留在抽屉，不自动洒落。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist")
+    bool bAssistInstantGroundTransfer = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist", meta = (ClampMin = "0.0", ClampMax = "89.0"))
+    float AssistedPourTiltDegrees = 30.f;
+    /** 网格局部 X 半宽，乘实际 abs(scaleX)，世界半宽最多 8 cm。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist", meta = (ClampMin = "0.0", ClampMax = "8.0"))
+    float GroundLipHalfWidthCM = 8.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float GroundsAssistMarginCM = 1.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist", meta = (ClampMin = "0.0", ClampMax = "1.5"))
+    float GroundsAssistBelowRimCM = 1.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour|Assist", meta = (ClampMin = "0.0", ClampMax = "25.0"))
+    float GroundsAssistMaxHeightCM = 25.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drawer|Pour", meta = (ClampMin = "0.0"))
     float GroundPourRateGramsPerSecond = 8.f;
@@ -192,6 +213,9 @@ public:
     FVector LastGroundPourOrigin = FVector::ZeroVector;
     UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
     FVector LastGroundPourEnd = FVector::ZeroVector;
+    /** 辅助模式最近一次结果；不驱动世界 UI。 */
+    UPROPERTY(BlueprintReadOnly, Transient, Category = "Drawer|Runtime")
+    FName LastGroundTransferReason = NAME_None;
 
     UPROPERTY(Transient)
     FVector GroundPileInitialLocation = FVector::ZeroVector;
@@ -273,5 +297,9 @@ protected:
 
     /** 根据 CurrentGroundGrams / DrawerCapacityGrams 刷新 GroundPileMesh 的 Z 缩放与可见性 */
     void UpdateGroundPileVisual();
+
+private:
+    float TryAssistedGroundTransfer(float Dt);
+    bool bGroundTransferInProgress = false;
 };
 

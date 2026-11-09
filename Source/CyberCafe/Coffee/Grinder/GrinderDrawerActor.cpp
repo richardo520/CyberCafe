@@ -4,6 +4,7 @@
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
 #include "Coffee/Brew/HandDripperActor.h"
 #include "Engine/World.h"
+#include "Engine/OverlapResult.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GrabComponent.h"
@@ -16,6 +17,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Sound/SoundBase.h"
+#include <cmath>
 
 AGrinderDrawerActor::AGrinderDrawerActor()
 {
@@ -105,6 +107,7 @@ void AGrinderDrawerActor::BeginPlay()
         GroundPileInitialLocation = GroundPileMesh->GetRelativeLocation();
     }
     UpdateGroundPileVisual();
+    if (!bShowPowderStream || bInstantGroundPour) { UpdatePowderStream(0.f); }
 }
 
 void AGrinderDrawerActor::AttachToGrinder(ACoffeeGrinderActor* InOwner, USceneComponent* MountComp)
@@ -432,7 +435,8 @@ void AGrinderDrawerActor::Tick(float DeltaTime)
     SanitizeGroundProperties();
     LastPouredGroundGrams = 0.f;
     LastAcceptedGroundGrams = 0.f;
-    if(PowderStream)PowderStream->ClearInstances();
+    if (!bShowPowderStream || bInstantGroundPour) { UpdatePowderStream(DeltaTime); }
+    else if (PowderStream) { PowderStream->ClearInstances(); }
     // 绝不自动触发自由落地/无人持有抽屉的倒粉。
     if (State == EDrawerState::Detached && GrabComp && GrabComp->IsHeld())
     {
@@ -546,9 +550,12 @@ float AGrinderDrawerActor::RemoveGrounds(float G)
 
 float AGrinderDrawerActor::PourGrounds(float Dt)
 {
+    if (bGroundTransferInProgress) { return 0.f; }
     LastPouredGroundGrams = 0.f;
     LastAcceptedGroundGrams = 0.f;
+    if (!bShowPowderStream || bInstantGroundPour) { UpdatePowderStream(Dt); }
     SanitizeGroundProperties();
+    if (bInstantGroundPour && bAssistInstantGroundTransfer) { return TryAssistedGroundTransfer(Dt); }
     UWorld* World = GetWorld();
     if (!World || !DrawerMesh || !GroundPourPoint || !FMath::IsFinite(Dt) || Dt <= 0.f || CurrentGroundGrams <= 0.f)
     {
@@ -564,7 +571,8 @@ float AGrinderDrawerActor::PourGrounds(float Dt)
     const FVector Origin = GroundPourPoint->GetComponentLocation();
     const FVector End = Origin + Down * GroundPourTraceDistanceCM;
     if (Origin.ContainsNaN() || End.ContainsNaN()) { return 0.f; }
-    const double Want = static_cast<double>(GroundPourRateGramsPerSecond) * Dt * FMath::Clamp(TipDown, 0.f, 1.f);
+    const double Want = bInstantGroundPour ? static_cast<double>(CurrentGroundGrams)
+        : static_cast<double>(GroundPourRateGramsPerSecond) * Dt * FMath::Clamp(TipDown, 0.f, 1.f);
     const float Requested = static_cast<float>(FMath::Min(Want, static_cast<double>(CurrentGroundGrams)));
     if (Requested <= 0.f) { return 0.f; }
 
@@ -617,13 +625,300 @@ float AGrinderDrawerActor::PourGrounds(float Dt)
     SpilledGroundGrams += static_cast<double>(Dropped) - Accepted;
     LastPouredGroundGrams = Dropped;
     LastAcceptedGroundGrams = Accepted;
+    if (!bShowPowderStream || bInstantGroundPour) { UpdatePowderStream(Dt); }
+    return Dropped;
+}
+
+float AGrinderDrawerActor::TryAssistedGroundTransfer(float Dt)
+{
+    if (bGroundTransferInProgress) { return 0.f; }
+    TGuardValue<bool> TransferGuard(bGroundTransferInProgress, true);
+    UpdatePowderStream(Dt);
+    LastGroundPourOrigin = FVector::ZeroVector;
+    LastGroundPourEnd = FVector::ZeroVector;
+    LastGroundTransferReason = TEXT("AIM");
+    UWorld* World = GetWorld();
+    if (!IsValid(this) || !World || !IsValid(DrawerMesh) || !IsValid(GroundPourPoint)
+        || DrawerMesh->GetOwner() != this || GroundPourPoint->GetOwner() != this
+        || DrawerMesh->GetWorld() != World || GroundPourPoint->GetWorld() != World
+        || !FMath::IsFinite(Dt) || Dt <= 0.f || CurrentGroundGrams <= 0.f
+        || !FMath::IsFinite(AssistedPourTiltDegrees) || !FMath::IsFinite(GroundLipHalfWidthCM)
+        || !FMath::IsFinite(GroundsAssistMarginCM) || !FMath::IsFinite(GroundsAssistBelowRimCM)
+        || !FMath::IsFinite(GroundsAssistMaxHeightCM)) { return 0.f; }
+
+    const FTransform MeshTransform = DrawerMesh->GetComponentTransform();
+    const FTransform PourTransform = GroundPourPoint->GetComponentTransform();
+    if (MeshTransform.ContainsNaN() || PourTransform.ContainsNaN()
+        || MeshTransform.GetScale3D().GetAbs().GetMin() <= UE_SMALL_NUMBER
+        || PourTransform.GetScale3D().GetAbs().GetMin() <= UE_SMALL_NUMBER) { return 0.f; }
+    const FVector Up = FVector::UpVector;
+    const FVector Down = -Up;
+    const FVector TipAxis = MeshTransform.GetRotation().RotateVector(FVector::YAxisVector);
+    const double UpDot = FVector::DotProduct(DrawerMesh->GetUpVector(), Up);
+    const double TipDown = FVector::DotProduct(TipAxis, Down);
+    const double Tilt = FMath::Clamp(static_cast<double>(AssistedPourTiltDegrees), 0.0, 89.0);
+    if (UpDot >= FMath::Cos(FMath::DegreesToRadians(Tilt)) || TipDown < 0.15)
+    {
+        LastGroundTransferReason = TEXT("ANGLE");
+        return 0.f;
+    }
+    const FVector LipCenter = GroundPourPoint->GetComponentLocation();
+    const FVector LipAxis = MeshTransform.GetRotation().RotateVector(FVector::XAxisVector);
+    const double HalfWidth = FMath::Min(8.0, FMath::Clamp(static_cast<double>(GroundLipHalfWidthCM), 0.0, 8.0)
+        * FMath::Abs(MeshTransform.GetScale3D().X));
+    const double Margin = FMath::Clamp(static_cast<double>(GroundsAssistMarginCM), 0.0, 1.0);
+    const double BelowRim = FMath::Clamp(static_cast<double>(GroundsAssistBelowRimCM), 0.0, 1.5);
+    const double MaxHeight = FMath::Clamp(static_cast<double>(GroundsAssistMaxHeightCM), 0.0, 25.0);
+    if (LipCenter.ContainsNaN() || LipAxis.ContainsNaN()) { return 0.f; }
+
+    AHandDripperActor* Target = nullptr;
+    FVector SourcePoint = LipCenter, ProjectedPoint = LipCenter;
+    double NearestDistanceSquared = TNumericLimits<double>::Max();
+    double ActualRadius = 0.0, PaperTop = 0.0;
+    bool bHeightRejected = false;
+    for (TActorIterator<AHandDripperActor> It(World); It; ++It)
+    {
+        AHandDripperActor* Dripper = *It;
+        if (!IsValid(Dripper) || Dripper->GetWorld() != World
+            || !IsValid(Dripper->ContainerMesh) || Dripper->ContainerMesh->GetOwner() != Dripper
+            || Dripper->GetRootComponent() != Dripper->ContainerMesh
+            || Dripper->ContainerMesh->GetComponentTransform().ContainsNaN()
+            || Dripper->ContainerMesh->GetComponentScale().GetAbs().GetMin() <= UE_SMALL_NUMBER
+            || !IsValid(Dripper->PourEntryPoint) || Dripper->PourEntryPoint->GetWorld() != World
+            || FVector::DotProduct(Dripper->ContainerMesh->GetUpVector(), Up) < 0.7) { continue; }
+        double Radius = 0.0, Top = 0.0;
+        if (!Dripper->GetGroundsAssistOpening(Radius, Top)) { continue; }
+        const FVector Center = Dripper->PourEntryPoint->GetComponentLocation();
+        const FVector Normal = Dripper->PourEntryPoint->GetUpVector();
+        const double NormalUp = FVector::DotProduct(Normal, Up);
+        if (Center.ContainsNaN() || Normal.ContainsNaN() || NormalUp < 0.7) { continue; }
+
+        // 沿重力投影整条实际口沿，先求其在入口圆盘上的精确最近点。
+        const FVector PlaneCenter = LipCenter - Up * (FVector::DotProduct(LipCenter - Center, Normal) / NormalUp);
+        const FVector PlaneAxis = LipAxis - Up * (FVector::DotProduct(LipAxis, Normal) / NormalUp);
+        const double AxisSquared = PlaneAxis.SizeSquared();
+        const double ClosestX = AxisSquared > UE_SMALL_NUMBER
+            ? FMath::Clamp(FVector::DotProduct(Center - PlaneCenter, PlaneAxis) / AxisSquared, -HalfWidth, HalfWidth) : 0.0;
+        const double ReceiveRadius = Radius + Margin;
+        if (FVector::DistSquared(PlaneCenter + PlaneAxis * ClosestX, Center) > ReceiveRadius * ReceiveRadius) { continue; }
+
+        // 七个固定口沿样本（-1、-2/3、-1/3、0、1/3、2/3、1）及上面的连续最近点。
+        // 只按空间距离选杯；容量/湿粉拒收后绝不跳到后面的第二杯。
+        for (int32 Sample = -1; Sample < 7; ++Sample)
+        {
+            const double X = Sample < 0 ? ClosestX : HalfWidth * (static_cast<double>(Sample) / 3.0 - 1.0);
+            const FVector Start = LipCenter + LipAxis * X;
+            const double Height = FVector::DotProduct(Start - Center, Normal) / NormalUp;
+            const FVector Point = Start - Up * Height;
+            if (Start.ContainsNaN() || Point.ContainsNaN() || !FMath::IsFinite(Height)
+                || FVector::DistSquared(Point, Center) > ReceiveRadius * ReceiveRadius) { continue; }
+            if (Height < -BelowRim || Height > MaxHeight)
+            {
+                bHeightRejected = true;
+                continue;
+            }
+            const double DistanceSquared = FVector::DistSquared(Start, Center);
+            if (DistanceSquared >= NearestDistanceSquared) { continue; }
+            Target = Dripper;
+            SourcePoint = Start;
+            ProjectedPoint = Point;
+            ActualRadius = Radius;
+            PaperTop = Top;
+            NearestDistanceSquared = DistanceSquared;
+        }
+    }
+    if (!Target)
+    {
+        LastGroundTransferReason = bHeightRejected ? TEXT("HEIGHT") : TEXT("AIM");
+        return 0.f;
+    }
+    const FVector EntryCenter = Target->PourEntryPoint->GetComponentLocation();
+    const FVector EntryNormal = Target->PourEntryPoint->GetUpVector();
+    const FVector CanonicalPoint = EntryCenter + (ProjectedPoint - EntryCenter).GetClampedToMaxSize(ActualRadius * 0.85);
+    LastGroundPourOrigin = SourcePoint;
+    LastGroundPourEnd = CanonicalPoint;
+    const auto CanReceive = [Target]()
+    {
+        if (!IsValid(Target)) { return false; }
+        const double Volume = Target->GetPreciseVolumeML();
+        return Target->CanReceiveGrounds() && FMath::IsFinite(Volume) && Volume >= 0.0
+            && FMath::IsFinite(Target->Wetness) && Target->Wetness <= 0.f
+            && FMath::IsFinite(Target->GetGroundsGrams()) && Target->GetGroundsGrams() >= 0.f;
+    };
+    if (!CanReceive())
+    {
+        const bool bDry = !Target->IsBroken() && !Target->IsLiquidFrozen() && Target->Wetness <= 0.f
+            && (Target->BrewState == ECoffeeBrewState::Empty || Target->BrewState == ECoffeeBrewState::Dry)
+            && Target->GetPreciseVolumeML() <= 1.e-6;
+        LastGroundTransferReason = bDry && Target->GetGroundsGrams() >= Target->GetGroundsCapacityGrams()
+            ? TEXT("FULL_FILTER") : TEXT("NEEDS_EMPTY_FILTER");
+        return 0.f;
+    }
+
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(GrinderAssistedGroundPour), false, this);
+    Params.AddIgnoredActor(GetOwner());
+    if (OwnerGrinder) { Params.AddIgnoredActor(OwnerGrinder); }
+    for (TActorIterator<APawn> It(World); It; ++It) { Params.AddIgnoredActor(*It); }
+    Params.bFindInitialOverlaps = true;
+    const auto IsAllowedOpeningOverlap = [&](UPrimitiveComponent* Component, const FVector& Point)
+    {
+        const FVector Offset = Point - EntryCenter;
+        const double AboveEntry = FVector::DotProduct(Offset, EntryNormal);
+        const FVector Planar = Offset - EntryNormal * AboveEntry;
+        // 重叠没有命中法线，仅在入口中心附近放行本杯根粗壳，不放行支架或外物。
+        return Component == Target->ContainerMesh && Component == Target->GetRootComponent()
+            && Component->GetOwner() == Target && !Point.ContainsNaN()
+            && FMath::Abs(AboveEntry) <= 0.1 && AboveEntry >= -BelowRim && AboveEntry <= PaperTop + 0.5
+            && Planar.SizeSquared() <= FMath::Square(ActualRadius * 0.85);
+    };
+    const auto IsClear = [&](const FVector& Start, const FVector& End)
+    {
+        if (Start.ContainsNaN() || End.ContainsNaN()) { return false; }
+        if (FVector::DistSquared(Start, End) <= UE_SMALL_NUMBER * UE_SMALL_NUMBER)
+        {
+            TArray<FOverlapResult> Overlaps;
+            World->OverlapMultiByObjectType(Overlaps, Start, FQuat::Identity,
+                FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects),
+                FCollisionShape::MakeSphere(0.05f), Params);
+            for (const FOverlapResult& Overlap : Overlaps)
+            {
+                UPrimitiveComponent* Component = Overlap.GetComponent();
+                if (!IsValid(Component)) { return false; }
+                if (Component->GetCollisionResponseToChannel(ECC_Visibility) != ECR_Block) { continue; }
+                if (!IsAllowedOpeningOverlap(Component, Start)) { return false; }
+            }
+            return true;
+        }
+        TArray<FHitResult> Hits;
+        // Object multi 收集首个粗壳之后的外物；逐组件检查 Visibility，不整杯忽略。
+        World->LineTraceMultiByObjectType(Hits, Start, End,
+            FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects), Params);
+        for (const FHitResult& Hit : Hits)
+        {
+            UPrimitiveComponent* Component = Hit.GetComponent();
+            if (!IsValid(Component)) { return false; }
+            if (Component->GetCollisionResponseToChannel(ECC_Visibility) != ECR_Block) { continue; }
+            const FVector Offset = Hit.ImpactPoint - EntryCenter;
+            const double AboveEntry = FVector::DotProduct(Offset, EntryNormal);
+            const FVector Planar = Offset - EntryNormal * AboveEntry;
+            const bool bOpeningShell = !Hit.bStartPenetrating && Hit.GetActor() == Target
+                && Component == Target->ContainerMesh && Component == Target->GetRootComponent()
+                && !Hit.ImpactPoint.ContainsNaN() && !Hit.ImpactNormal.ContainsNaN()
+                && FVector::DotProduct(Hit.ImpactNormal, Up) >= 0.7
+                && AboveEntry >= -BelowRim && AboveEntry <= PaperTop + 0.5
+                && Planar.SizeSquared() <= ActualRadius * ActualRadius;
+            if (!bOpeningShell) { return false; }
+        }
+        return true;
+    };
+    // 上方走重力竖直射线，略低于口沿走短向上射线，再检查有限的圆盘内辅助桥。
+    if (!IsClear(SourcePoint, ProjectedPoint) || !IsClear(ProjectedPoint, CanonicalPoint))
+    {
+        LastGroundTransferReason = TEXT("BLOCKED");
+        return 0.f;
+    }
+    if (!IsValid(Target) || Target->GetWorld() != World || !CanReceive())
+    {
+        LastGroundTransferReason = TEXT("NEEDS_EMPTY_FILTER");
+        return 0.f;
+    }
+
+    const float SourceBefore = CurrentGroundGrams;
+    const float TargetBefore = Target->GetGroundsGrams();
+    const double TotalBefore = static_cast<double>(TargetBefore) + static_cast<double>(SourceBefore);
+    const double Limit = FMath::Min(static_cast<double>(Target->GetGroundsCapacityGrams()), TotalBefore);
+    const bool bCanEmptySource = static_cast<double>(Target->GetGroundsCapacityGrams()) >= TotalBefore;
+    const auto GetRemovalRequested = [SourceBefore](double MinimumDelta, float InitialRemoval)
+    {
+        float Removal = FMath::Clamp(InitialRemoval, 0.f, SourceBefore);
+        for (int32 Step = 0; Step < 4
+            && static_cast<double>(SourceBefore) - FMath::Max(0.f, SourceBefore - Removal) < MinimumDelta; ++Step)
+        {
+            // 只向上调整扣源请求，朝源库存取下一 float，等价于向 +inf 后再限幅。
+            Removal = FMath::Min(std::nextafter(Removal, SourceBefore), SourceBefore);
+        }
+        return Removal;
+    };
+    float CandidateNew = static_cast<float>(Limit);
+    if (static_cast<double>(CandidateNew) > Limit) { CandidateNew = std::nextafter(CandidateNew, 0.f); }
+    float Requested = 0.f;
+    float ApprovedRemovalRequested = 0.f;
+    for (int32 Attempt = 0; Attempt < 4 && CandidateNew > TargetBefore; ++Attempt)
+    {
+        const double TargetDelta = static_cast<double>(CandidateNew) - TargetBefore;
+        const float Delta = static_cast<float>(TargetDelta);
+        const double MinimumDelta = FMath::Max(TargetDelta, static_cast<double>(Delta));
+        const float Removal = GetRemovalRequested(MinimumDelta, bCanEmptySource ? SourceBefore : Delta);
+        const float SourceAfter = FMath::Max(0.f, SourceBefore - Removal);
+        const double SourceDelta = static_cast<double>(SourceBefore) - SourceAfter;
+        const float PredictedTarget = FMath::Min(Target->GetGroundsCapacityGrams(),
+            TargetBefore + FMath::Min(Delta, Target->GetGroundsCapacityGrams() - TargetBefore));
+        if (PredictedTarget == CandidateNew && Delta <= SourceBefore && SourceDelta >= MinimumDelta)
+        {
+            Requested = Delta;
+            ApprovedRemovalRequested = Removal;
+            break;
+        }
+        // 目标请求不能向上加粉；只有预测不成立时才下调目标候选，容量不足的余粉留仓。
+        const double SmallerLimit = static_cast<double>(TargetBefore) + FMath::Min(TargetDelta, SourceDelta);
+        float SmallerNew = static_cast<float>(SmallerLimit);
+        if (static_cast<double>(SmallerNew) > SmallerLimit) { SmallerNew = std::nextafter(SmallerNew, 0.f); }
+        CandidateNew = FMath::Min(SmallerNew, std::nextafter(CandidateNew, TargetBefore));
+    }
+    if (Requested <= 0.f)
+    {
+        LastGroundTransferReason = TEXT("FULL_FILTER");
+        return 0.f;
+    }
+
+    // 原接粉 API 只拿圆盘内合法坐标；先加目标，成功后才扣仍完整的源库存。
+    const TWeakObjectPtr<AGrinderDrawerActor> Self(this);
+    const float Accepted = Target->AddGrounds(Requested, CanonicalPoint);
+    if (!Self.IsValid()) { return 0.f; }
+    const float TargetAfter = IsValid(Target) ? Target->GetGroundsGrams() : CandidateNew;
+    const double ActualTargetDelta = static_cast<double>(TargetAfter) - TargetBefore;
+    if (!FMath::IsFinite(Accepted) || Accepted <= 0.f
+        || !FMath::IsFinite(ActualTargetDelta) || ActualTargetDelta <= 0.0)
+    {
+        LastGroundTransferReason = TEXT("NEEDS_EMPTY_FILTER");
+        return 0.f;
+    }
+    const double MinimumActualDelta = FMath::Max(ActualTargetDelta, static_cast<double>(Accepted));
+    if (TargetAfter != CandidateNew
+        || static_cast<double>(SourceBefore) - FMath::Max(0.f, SourceBefore - ApprovedRemovalRequested) < MinimumActualDelta)
+    {
+        // 若接粉结果不同于预测，按实际目标增量及返回量重算扣源，不能只用舍入后的 Accepted。
+        ApprovedRemovalRequested = GetRemovalRequested(MinimumActualDelta, static_cast<float>(MinimumActualDelta));
+    }
+    if (static_cast<double>(SourceBefore) - FMath::Max(0.f, SourceBefore - ApprovedRemovalRequested) < MinimumActualDelta)
+    {
+        LastGroundTransferReason = TEXT("NEEDS_EMPTY_FILTER");
+        return 0.f;
+    }
+    const float Dropped = RemoveGrounds(ApprovedRemovalRequested);
+    if (!Self.IsValid()) { return Dropped; }
+    const double ActualSourceDelta = static_cast<double>(SourceBefore) - CurrentGroundGrams;
+    // 能全收时出清源库存；容量不足仍留仓，仅把实际扣源超过目标增量的正微尾差记为洒粉。
+    SpilledGroundGrams += FMath::Max(0.0, ActualSourceDelta - ActualTargetDelta);
+    LastPouredGroundGrams = Dropped;
+    LastAcceptedGroundGrams = Accepted;
+    LastGroundTransferReason = CurrentGroundGrams > 0.f ? TEXT("PARTIAL") : TEXT("TRANSFERRED");
     return Dropped;
 }
 
 void AGrinderDrawerActor::UpdatePowderStream(float Dt)
 {
-    if(!PowderStream)return;PowderStream->ClearInstances();
+    if (!PowderStream) { return; }
+    PowderStream->ClearInstances();
+    if (!bShowPowderStream || bInstantGroundPour)
+    {
+        PowderStream->SetVisibility(false);
+        PowderStream->SetHiddenInGame(true);
+        return;
+    }
     if(LastPouredGroundGrams<=0||!FMath::IsFinite(Dt))return;
+    PowderStream->SetVisibility(true);
+    PowderStream->SetHiddenInGame(false);
     PowderVisualAge+=FMath::Max(0.f,Dt);
     for(int I=0;I<24;++I){const float T=FMath::Frac(PowderVisualAge*2.3f+I/24.f);FVector P=FMath::Lerp(LastGroundPourOrigin,LastGroundPourEnd,T);P.X+=FMath::Sin(I*2.1f)*.35;P.Y+=FMath::Cos(I*2.7f)*.35;PowderStream->AddInstance(FTransform(FQuat::Identity,P,FVector(.0017)),true);}
 }

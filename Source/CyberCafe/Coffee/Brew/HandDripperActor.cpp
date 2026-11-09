@@ -95,6 +95,7 @@ AHandDripperActor::AHandDripperActor()
     StatusText->SetText(FText::FromString(TEXT("EMPTY / ADD GROUNDS")));
     InitialGroundLocation = GroundBed->GetRelativeLocation();
     InitialGroundScale = GroundBed->GetRelativeScale3D();
+    BaseGroundRelRot = GroundBed->GetRelativeRotation();
 }
 
 void AHandDripperActor::BeginPlay()
@@ -104,8 +105,10 @@ void AHandDripperActor::BeginPlay()
     Super::BeginPlay();
     if (GroundBed)
     {
+        // 先缓存资产/实例原始变换，视觉应用后不再回写缓存，避免重复缩小。
         InitialGroundLocation = GroundBed->GetRelativeLocation();
         InitialGroundScale = GroundBed->GetRelativeScale3D();
+        BaseGroundRelRot = GroundBed->GetRelativeRotation();
         for (int32 Index = 0; Index < GroundBed->GetNumMaterials(); ++Index)
             if (GroundBed->GetMaterial(Index)) GroundBed->CreateAndSetMaterialInstanceDynamic(Index);
     }
@@ -173,6 +176,52 @@ bool AHandDripperActor::CanReceiveGrounds() const
         && GetPreciseVolumeML() <= EmptyToleranceML && GroundsGrams < Capacity;
 }
 
+float AHandDripperActor::GetGroundsCapacityGrams() const
+{
+    return FMath::IsFinite(MaxGroundsGrams) ? FMath::Clamp(MaxGroundsGrams, 0.f, BatchCapacityGrams) : 0.f;
+}
+
+bool AHandDripperActor::GetGroundsAssistOpening(double& RadiusCM, double& PaperTopAboveEntryCM) const
+{
+    RadiusCM = 0.0;
+    PaperTopAboveEntryCM = 0.0;
+    if (!IsValid(PourEntryPoint) || PourEntryPoint->GetOwner() != this
+        || !FMath::IsFinite(PourEntryRadius) || PourEntryRadius <= 0.f) return false;
+    const FTransform Entry = PourEntryPoint->GetComponentTransform();
+    const FVector Scale = Entry.GetScale3D().GetAbs();
+    if (Entry.ContainsNaN() || Scale.GetMin() <= UE_SMALL_NUMBER) return false;
+    const FVector Normal = PourEntryPoint->GetUpVector();
+    RadiusCM = static_cast<double>(PourEntryRadius) * FMath::Min(Scale.X, Scale.Y);
+    if (IsValid(PaperMesh) && PaperMesh->GetStaticMesh())
+    {
+        if (PaperMesh->GetOwner() != this) return false;
+        const FTransform Paper = PaperMesh->GetComponentTransform();
+        const FVector PaperScale = Paper.GetScale3D().GetAbs();
+        const FBoxSphereBounds Bounds = PaperMesh->GetStaticMesh()->GetBounds();
+        const double Alignment = FVector::DotProduct(PaperMesh->GetUpVector(), Normal);
+        if (Paper.ContainsNaN() || PaperScale.GetMin() <= UE_SMALL_NUMBER
+            || Bounds.Origin.ContainsNaN() || Bounds.BoxExtent.ContainsNaN()
+            || Bounds.BoxExtent.GetMin() <= UE_SMALL_NUMBER || Alignment < 0.7) return false;
+        // 取滤纸实际源包围盒的保守内切圆，不用旋转后的世界 AABB 放大开口。
+        const FVector PaperCenter = Paper.TransformPosition(Bounds.Origin);
+        const FVector Offset = PaperCenter - Entry.GetLocation();
+        const FVector PlanarOffset = Offset - Normal * FVector::DotProduct(Offset, Normal);
+        const double PaperRadius = FMath::Min(Bounds.BoxExtent.X * PaperScale.X,
+            Bounds.BoxExtent.Y * PaperScale.Y) * Alignment - PlanarOffset.Size();
+        RadiusCM = FMath::Min(RadiusCM, PaperRadius);
+        PaperTopAboveEntryCM = -TNumericLimits<double>::Max();
+        for (int32 Corner = 0; Corner < 8; ++Corner)
+        {
+            const FVector Local = Bounds.Origin + Bounds.BoxExtent * FVector(
+                (Corner & 1) ? 1.0 : -1.0, (Corner & 2) ? 1.0 : -1.0, (Corner & 4) ? 1.0 : -1.0);
+            PaperTopAboveEntryCM = FMath::Max(PaperTopAboveEntryCM,
+                FVector::DotProduct(Paper.TransformPosition(Local) - Entry.GetLocation(), Normal));
+        }
+    }
+    return FMath::IsFinite(RadiusCM) && RadiusCM > UE_SMALL_NUMBER
+        && FMath::IsFinite(PaperTopAboveEntryCM);
+}
+
 float AHandDripperActor::AddGrounds(float Grams, const FVector& WorldPoint)
 {
     if (!FMath::IsFinite(Grams) || Grams <= 0.f || WorldPoint.ContainsNaN()
@@ -181,8 +230,8 @@ float AHandDripperActor::AddGrounds(float Grams, const FVector& WorldPoint)
 
     // API 自身校验开口平面，不依赖调用方已经做过相交测试。
     const FTransform EntryTransform = PourEntryPoint->GetComponentTransform();
-    if (EntryTransform.ContainsNaN()) return 0.f;
-    const FVector LocalPoint = EntryTransform.InverseTransformPositionNoScale(WorldPoint);
+    if (EntryTransform.ContainsNaN() || EntryTransform.GetScale3D().GetAbs().GetMin() <= UE_SMALL_NUMBER) return 0.f;
+    const FVector LocalPoint = EntryTransform.InverseTransformPosition(WorldPoint);
     if (LocalPoint.ContainsNaN() || FMath::Abs(LocalPoint.Z) > 2.0
         || LocalPoint.SizeSquared2D() > FMath::Square(static_cast<double>(PourEntryRadius))) return 0.f;
 
@@ -349,17 +398,51 @@ void AHandDripperActor::UpdateBrewVisuals()
     if (GroundBed)
     {
         GroundBed->SetVisibility(GroundsGrams > 0.f && !IsBroken());
-        const float Fraction = FMath::Clamp(GroundsGrams / BatchCapacityGrams, 0.f, 1.f);
-        const float XYFactor = 0.35f + 0.65f * FMath::Sqrt(Fraction);
-        const float ZFactor = 0.15f + 0.85f * Fraction;
-        GroundBed->SetRelativeScale3D(InitialGroundScale * FVector(XYFactor, XYFactor, ZFactor));
-        if (const UStaticMesh* Mesh = GroundBed->GetStaticMesh())
+        bool bAppliedCalibratedBed = false;
+        const UStaticMesh* GroundMesh = GroundBed->GetStaticMesh();
+        if (bUseHalfPaperGroundBed && GroundsGrams > 0.f && FMath::IsFinite(GroundsGrams)
+            && FMath::IsFinite(VisualFullGroundsGrams) && VisualFullGroundsGrams > 0.f
+            && !CalibratedGroundBedLocation.ContainsNaN() && !CalibratedGroundBedScale.ContainsNaN()
+            && CalibratedGroundBedScale.X > 0.0 && CalibratedGroundBedScale.Y > 0.0
+            && CalibratedGroundBedScale.Z > 0.0 && !BaseGroundRelRot.ContainsNaN()
+            && GroundBed->GetAttachParent() == ContainerMesh && GroundMesh)
         {
-            const FBoxSphereBounds Bounds = Mesh->GetBounds();
-            const FVector BottomShift(0, 0,
-                (Bounds.Origin.Z - Bounds.BoxExtent.Z) * InitialGroundScale.Z * (1.f - ZFactor));
-            GroundBed->SetRelativeLocation(InitialGroundLocation
-                + GroundBed->GetRelativeRotation().RotateVector(BottomShift));
+            const FBoxSphereBounds Bounds = GroundMesh->GetBounds();
+            if (!Bounds.Origin.ContainsNaN() && !Bounds.BoxExtent.ContainsNaN()
+                && Bounds.BoxExtent.X >= 0.0 && Bounds.BoxExtent.Y >= 0.0
+                && Bounds.BoxExtent.Z > UE_SMALL_NUMBER)
+            {
+                // 双精度除法避免极小正 VisualFullGroundsGrams 溢出；达到视觉满量后不再增高。
+                const float Ratio = static_cast<float>(FMath::Clamp(
+                    static_cast<double>(GroundsGrams) / static_cast<double>(VisualFullGroundsGrams), 0.0, 1.0));
+                const float XYFactor = 0.35f + 0.65f * FMath::Sqrt(Ratio);
+                const float HeightFactor = 0.15f + 0.85f * Ratio;
+                const FVector TargetScale = CalibratedGroundBedScale * FVector(XYFactor, XYFactor, HeightFactor);
+                // 使用源网格 minZ 和完整校准缩放补偿底部，不读取已被缩小的组件包围盒。
+                const FVector BottomShift(0, 0,
+                    (Bounds.Origin.Z - Bounds.BoxExtent.Z) * CalibratedGroundBedScale.Z * (1.f - HeightFactor));
+                const FVector TargetLocation = CalibratedGroundBedLocation + BaseGroundRelRot.RotateVector(BottomShift);
+                if (!TargetLocation.ContainsNaN() && !TargetScale.ContainsNaN())
+                {
+                    GroundBed->SetRelativeTransform(FTransform(BaseGroundRelRot, TargetLocation, TargetScale));
+                    bAppliedCalibratedBed = true;
+                }
+            }
+        }
+        if (!bAppliedCalibratedBed)
+        {
+            const float Fraction = FMath::Clamp(GroundsGrams / BatchCapacityGrams, 0.f, 1.f);
+            const float XYFactor = 0.35f + 0.65f * FMath::Sqrt(Fraction);
+            const float ZFactor = 0.15f + 0.85f * Fraction;
+            GroundBed->SetRelativeScale3D(InitialGroundScale * FVector(XYFactor, XYFactor, ZFactor));
+            if (const UStaticMesh* Mesh = GroundBed->GetStaticMesh())
+            {
+                const FBoxSphereBounds Bounds = Mesh->GetBounds();
+                const FVector BottomShift(0, 0,
+                    (Bounds.Origin.Z - Bounds.BoxExtent.Z) * InitialGroundScale.Z * (1.f - ZFactor));
+                GroundBed->SetRelativeLocation(InitialGroundLocation
+                    + GroundBed->GetRelativeRotation().RotateVector(BottomShift));
+            }
         }
         for (int32 Index = 0; Index < GroundBed->GetNumMaterials(); ++Index)
             if (UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(GroundBed->GetMaterial(Index)))

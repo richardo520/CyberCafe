@@ -20,6 +20,9 @@ public:
  UFUNCTION(BlueprintPure) bool CanReceiveGrounds() const;
  UFUNCTION(BlueprintCallable) float AddGrounds(float Grams,const FVector& WorldPoint);
  UFUNCTION(BlueprintPure) float GetGroundsGrams() const{return GroundsGrams;}
+ // 仅供辅助倒粉读取；不扩大通用接液入口，不修改滤纸或冲煮状态。
+ float GetGroundsCapacityGrams() const;
+ bool GetGroundsAssistOpening(double& RadiusCM,double& PaperTopAboveEntryCM) const;
  UFUNCTION(BlueprintPure) float GetCoffeeBudgetML() const{return RemainingCoffeeML;}
  UFUNCTION(BlueprintCallable) void AdvanceBrew(float Dt);
  UFUNCTION(BlueprintCallable) bool ReplacePaper();
@@ -33,6 +36,13 @@ public:
  float DropAge=0,PaperHold=0;bool bPaperTouchLatched=false;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UStaticMeshComponent> PaperMesh;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UStaticMeshComponent> GroundBed;
+ // 仅运行时应用视觉校准；默认关闭，不修改资产组件变换或实际粉量。
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Coffee|GroundBedVisual") bool bUseHalfPaperGroundBed=false;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Coffee|GroundBedVisual",meta=(EditCondition="bUseHalfPaperGroundBed")) float VisualFullGroundsGrams=15.f;
+ // 满视觉粉量的 GroundBed 相对位置（厘米）和网格局部缩放，与 ContainerMesh 直接子组件的相对变换同约定。
+ // 部署时按滤纸源包围盒及当前变换校准：表面半高、XY 留 0.3 cm 壁间隙；旋转沿用原始组件旋转。
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Coffee|GroundBedVisual",meta=(EditCondition="bUseHalfPaperGroundBed")) FVector CalibratedGroundBedLocation=FVector::ZeroVector;
+ UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Coffee|GroundBedVisual",meta=(EditCondition="bUseHalfPaperGroundBed")) FVector CalibratedGroundBedScale=FVector::OneVector;
  UPROPERTY(VisibleAnywhere,BlueprintReadOnly) TObjectPtr<UTextRenderComponent> StatusText;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float MaxGroundsGrams=20.f;
  UPROPERTY(EditAnywhere,BlueprintReadWrite) float BloomSeconds=8.f;
@@ -52,5 +62,6 @@ private:
  // 累计产量保留历史，批次上限只扣当前批新增产量。
  double CoffeeProducedAtBatchStartML=0;
  FVector InitialGroundLocation=FVector::ZeroVector,InitialGroundScale=FVector::OneVector;
+ FRotator BaseGroundRelRot=FRotator::ZeroRotator;
  void UpdateBrewVisuals();
 };

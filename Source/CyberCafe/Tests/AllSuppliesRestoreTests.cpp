@@ -89,6 +89,7 @@ void UAllSuppliesCallbackProbe::OnLiquidChange(float Fill, FLinearColor Color)
 #include "Liquid/IceInteraction.h"
 #include "Coffee/Brew/HandPourKettleActor.h"
 #include "Coffee/Brew/HandDripperActor.h"
+#include "Coffee/Brew/HandDripperAssemblyActor.h"
 #include "Coffee/Grinder/CoffeeGrinderActor.h"
 #include "Coffee/Grinder/GrinderHandleActor.h"
 #include "Coffee/Bean/DirectBeanJarActor.h"
@@ -102,7 +103,12 @@ namespace AllSuppliesRestoreTests
 {
 constexpr EAutomationTestFlags Flags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double Tolerance = 1.e-4;
-const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/bean_jar_steam/current_before.json");
+const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/dripper_grab_polish/current_before.json");
+const TCHAR* FilterName = TEXT("HandDripper_Practice");
+const TCHAR* OldStandName = TEXT("HandDripperStand_Practice");
+const TCHAR* LegacyDripperPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C");
+const TCHAR* AssemblyPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
+const TCHAR* BeanJarPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Blueprints/BP_DirectBeanJar.BP_DirectBeanJar_C");
 const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
 const FName Water(TEXT("Water")), Milk(TEXT("Milk")), Coffee(TEXT("Coffee"));
 
@@ -146,7 +152,15 @@ struct FBeforeLayout
             Actors.Add(Name, {Match.GetCaptureGroup(2), Match.GetCaptureGroup(4),
                 FTransform(FRotator(V[3], V[4], V[5]), FVector(V[0], V[1], V[2]), FVector(V[6], V[7], V[8]))});
         }
-        return Test.TestEqual(TEXT("Before 布局真实记录 312 个 actor"), Actors.Num(), 312);
+        if (!Test.TestEqual(TEXT("本轮源布局必须精确解析313个actor，豆罐已包含"), Actors.Num(), 313)) return false;
+        const auto* Filter = Actors.Find(FilterName);
+        const auto* Stand = Actors.Find(OldStandName);
+        if (!Test.TestNotNull(TEXT("源布局包含精确原滤杯名"), Filter)
+            || !Test.TestNotNull(TEXT("源布局包含唯一授权移除的旧支架名"), Stand)) return false;
+        return Test.TestEqual(TEXT("源滤杯必须是原指定BP，不接受任意派生类"), Filter->Class, FString(LegacyDripperPath))
+            && Test.TestEqual(TEXT("源独立支架是原Actor"), Stand->Class, FString(TEXT("/Script/Engine.Actor")))
+            && Test.TestTrue(TEXT("源滤杯完整根TM仍为(-33,131,67)/零旋转/单位缩放"),
+                Filter->Pose.Equals(FTransform(FVector(-33, 131, 67)), Tolerance));
     }
     FString Config(const FString& Name) const
     {
@@ -226,14 +240,23 @@ struct FSavedSupplies
         {
             auto* Jar = Cast<ADirectBeanJarActor>(Pair.Value);
             if (Jar) { ++JarCount; BeanJar = Jar; }
-            if (Before.Actors.Contains(Pair.Key)) continue;
-            ++Added;
-            if (!Test.TestTrue(TEXT("本轮仅允许新增原生 DirectBeanJar 派生的保存 BP，不能用未知根凑313"),
-                Jar && !Pair.Key.IsEmpty() && Jar->GetClass()->GetName() == TEXT("BP_DirectBeanJar_C"))) return false;
+            if (!Before.Actors.Contains(Pair.Key)) ++Added;
         }
-        if (!Test.TestEqual(TEXT("Before312之外严格只新增一个豆罐"), Added, 1)
-            || !Test.TestEqual(TEXT("保存地图仅一个 DirectBeanJar"), JarCount, 1)
-            || !Test.TestEqual(TEXT("保存地图数量等于本轮Before加一"), Actors.Num(), Before.Actors.Num() + 1)) return false;
+        if (!Test.TestEqual(TEXT("源已包含豆罐，不允许任何额外Actor"), Added, 0)
+            || !Test.TestEqual(TEXT("保存地图仅一个源DirectBeanJar"), JarCount, 1)
+            || !Test.TestEqual(TEXT("源313仅移除一个独立支架，当前312"), Actors.Num(), Before.Actors.Num() - 1)
+            || !Test.TestFalse(TEXT("唯一授权移除的旧支架已不存在"), Actors.Contains(OldStandName))) return false;
+        for (const auto& Pair : Before.Actors)
+        {
+            if (Pair.Key == OldStandName) continue;
+            auto* A = Actors.FindRef(Pair.Key);
+            if (!Test.TestNotNull(Pair.Key + TEXT(" 必须保留源身份名称"), A)) return false;
+            const FString ExpectedClass = Pair.Key == FilterName ? FString(AssemblyPath) : Pair.Value.Class;
+            if (!Test.TestEqual(Pair.Key + TEXT(" 仅滤杯允许精确新class"), A->GetClass()->GetPathName(), ExpectedClass)
+                || !Test.TestTrue(Pair.Key + TEXT(" 源完整pose不变"), A->GetActorTransform().Equals(Pair.Value.Pose, .001))) return false;
+        }
+        if (!Test.TestTrue(TEXT("豆罐必须是源清单已有的精确保存类"), BeanJar
+            && Before.Actors.Contains(BeanJar->GetName()) && BeanJar->GetClass()->GetPathName() == BeanJarPath)) return false;
         if (!Test.TestEqual(TEXT("全地图仅一个 GlassRecoveryActor，不按 label 筛掉额外经理"), Managers, 1)
             || !Test.TestNotNull(TEXT("保存恢复经理"), Manager)) return false;
         Test.TestEqual(TEXT("保存替换清单必须为十六项"), Manager->RestoreTargets.Num(), 16);
@@ -257,7 +280,12 @@ struct FSavedSupplies
             Tools.AddUnique(A.Get());
         }
         Scoop = Manager->RestoreScoop.Get();
-        Test.TestTrue(TEXT("唯一新豆罐必须在 replacement 清单内"), ReplacementSet.Contains(BeanJar));
+        Test.TestTrue(TEXT("源已有唯一豆罐必须在replacement清单内"), ReplacementSet.Contains(BeanJar));
+        auto* Assembly = Cast<AHandDripperAssemblyActor>(Actors.FindRef(FilterName));
+        if (!Test.TestNotNull(TEXT("实际新组合滤杯"), Assembly)
+            || !Test.TestTrue(TEXT("原滤杯工具槽已remap到同名精确新组合体"), Tools.Contains(Assembly))) return false;
+        for (auto* Vessel : Vessels)
+            Test.TestFalse(TEXT("接液杯不附着组合工具"), Vessel->IsA<ACupActor>() && Vessel->IsAttachedTo(Assembly));
         return Test.TestEqual(TEXT("原型与替换清单 union 为十六槽"), Vessels.Num(), 16)
             && Test.TestEqual(TEXT("工具无重复"), Tools.Num(), 3)
             && Test.TestNotNull(TEXT("冰铲单独列出"), Scoop);
@@ -344,16 +372,10 @@ struct FAllWorld
     AActor* SpawnSaved(AActor* Original)
     {
         const auto* Baseline = Saved.Before.Actors.Find(Original->GetName());
-        FBeforeActor AddedJar;
-        if (!Baseline && Original == Saved.BeanJar)
-        {
-            // 本轮 Before 尚无新罐；仅这一个已验证的新增身份使用实际保存类与位姿。
-            AddedJar.Class = Original->GetClass()->GetPathName(); AddedJar.Pose = Original->GetActorTransform();
-            Baseline = &AddedJar;
-        }
-        if (!Test.TestNotNull(TEXT("旧根必须来自本轮Before；仅唯一新豆罐使用保存实例"), Baseline)) return nullptr;
-        UClass* Class = LoadClass<AActor>(nullptr, *Baseline->Class);
-        if (!Test.TestNotNull(TEXT("从最新布局加载真实保存 class，无原生替代兜底"), Class)) return nullptr;
+        if (!Test.TestNotNull(TEXT("所有根包括豆罐必须来自本轮313源清单，无新增身份兜底"), Baseline)) return nullptr;
+        const FString ExpectedClass = Original->GetName() == FilterName ? FString(AssemblyPath) : Baseline->Class;
+        if (!Test.TestEqual(TEXT("夹具使用已严格核验的实际保存类"), Original->GetClass()->GetPathName(), ExpectedClass)) return nullptr;
+        UClass* Class = Original->GetClass();
         AActor* A = World->SpawnActorDeferred<AActor>(Class, Baseline->Pose, nullptr, nullptr,
             ESpawnActorCollisionHandlingMethod::AlwaysSpawn, ESpawnActorScaleMethod::OverrideRootScale);
         if (!Test.TestNotNull(TEXT("Deferred 生成保存类"), A)) return nullptr;
@@ -446,6 +468,19 @@ struct FAllWorld
         {
             AActor* A = SpawnSaved(Original); if (!A) return false;
             Manager->RestoreToolTargets.Add(A); ToolPoses.Add(A->GetActorTransform());
+            Test.TestTrue(TEXT("夹具工具原类及源完整TM不变"), A->GetClass() == Original->GetClass()
+                && A->GetActorTransform().Equals(Original->GetActorTransform(), .001));
+            TArray<UStaticMeshComponent*> SourceMeshes, ActualMeshes;
+            Original->GetComponents(SourceMeshes); A->GetComponents(ActualMeshes);
+            Test.TestEqual(TEXT("夹具保留当前工具全部网格，组合支架不丢件"), ActualMeshes.Num(), SourceMeshes.Num());
+            for (auto* SourceMesh : SourceMeshes)
+            {
+                UStaticMeshComponent* const* Actual = ActualMeshes.FindByPredicate([SourceMesh](const UStaticMeshComponent* Mesh)
+                    { return Mesh->GetFName() == SourceMesh->GetFName(); });
+                if (!Test.TestNotNull(TEXT("夹具工具原组件名称必须存在"), Actual)) return false;
+                Test.TestTrue(TEXT("夹具工具网格及完整世界TM忠于实际保存组件"), (*Actual)->GetStaticMesh() == SourceMesh->GetStaticMesh()
+                    && (*Actual)->GetComponentTransform().Equals(SourceMesh->GetComponentTransform(), .001));
+            }
             if (auto* K = Cast<AHandPourKettleActor>(A)) Kettle = K;
             if (auto* D = Cast<AHandDripperActor>(A)) Dripper = D;
             if (auto* G = Cast<ACoffeeGrinderActor>(A)) Grinder = G;
@@ -777,6 +812,20 @@ bool CheckRestored(FAutomationTestBase& Test, FAllWorld& T, const TArray<ALiquid
             Tool == T.Spawned.FindChecked(T.Saved.Tools[I]) && Tool == T.Manager->RestoreToolTargets[I].Get());
         if (!Test.TestNotNull(TEXT("工具存活"), Tool)) return false;
         Test.TestTrue(TEXT("工具回到捕获完整 TM"), Tool->GetActorTransform().Equals(T.ToolPoses[I], .0001));
+        Test.TestTrue(TEXT("恢复不替换当前保存工具class，组合体不能退回旧滤杯"), Tool->GetClass() == T.Saved.Tools[I]->GetClass());
+        if (auto* Assembly = Cast<AHandDripperAssemblyActor>(Tool))
+        {
+            const auto* SavedAssembly = CastChecked<AHandDripperAssemblyActor>(T.Saved.Tools[I]);
+            const TArray<UStaticMeshComponent*> Actual = {Assembly->StandLeftLeg.Get(), Assembly->StandRightLeg.Get(),
+                Assembly->StandLeftShelf.Get(), Assembly->StandRightShelf.Get()};
+            const TArray<UStaticMeshComponent*> Saved = {SavedAssembly->StandLeftLeg.Get(), SavedAssembly->StandRightLeg.Get(),
+                SavedAssembly->StandLeftShelf.Get(), SavedAssembly->StandRightShelf.Get()};
+            for (int32 Piece = 0; Piece < Actual.Num(); ++Piece)
+                Test.TestTrue(TEXT("恢复后四件支架世界TM精确回到保存布局"), Actual[Piece] && Saved[Piece]
+                    && Actual[Piece]->GetComponentTransform().Equals(Saved[Piece]->GetComponentTransform(), .0001));
+            for (auto* Cup : Current)
+                Test.TestFalse(TEXT("恢复杯不附着组合体"), Cup->IsA<ACupActor>() && Cup->IsAttachedTo(Assembly));
+        }
     }
     Test.TestTrue(TEXT("冰铲同一身份并回到原 TM"), T.Manager->RestoreScoop.Get() == T.Scoop
         && T.Scoop->GetActorTransform().Equals(T.ScoopPose, .0001));
@@ -798,14 +847,36 @@ bool FAllSuppliesSavedManifest::RunTest(const FString&)
 {
     FSavedSupplies S;
     if (!S.Load(*this)) return false;
-    TestEqual(TEXT("保留Before312并严格新增一个豆罐，不盲改基线为313"), S.Actors.Num(), S.Before.Actors.Num() + 1);
+    TestEqual(TEXT("直接用源313减唯一旧支架得到312，不新增豆罐"), S.Actors.Num(), S.Before.Actors.Num() - 1);
+    TestFalse(TEXT("精确旧支架名已移除"), S.Actors.Contains(OldStandName));
+    int32 Preserved = 0, UnchangedClasses = 0, FilterClassChanges = 0, Additional = 0;
     for (const auto& Pair : S.Before.Actors)
     {
+        if (Pair.Key == OldStandName) continue;
         AActor* const* Found = S.Actors.Find(Pair.Key);
         if (!TestTrue(Pair.Key + TEXT(" 未被脚本删除"), Found && Alive(*Found))) continue;
-        TestEqual(Pair.Key + TEXT(" 保存 class 不变"), (*Found)->GetClass()->GetPathName(), Pair.Value.Class);
+        ++Preserved;
+        if (Pair.Key == FilterName)
+        {
+            ++FilterClassChanges;
+            TestEqual(TEXT("仅原滤杯class改成固定BP_HandDripperWithStand"), (*Found)->GetClass()->GetPathName(), FString(AssemblyPath));
+            TestTrue(TEXT("新滤杯实际继承组合原生类，不接受任意旧子类"), (*Found)->IsA<AHandDripperAssemblyActor>());
+        }
+        else
+        {
+            ++UnchangedClasses;
+            TestEqual(Pair.Key + TEXT(" 保存class完整不变，含源豆罐"), (*Found)->GetClass()->GetPathName(), Pair.Value.Class);
+        }
         TestTrue(Pair.Key + TEXT(" 用户完整布局不回套旧坐标"), (*Found)->GetActorTransform().Equals(Pair.Value.Pose, .001));
+#if WITH_EDITOR
+        TestEqual(Pair.Key + TEXT(" 源label不变"), (*Found)->GetActorLabel(), Pair.Value.Label);
+#endif
     }
+    for (const auto& Pair : S.Actors) Additional += !S.Before.Actors.Contains(Pair.Key);
+    TestEqual(TEXT("除旧支架外312个原名都找到"), Preserved, 312);
+    TestEqual(TEXT("其余311Actor含豆罐class和完整pose不变"), UnchangedClasses, 311);
+    TestEqual(TEXT("仅一个指定滤杯允许class变化"), FilterClassChanges, 1);
+    TestEqual(TEXT("不允许任何额外Actor"), Additional, 0);
     const auto* ManagerBefore = S.Before.Actors.Find(S.Manager->GetName());
     if (!TestNotNull(TEXT("经理来自 Before"), ManagerBefore)) return false;
     TestTrue(TEXT("用户经理位置仍是 (28,136,92)"), S.Manager->GetActorLocation().Equals(FVector(28, 136, 92), .001));
@@ -844,7 +915,7 @@ bool FAllSuppliesSavedManifest::RunTest(const FString&)
         if (auto* Jar = Cast<ADirectBeanJarActor>(A))
         {
             ++Jars;
-            TestTrue(TEXT("清单豆罐必须是唯一新增保存身份"), Jar == S.BeanJar);
+            TestTrue(TEXT("清单豆罐必须是源已有唯一保存身份"), Jar == S.BeanJar);
             Near(*this, TEXT("保存豆罐库存150g"), Jar->GetBeanGrams(), 150);
             Near(*this, TEXT("保存豆罐Fill与实际液量均零"), Jar->FillAmount + Jar->GetPreciseVolumeML(), 0);
         }
