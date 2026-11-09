@@ -1,8 +1,11 @@
 #include "CafeSceneMusicComponent.h"
 #include "Components/AudioComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+#include "Sound/SoundMix.h"
 
 UCafeSceneMusicComponent::UCafeSceneMusicComponent()
 {
@@ -12,23 +15,57 @@ UCafeSceneMusicComponent::UCafeSceneMusicComponent()
 void UCafeSceneMusicComponent::BeginPlay()
 {
     Super::BeginPlay();
+    ApplyGlobalGainMix();
     if (bAutoPlay) StartMusic();
 }
 
 void UCafeSceneMusicComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     StopMusic();
+    RemoveGlobalGainMix();
     Super::EndPlay(EndPlayReason);
 }
 
 void UCafeSceneMusicComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
     StopMusic();
+    RemoveGlobalGainMix();
     Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
+void UCafeSceneMusicComponent::ApplyGlobalGainMix()
+{
+    if (bGlobalGainMixRequested) return;
+    UWorld* World = GetWorld();
+    AActor* Owner = GetOwner();
+    if (!IsValid(GlobalGainMix) || !IsValid(Owner) || Owner->IsActorBeingDestroyed() ||
+        !World || !World->IsGameWorld() || !World->AllowAudioPlayback() ||
+        World->GetNetMode() == NM_DedicatedServer || !GEngine || !GEngine->UseSound() ||
+        !World->GetAudioDeviceRaw()) return;
+
+    UGameplayStatics::PushSoundMixModifier(World, GlobalGainMix);
+    AppliedGlobalGainMix = GlobalGainMix;
+    bGlobalGainMixRequested = true;
+    ++GlobalGainMixStartCount;
+}
+
+void UCafeSceneMusicComponent::RemoveGlobalGainMix()
+{
+    if (!bGlobalGainMixRequested) return;
+    UWorld* World = GetWorld();
+    // Owner 在退出场景时可能已销毁；清理只依赖音频设备与实际已 Push 的资产。
+    if (IsValid(AppliedGlobalGainMix) && World && World->AllowAudioPlayback() &&
+        GEngine && GEngine->UseSound() && World->GetAudioDeviceRaw())
+    {
+        UGameplayStatics::PopSoundMixModifier(World, AppliedGlobalGainMix);
+    }
+    bGlobalGainMixRequested = false;
+    AppliedGlobalGainMix = nullptr;
 }
 
 void UCafeSceneMusicComponent::StartMusic()
 {
+    ApplyGlobalGainMix();
     if (bMusicRequested) return;
     UWorld* World = GetWorld();
     AActor* Owner = GetOwner();

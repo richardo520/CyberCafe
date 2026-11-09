@@ -5,6 +5,7 @@
 #include "CafeSceneMusicComponent.generated.h"
 
 class USoundBase;
+class USoundMix;
 class UAudioComponent;
 
 /** Scene-lifetime background music, independent of tutorial progress and spatial effects. */
@@ -31,6 +32,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Scene Music", meta=(ClampMin="0.0", ClampMax="10.0"))
     float FadeInSeconds = 1.f;
 
+    /** 场景全部声音共用的增益由资产配置，默认不应用。 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SceneAudio")
+    TObjectPtr<USoundMix> GlobalGainMix = nullptr;
+
     UFUNCTION(BlueprintCallable, Category="Scene Music")
     void StartMusic();
 
@@ -47,7 +52,20 @@ public:
     bool IsMusicRequested() const { return bMusicRequested; }
     int32 GetMusicStartCount() const { return MusicStartCount; }
 
+    /** 仅记录已向有效音频设备提交的请求，不代表实际可听音量。 */
+    bool IsGlobalGainMixRequested() const { return bGlobalGainMixRequested; }
+    int32 GetGlobalGainMixStartCount() const { return GlobalGainMixStartCount; }
+    USoundMix* GetGlobalAudioMixForTest() const { return AppliedGlobalGainMix; }
+
 private:
+    void ApplyGlobalGainMix();
+    void RemoveGlobalGainMix();
+
+    UPROPERTY(Transient)
+    TObjectPtr<USoundMix> AppliedGlobalGainMix = nullptr;
+    bool bGlobalGainMixRequested = false;
+    int32 GlobalGainMixStartCount = 0;
+
     UPROPERTY(Transient)
     TObjectPtr<UAudioComponent> AudioComponent;
     bool bMusicRequested = false;
