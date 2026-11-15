@@ -6,6 +6,7 @@
 #include "GameFramework/Actor.h"
 #include "NiagaraDataInterfaceExport.h"
 #include "Liquid/LiquidComposition.h"
+#include "Liquid/LiquidInventoryComponent.h"
 #include "LiquidContainerActor.generated.h"
 
 class UStaticMeshComponent;
@@ -95,6 +96,13 @@ class CYBERCAFE_API ALiquidContainerActor : public AActor, public INiagaraPartic
 
 public:
     ALiquidContainerActor();
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Liquid|Components") TObjectPtr<ULiquidInventoryComponent> Inventory;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Liquid|Components") TObjectPtr<class ULiquidConsumptionComponent> Consumption;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Liquid|Components") TObjectPtr<class ULiquidPresentationComponent> Presentation;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Liquid|Components") TObjectPtr<class ULiquidAudioComponent> Audio;
+    void PublishLiquidState() { NotifyLiquidState(); }
+    void StopFlow() { StopPouring(); }
+
     // @trace GBX-01. Optional per-blueprint profile; native or unconfigured props stay intact.
     UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category="Glass Breakage") TObjectPtr<UGlassBreakProfile> GlassBreakProfile;
     // @trace RS-03. Replacements reject pre-restore unrelated in-flight packages briefly.
@@ -127,7 +135,7 @@ public:
     UFUNCTION(BlueprintCallable,Category="Liquid|Composition")
     float AddIngredientLiquid(float DeltaML,FName IngredientId,FLinearColor InColor);
     UFUNCTION(BlueprintPure,Category="Liquid|Composition")
-    int32 GetLiquidRevision() const { return LiquidRevision; }
+    int32 GetLiquidRevision() const { return Inventory->GetRevision(); }
     UFUNCTION(BlueprintPure,Category="Liquid|Composition")
     bool IsLiquidFrozen() const { return bLiquidFrozen; }
     void FreezeLiquidForServing();
@@ -387,7 +395,7 @@ public:
 
     /** 诊断播放请求，不代表音频设备实际可听。 */
     UFUNCTION(BlueprintPure, Category = "Liquid|Audio")
-    bool IsPourAudioRequested() const { return bPourAudioRequested; }
+    bool IsPourAudioRequested() const;
 
     UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Audio")
     double PourAudioActualFlow = 0.0;
@@ -571,23 +579,19 @@ public:
 
 protected:
     friend class ULiquidTransferSubsystem;
-    friend class UCustomerDrinkComponent;
-    // @trace BC-03. Only the owning performance component can debit a frozen
-    // served cup. Frozen state stays set; consumption is not emitted or spilled.
-    double ConsumeForCustomer(class UCustomerDrinkComponent* Consumer,double RequestedML);
-    UPROPERTY(Transient) TWeakObjectPtr<class UCustomerDrinkComponent> CustomerConsumer;
-    double CustomerSipBudgetML=0;
-    bool bCustomerPerformanceClaimed=false;
+    friend class ULiquidConsumptionComponent;
+    friend class ULiquidPresentationComponent;
+    friend class ULiquidAudioComponent;
     double DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition = nullptr);
     double CreditVolumeInternal(double RequestedML, const FLinearColor& InColor, const FLiquidComposition* InComposition = nullptr);
     void NotifyLiquidState();
 
-    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "Liquid|Runtime")
-    double CurrentVolumeML = 0.0;
-    bool bLiquidStateInitialized = false;
-    UPROPERTY(Transient,VisibleInstanceOnly,BlueprintReadOnly,Category="Liquid|Composition")
-    FLiquidComposition Composition;
-    UPROPERTY(Transient) int32 LiquidRevision = 0;
+    // Read-only legacy BP/Details views. Inventory is authoritative; all mutations
+    // refresh these snapshots before publishing callbacks.
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category="Liquid|Runtime") double CurrentVolumeML=0;
+    UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category="Liquid|Composition") FLiquidComposition Composition;
+    void SyncInventorySnapshot();
+
     UPROPERTY(Transient) bool bLiquidFrozen = false;
     UPROPERTY(Transient) bool bBroken = false;
     // Explicit stop during emitted-volume callbacks cancels the remaining slices.
@@ -675,10 +679,7 @@ protected:
     void UpdatePourAudio(double ActualFlowMLPerSecond, const FTransform& SourceTransform);
     void StopPourAudio(bool bImmediate = false);
 
-    UPROPERTY(Transient)
-    TObjectPtr<UAudioComponent> PourAudioComponent = nullptr;
-    bool bPourAudioRequested = false;
-    bool bPourAudioRunning = false;
+
 
     /**
      * 收集本次倒液 Trace 需要忽略的 Actor。
@@ -687,15 +688,4 @@ protected:
      */
     virtual void GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const;
 
-    /** 当前平滑后的动态波动强度（每 Tick 更新，写入 P_Liquid.User.AddWaves） */
-    UPROPERTY(Transient)
-    float CurrentDynamicWaves;
-
-    /** 上一帧容器位置，用于非物理情况下估算线速度 */
-    UPROPERTY(Transient)
-    FVector PrevLocation;
-
-    /** 上一帧容器旋转，用于非物理情况下估算角速度 */
-    UPROPERTY(Transient)
-    FQuat PrevRotation;
 };

@@ -5,9 +5,10 @@
 #include "Tests/CustomerDrinkTestProbe.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
-#include "Tutorial/CustomerDrinkComponent.h"
-#include "Tutorial/CustomerDrinkMotion.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkMotion.h"
+#include "Customers/CustomerOrderComponent.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"
 #include "Tutorial/Steps/TutorialStep_Grab.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
@@ -698,6 +699,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCustomerMainMapRealSavedDirectorServeToSipTest
 bool FCustomerMainMapRealSavedDirectorServeToSipTest::RunTest(const FString&)
 {
     CustomerMainMap::FRun Run(*this, TEXT("MainMapRealSavedDirectorServeToSip"));
+    return Run.Setup() && Run.ReachOrder() && Run.Submit(false) && Run.FinishDrink();
+}
+
+// Retain the old saved-NPC test identity, but use the complete current saved map,
+// including its Highball motion, cup scale and actual ice requirements.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSavedFirstCustomerFlowTest,
+    "CyberCafe.Customer.SavedMapNPCInstanceAndRealConsumeStep",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FSavedFirstCustomerFlowTest::RunTest(const FString&)
+{
+    CustomerMainMap::FRun Run(*this, TEXT("SavedMapNPCInstanceAndRealConsumeStep"));
     return Run.Setup() && Run.ReachOrder() && Run.Submit(false) && Run.FinishDrink();
 }
 

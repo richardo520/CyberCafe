@@ -3,7 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
-#include "CafeSceneMusicComponent.h"
+#include "Media/CafeSceneMusicComponent.h"
 #include "Tutorial/TutorialDirector.h"
 #include "ActiveSound.h"
 #include "AudioDevice.h"

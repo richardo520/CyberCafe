@@ -6,10 +6,10 @@
 #include "TimerManager.h"
 #include "GameFramework/Actor.h"
 #include "Tutorial/TutorialNPC.h"
-#include "Tutorial/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Customers/CustomerOrderComponent.h"
 #include "Liquid/LiquidContainerActor.h"
 #include "Serving/ServingSpotActor.h"
-#include "EngineUtils.h"
 
 void UTutorialStep_ConsumeServedDrink::EnterStep(ATutorialDirector* InDirector)
 {
@@ -30,9 +30,21 @@ void UTutorialStep_ConsumeServedDrink::EnterStep(ATutorialDirector* InDirector)
     {
         bUsesCustomerPerformance=true;auto* Component=NPC->CustomerDrink.Get();
         auto* Cup=Cast<ALiquidContainerActor>(InDirector->LastServedCup.Get());
-        AServingSpotActor* Spot=nullptr;
-        for(TActorIterator<AServingSpotActor> It(World);It;++It)if(It->GetServedCup()==Cup&&It->HasBeenServed()){Spot=*It;break;}
         OwnedDrinkCup=Cup;DrinkingComponent=Component;
+        // Normal gameplay owns the action. This step observes its result, including
+        // an action that finished before the tutorial reached this step.
+        if (NPC->CustomerOrder && NPC->CustomerOrder->OwnsCup(Cup))
+        {
+            ObservedOrder = NPC->CustomerOrder;
+            if (ObservedOrder->IsOrderActive())
+                ObservedOrder->OnTastingFinished.AddUniqueDynamic(this, &UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
+            else
+                HandleCustomerDrinkEnded(Cup, ObservedOrder->GetState() == ECustomerOrderState::Completed, Component->GetConsumedML());
+            return;
+        }
+        // Compatibility for older/directly entered steps: serving attaches the cup
+        // to its spot, so no world-wide actor search or guessed order is needed.
+        AServingSpotActor* Spot=IsValid(Cup)?Cast<AServingSpotActor>(Cup->GetAttachParentActor()):nullptr;
         Component->OnDrinkEnded.AddUniqueDynamic(this,&UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
         if(!Component->BeginDrink(Cup,Spot))
         {
@@ -73,6 +85,12 @@ void UTutorialStep_ConsumeServedDrink::EnterStep(ATutorialDirector* InDirector)
 void UTutorialStep_ConsumeServedDrink::ExitStep()
 {
     bActiveCustomerStep=false;
+    if (auto* Order=ObservedOrder.Get())
+    {
+        Order->OnTastingFinished.RemoveDynamic(this, &UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
+        if(Order->OwnsCup(OwnedDrinkCup.Get()))Order->CancelOrder();
+    }
+    ObservedOrder.Reset();
     if(auto* C=DrinkingComponent.Get())
     {
         C->OnDrinkEnded.RemoveDynamic(this,&UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
@@ -94,6 +112,8 @@ void UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded(ALiquidContainer
     // Destroyed cups are nullptr; only the component subscribed by this step
     // can invoke this owned callback. Exit removes it before cancellation.
     if(Cup&&Cup!=OwnedDrinkCup.Get())return;
+    if(auto* Order=ObservedOrder.Get())Order->OnTastingFinished.RemoveDynamic(this,&UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
+    ObservedOrder.Reset();
     if(auto* C=DrinkingComponent.Get())C->OnDrinkEnded.RemoveDynamic(this,&UTutorialStep_ConsumeServedDrink::HandleCustomerDrinkEnded);
     DrinkingComponent.Reset();OwnedDrinkCup.Reset();
     if(!Completed)CompletedText=FText::FromString(TEXT("先把杯子放回这里吧。"));

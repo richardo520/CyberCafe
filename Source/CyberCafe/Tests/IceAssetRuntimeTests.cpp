@@ -10,7 +10,7 @@
 #include "Liquid/GlassBreakableComponent.h"
 #include "Liquid/GlassRecoveryActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"

@@ -4,7 +4,7 @@
 #include "Components/TextRenderComponent.h"
 #include "Serving/ServingSpotActor.h"
 #include "UI/OrderHologramWidget.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Character/VRPawn.h"
 #include "GrabComponent.h"

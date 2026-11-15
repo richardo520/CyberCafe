@@ -1,6 +1,9 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 // @trace LQ-01 LQ-02 LQ-05
+#include "Liquid/LiquidConsumptionComponent.h"
+#include "Liquid/LiquidPresentationComponent.h"
+#include "Liquid/LiquidAudioComponent.h"
 #include "Liquid/LiquidContainerActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
 #include "Liquid/GlassBreakableComponent.h"
@@ -26,14 +29,19 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "CollisionQueryParams.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
-#include "Tutorial/CustomerDrinkComponent.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
+
 
 ALiquidContainerActor::ALiquidContainerActor()
 {
     // 打开 Tick：基类统一驱动"动态波动 + 倒液"两条主流程，子类无需重复
     PrimaryActorTick.bCanEverTick = true;
     PrimaryActorTick.TickGroup = TG_PostPhysics;
+    Inventory = CreateDefaultSubobject<ULiquidInventoryComponent>(TEXT("LiquidInventory"));
+    Consumption = CreateDefaultSubobject<ULiquidConsumptionComponent>(TEXT("LiquidConsumption"));
+    Presentation = CreateDefaultSubobject<ULiquidPresentationComponent>(TEXT("LiquidPresentation"));
+    Audio = CreateDefaultSubobject<ULiquidAudioComponent>(TEXT("LiquidAudio"));
+
 
     // 容器外壳作为 Root（模拟物理 + 抓取目标）
     ContainerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ContainerMesh"));
@@ -88,9 +96,6 @@ ALiquidContainerActor::ALiquidContainerActor()
     AngularVelocityRefDegs = 360.f;  // 每秒一圈时达到最大波动
     WavesRiseSpeed         = 6.0f;   // 上升很快（晃一下立即反应）
     WavesDecaySpeed        = 2.5f;   // 下降略慢（停下后逐渐平静）
-    CurrentDynamicWaves    = 0.0f;
-    PrevLocation           = FVector::ZeroVector;
-    PrevRotation           = FQuat::Identity;
 
     // 默认包围盒仅作内部占位（现已不再自动写入 LiquidFX，User.BottleSize 由美术在 LiquidFX 中配置）
 
@@ -158,29 +163,25 @@ void ALiquidContainerActor::BeginPlay()
     InitPourFX();
 
     // 初始化上一帧参考位置/旋转
-    if (ContainerMesh)
-    {
-        PrevLocation = ContainerMesh->GetComponentLocation();
-        PrevRotation = ContainerMesh->GetComponentQuat();
-    }
+    Presentation->ResetMotionHistory();
 }
 
 void ALiquidContainerActor::EndPlay(const EEndPlayReason::Type Reason)
 {
     StopPouring();
     StopPourAudio(true);
-    if (bLiquidStateInitialized && GetWorld())
+    if (Inventory->bInitialized && GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
-            S->UnregisterContainer(this, CurrentVolumeML);
+            S->UnregisterContainer(this, Inventory->VolumeML);
     Super::EndPlay(Reason);
 }
 
 void ALiquidContainerActor::Destroyed()
 {
     StopPourAudio(true);
-    if (bLiquidStateInitialized && GetWorld())
+    if (Inventory->bInitialized && GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
-            S->UnregisterContainer(this, CurrentVolumeML);
+            S->UnregisterContainer(this, Inventory->VolumeML);
     Super::Destroyed();
 }
 
@@ -211,7 +212,7 @@ void ALiquidContainerActor::Tick(float DeltaTime)
         {
             StartPouring();
         }
-        else if (!bShouldPour && (bIsPouring || bPourAudioRequested))
+        else if (!bShouldPour && (bIsPouring || Audio->IsRequested()))
         {
             StopPouring();
         }
@@ -234,28 +235,29 @@ void ALiquidContainerActor::Tick(float DeltaTime)
 
 void ALiquidContainerActor::InitializeLiquidState()
 {
-    if (bLiquidStateInitialized) return;
+    if (Inventory->bInitialized) return;
     MaxVolumeML = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.f;
     const double InitialFill = FMath::IsFinite(FillAmount) ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) : 0.0;
-    CurrentVolumeML = SupportsLiquidInventory() ? InitialFill * MaxVolumeML : 0.0;
-    Composition = FLiquidComposition::Pure(InitialIngredientId, CurrentVolumeML);
-    bLiquidStateInitialized = true;
+    Inventory->VolumeML = SupportsLiquidInventory() ? InitialFill * MaxVolumeML : 0.0;
+    Inventory->Contents = FLiquidComposition::Pure(InitialIngredientId, Inventory->VolumeML);
+    Inventory->bInitialized = true;
+    SyncInventorySnapshot();
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
-            S->RegisterContainer(this, CurrentVolumeML);
+            S->RegisterContainer(this, Inventory->VolumeML);
 }
 
 double ALiquidContainerActor::GetPreciseVolumeML() const
 {
     if (!SupportsLiquidInventory()) return 0.0;
-    if (bLiquidStateInitialized) return CurrentVolumeML;
+    if (Inventory->bInitialized) return Inventory->VolumeML;
     return FMath::IsFinite(FillAmount) && FMath::IsFinite(MaxVolumeML)
         ? FMath::Clamp(static_cast<double>(FillAmount), 0.0, 1.0) * FMath::Max(0.f, MaxVolumeML) : 0.0;
 }
 
 FLiquidComposition ALiquidContainerActor::GetComposition() const
 {
-    return bLiquidStateInitialized ? Composition : FLiquidComposition::Pure(InitialIngredientId, GetPreciseVolumeML());
+    return Inventory->bInitialized ? Inventory->Contents : FLiquidComposition::Pure(InitialIngredientId, GetPreciseVolumeML());
 }
 
 bool ALiquidContainerActor::BreakContainerForImpact()
@@ -264,7 +266,7 @@ bool ALiquidContainerActor::BreakContainerForImpact()
     // 先锁定破碎状态，结算完成后才通知外部，防止回调重入重复记账。
     bBroken = true;
     InitializeLiquidState();
-    const double RemainingML = CurrentVolumeML;
+    const double RemainingML = Inventory->VolumeML;
     DebitVolumeInternal(RemainingML);
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>())
@@ -293,28 +295,13 @@ void ALiquidContainerActor::FreezeLiquidForServing()
     StopPourAudio(true);
 }
 
-double ALiquidContainerActor::ConsumeForCustomer(UCustomerDrinkComponent* Consumer,double RequestedML)
-{
-    if(!IsValid(Consumer)||CustomerConsumer.Get()!=Consumer||Consumer->GetDrinkingCup()!=this||!Consumer->IsDrinking()||!bLiquidFrozen||bBroken||IsActorBeingDestroyed()||!FMath::IsFinite(RequestedML)||RequestedML<=0||CustomerSipBudgetML<=0)return 0;
-    auto* S=GetWorld()?GetWorld()->GetSubsystem<ULiquidTransferSubsystem>():nullptr;if(!S)return 0;
-    const double Actual=DebitVolumeInternal(FMath::Min(RequestedML,CustomerSipBudgetML));
-    CustomerSipBudgetML-=Actual;S->RecordRemoved(Actual);
-    // Caller commits its counters before notifying external liquid subscribers.
-    return Actual;
-}
+
 double ALiquidContainerActor::DebitVolumeInternal(double RequestedML, FLiquidComposition* OutComposition)
 {
     if (!SupportsLiquidInventory()) return 0;
     InitializeLiquidState();
-    if (!FMath::IsFinite(RequestedML) || RequestedML <= 0) return 0;
-    const double Actual = FMath::Min(RequestedML, CurrentVolumeML);
-    if (Actual <= 0) return 0;
-    const FLiquidComposition Taken = Composition.Portion(Actual);
-    if (OutComposition) *OutComposition = Taken;
-    Composition.Remove(Taken);
-    CurrentVolumeML -= Actual;
-    if (CurrentVolumeML == 0) Composition.Ingredients.Empty();
-    ++LiquidRevision;
+    const double Actual=Inventory->Debit(RequestedML, OutComposition);
+    SyncInventorySnapshot();
     return Actual;
 }
 
@@ -322,19 +309,15 @@ double ALiquidContainerActor::CreditVolumeInternal(double RequestedML, const FLi
 {
     if (!SupportsLiquidInventory() || bLiquidFrozen || bBroken) return 0;
     InitializeLiquidState();
-    if (!FMath::IsFinite(RequestedML) || RequestedML <= 0 || !FMath::IsFinite(InColor.R) || !FMath::IsFinite(InColor.G) || !FMath::IsFinite(InColor.B) || !FMath::IsFinite(InColor.A)) return 0;
-    const double Capacity = FMath::IsFinite(MaxVolumeML) ? FMath::Max(0.f, MaxVolumeML) : 0.0;
-    const double Actual = FMath::Min(RequestedML, FMath::Max(0.0, Capacity - CurrentVolumeML));
-    if (Actual <= 0) return 0;
-    const FLiquidComposition Received = InComposition ? InComposition->Portion(Actual) : FLiquidComposition::Pure(TEXT("Unknown"), Actual);
-    if (FMath::Abs(Received.Total() - Actual) > 1.e-6) return 0;
-    Composition.Add(Received);
-    ++LiquidRevision;
-    const double Total = CurrentVolumeML + Actual;
-    LiquidColor = LiquidColor * static_cast<float>(CurrentVolumeML / Total) + InColor * static_cast<float>(Actual / Total);
-    LiquidColor.A = 1.f;
-    CurrentVolumeML = Total;
+    const double Actual=Inventory->Credit(RequestedML, MaxVolumeML, LiquidColor, InColor, InComposition);
+    SyncInventorySnapshot();
     return Actual;
+}
+
+void ALiquidContainerActor::SyncInventorySnapshot()
+{
+    CurrentVolumeML=Inventory->GetVolumeML();
+    Composition=Inventory->GetComposition();
 }
 
 void ALiquidContainerActor::NotifyLiquidState()
@@ -346,7 +329,7 @@ void ALiquidContainerActor::NotifyLiquidState()
 void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
 {
     if (bLiquidFrozen || bBroken || !FMath::IsFinite(NewCapacityML) || NewCapacityML < 0) return;
-    if (!bLiquidStateInitialized)
+    if (!Inventory->bInitialized)
     {
         // Construction/default setup changes capacity while retaining saved initial
         // fill. Do not lock the old capacity into runtime mL before BeginPlay.
@@ -355,7 +338,7 @@ void ALiquidContainerActor::SetCapacityML(float NewCapacityML)
         return;
     }
     MaxVolumeML = NewCapacityML;
-    const double Excess = DebitVolumeInternal(FMath::Max(0.0, CurrentVolumeML - MaxVolumeML));
+    const double Excess = DebitVolumeInternal(FMath::Max(0.0, Inventory->VolumeML - MaxVolumeML));
     if (GetWorld())
         if (ULiquidTransferSubsystem* S = GetWorld()->GetSubsystem<ULiquidTransferSubsystem>()) S->RecordSpilled(Excess);
     NotifyLiquidState();
@@ -397,58 +380,7 @@ float ALiquidContainerActor::ConsumeLiquid(float DeltaML)
 
 void ALiquidContainerActor::RefreshLiquidFX()
 {
-    if (bBroken)
-    {
-        FillAmount = 0.f;
-        if (LiquidFX)
-        {
-            LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"), 0.f);
-            LiquidFX->DeactivateImmediate();
-            LiquidFX->SetVisibility(false);
-        }
-        return;
-    }
-    if (bLiquidStateInitialized)
-        FillAmount = MaxVolumeML > 0.f ? static_cast<float>(FMath::Clamp(CurrentVolumeML / MaxVolumeML, 0.0, 1.0)) : 0.f;
-    if (!LiquidFX)
-    {
-        return;
-    }
-
-    // 容器空了则隐藏整个液体网格：
-    // P_Liquid 内部即使 Fill=0 也会保留一个"最小可见层"，
-    // 且普通 Deactivate 只停止 Spawn、已有粒子会走完 lifetime 才消失（视觉上像"倒不干净"）。
-    // 因此这里：
-    //   1) 先把 User.Fill = 0 写下去，防止残留渲染时还用旧值
-    //   2) 用 DeactivateImmediate 立即清除所有存活粒子，让瓶底那点液面瞬间消失
-    if (FillAmount <= KINDA_SMALL_NUMBER)
-    {
-        LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"), 0.f);
-        if (LiquidFX->IsActive())
-        {
-            LiquidFX->DeactivateImmediate();
-        }
-        return;
-    }
-
-    // 从空变非空：重新启动 LiquidFX（bReset=true 确保 Niagara 用当前 User 参数重新生成液面）
-    if (!LiquidFX->IsActive())
-    {
-        LiquidFX->Activate(/*bReset=*/true);
-    }
-
-    // 只写入 P_Liquid 定义的 User 参数。
-    // 颜色不再通过 Niagara 参数或整块材质替换来切，而是通过 LiquidMID 的
-    // Liquid_Color01 向量参数实时写入——这样 AddLiquid 的加权混色结果会自然
-    // 反映在杯子液体上，避免"整帧突变"造成的僵硬感。
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Fill"),       FillAmount);
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Opacity"),    LiquidOpacity);
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"),   AddWaves);
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.WavesScale"), WavesScale);
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.Viscosity"),  Viscosity);
-
-    // 把当前混色结果同步到 MID，驱动液体材质颜色平滑过渡。
-    ApplyLiquidColorToMID();
+    Presentation->RefreshLiquidFX();
 }
 
 bool ALiquidContainerActor::IsHeld() const
@@ -462,65 +394,7 @@ bool ALiquidContainerActor::IsHeld() const
 
 void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
 {
-    if (!LiquidFX)
-    {
-        return;
-    }
-
-    // 关闭动态波动时，直接使用静态 AddWaves
-    if (!bDynamicWaves)
-    {
-        LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"), AddWaves);
-        return;
-    }
-
-    // 1) 采集容器当前的线速度与角速度
-    float LinearSpeed  = 0.f;
-    float AngularSpeed = 0.f;
-    if (ContainerMesh)
-    {
-        // 优先用物理速度（仅模拟物理时有效）
-        LinearSpeed = ContainerMesh->GetPhysicsLinearVelocity().Size();
-        AngularSpeed = FMath::RadiansToDegrees(ContainerMesh->GetPhysicsAngularVelocityInRadians().Size());
-
-        // 若没上物理（比如被 Snap 到手上），退化用位移差分估算
-        if (LinearSpeed < KINDA_SMALL_NUMBER && AngularSpeed < KINDA_SMALL_NUMBER && DeltaTime > KINDA_SMALL_NUMBER)
-        {
-            const FVector CurLoc = ContainerMesh->GetComponentLocation();
-            LinearSpeed = ((CurLoc - PrevLocation) / DeltaTime).Size();
-            PrevLocation = CurLoc;
-
-            const FQuat CurRot = ContainerMesh->GetComponentQuat();
-            const FQuat DeltaQuat = CurRot * PrevRotation.Inverse();
-            FVector Axis; float AngleRad = 0.f;
-            DeltaQuat.ToAxisAndAngle(Axis, AngleRad);
-            AngleRad = FMath::UnwindRadians(AngleRad);
-            AngularSpeed = FMath::RadiansToDegrees(FMath::Abs(AngleRad) / DeltaTime);
-            PrevRotation = CurRot;
-        }
-        else
-        {
-            PrevLocation = ContainerMesh->GetComponentLocation();
-            PrevRotation = ContainerMesh->GetComponentQuat();
-        }
-    }
-
-    // 2) 将速度归一化到 0~1，取两者最大作为"运动强度"
-    const float LinearNorm  = FMath::Clamp(LinearSpeed  / FMath::Max(LinearVelocityRefCms,  1.f), 0.f, 1.f);
-    const float AngularNorm = FMath::Clamp(AngularSpeed / FMath::Max(AngularVelocityRefDegs, 1.f), 0.f, 1.f);
-    const float MotionNorm  = FMath::Max(LinearNorm, AngularNorm);
-
-    // 3) 目标波动强度：在 [IdleAddWaves, MaxAddWaves] 之间插值
-    const float TargetWaves = FMath::Lerp(IdleAddWaves, MaxAddWaves, MotionNorm);
-
-    // 4) 平滑：上升时快、下降时慢，避免抖动
-    const bool bRising = TargetWaves > CurrentDynamicWaves;
-    const float Speed  = bRising ? WavesRiseSpeed : WavesDecaySpeed;
-    const float Alpha  = FMath::Clamp(Speed * DeltaTime, 0.f, 1.f);
-    CurrentDynamicWaves = FMath::Lerp(CurrentDynamicWaves, TargetWaves, Alpha);
-
-    // 5) 写入 P_Liquid
-    LiquidFX->SetNiagaraVariableFloat(TEXT("User.AddWaves"), CurrentDynamicWaves);
+    Presentation->UpdateDynamicWaves(DeltaTime);
 }
 
 //=====================================================================
@@ -529,57 +403,12 @@ void ALiquidContainerActor::UpdateDynamicWaves(float DeltaTime)
 
 void ALiquidContainerActor::InitLiquidFX()
 {
-    if (bBroken || !LiquidFX)
-    {
-        return;
-    }
-
-    // 1) 附上 Niagara 模板（P_Liquid）
-    if (LiquidFXTemplate && LiquidFX->GetAsset() != LiquidFXTemplate)
-    {
-        LiquidFX->SetAsset(LiquidFXTemplate);
-    }
-
-    // 注意：User.Mesh / User.Material / User.BottleSize 不再在此处写入，
-    // 美术直接在蓝图的 LiquidFX 组件 Details 面板上配置即可（可在蓝图编辑器实时预览）。
-    // C++ 仅在 SetLiquidMaterialAsset（倒液到杯子时）主动覆写 User.Material。
-
-    // 2) 重启以确保 Niagara 与美术在组件上配置的 Override 正常生效
-    LiquidFX->ReinitializeSystem();
+    Presentation->InitLiquidFX();
 }
 
 void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
 {
-    if (!LiquidFX)
-    {
-        return;
-    }
-
-    // 从 Niagara 组件反查美术在 Details 面板上为 User.Material 指定的 Override。
-    // FindParameterOverride 会查 InstanceParameterOverrides + TemplateParameterOverrides，
-    // 覆盖美术在蓝图 LiquidFX 组件里配置的所有情形。
-    // 使用精确的 GetUMaterialDef() 类型，与 P_Liquid 里 User.Material 的类型声明保持一致，
-    // 也与写入端 SetVariableMaterial 使用的类型对齐。
-    const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUMaterialDef(), FName(TEXT("User.Material")));
-#if WITH_EDITOR
-    const FNiagaraVariant Variant = LiquidFX->FindParameterOverride(UserMaterialVar);
-    if (Variant.IsValid())
-    {
-        if (UMaterialInterface* Resolved = Cast<UMaterialInterface>(Variant.GetUObject()))
-        {
-            LiquidMaterialAsset = Resolved;
-        }
-    }
-#else
-    // Cook serializes authored overrides into the runtime store. UE5.6's
-    // FindParameterOverride is editor-only; invalid overrides keep the cached material.
-    const FNiagaraVariable RuntimeMaterialVar(FNiagaraTypeDefinition::GetUMaterialDef(), FName(TEXT("User.Material")));
-    const FNiagaraParameterStore& RuntimeOverrides = LiquidFX->GetOverrideParameters();
-    if (UMaterialInterface* Resolved = Cast<UMaterialInterface>(RuntimeOverrides.GetUObject(RuntimeMaterialVar).Get()))
-    {
-        LiquidMaterialAsset = Resolved;
-    }
-#endif
+    Presentation->ResolveLiquidMaterialFromFX();
 }
 
 //=====================================================================
@@ -588,43 +417,7 @@ void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
 
 void ALiquidContainerActor::InitPourFX()
 {
-    if (!PourFX)
-    {
-        return;
-    }
-
-    // 安全检查：提醒美术在蓝图 PourFX 组件的 Niagara Asset 一栏指定 P_Ribbon
-    if (!PourFX->GetAsset())
-    {
-        UE_LOG(LogTemp, Warning,
-            TEXT("[%s] PourFX 未指定 Niagara Asset，请在蓝图选中 PourFX 组件，Details → Niagara → Asset 里指定 P_Ribbon。"),
-            *GetName());
-    }
-
-    // 预写入静态参数
-    PourFX->SetNiagaraVariableLinearColor(TEXT("User.Color"),        LiquidColor);
-    PourFX->SetNiagaraVariableFloat      (TEXT("User.FlowStrength"), FlowStrength);
-    PourFX->SetNiagaraVariableBool       (TEXT("User.NoSplashes"),   bNoSplashes);
-    PourFX->SetNiagaraVariableBool       (TEXT("User.NoList"),       bNoList);
-    PourFX->SetNiagaraVariableBool       (TEXT("User.Decal"),        bEnableDecal);
-
-    // 将本 Actor 注册为 P_Ribbon 里“Export Particle Data to Blueprint”模块的
-    // CallbackHandler——仅保留旧资产接口兼容，不再由粒子决定液量；数据仍会回调
-    // 到 ReceiveParticleData_Implementation。
-    // 注意：不同的 Niagara 资产可能把 Handler Parameter 绑定到不同名字上，
-    // 这里一次写入三个最常见命名。Niagara 对不存在的 User 参数会静默忽略，
-    // 不会报错，也不会重复回调（回调取决于 Export DI 实际绑定的那个）。
-    PourFX->SetNiagaraVariableObject(TEXT("User.Data"),            this);
-    PourFX->SetNiagaraVariableObject(TEXT("User.Handler"),         this);
-    PourFX->SetNiagaraVariableObject(TEXT("User.CallbackHandler"), this);
-
-    if (bUseRibbonTrajectory && PourFX->GetAsset() && PourFX->GetAsset()->GetFName() == TEXT("P_Ribbon"))
-    {
-        PourFX->SetNiagaraVariableFloat(TEXT("User.Velocity"), PourRibbonVelocity);
-        PourFX->SetNiagaraVariableFloat(TEXT("User.Offset"), PourRibbonOffset);
-    }
-    // 默认关闭，要倒液时才 Activate
-    PourFX->Deactivate();
+    Presentation->InitPourFX();
 }
 
 //=====================================================================
@@ -796,96 +589,17 @@ void ALiquidContainerActor::StopPouring()
 
 UAudioComponent* ALiquidContainerActor::GetPourAudioComponent() const
 {
-    return PourAudioComponent.Get();
+    return Audio->GetLoopSoundComponent();
 }
 
 void ALiquidContainerActor::UpdatePourAudio(double ActualFlowMLPerSecond, const FTransform& SourceTransform)
 {
-    UWorld* World = GetWorld();
-    if (!IsValid(this) || IsActorBeingDestroyed() || bLiquidFrozen || bBroken ||
-        !bEnablePourAudio || !IsValid(PourLoopSound.Get()) || !IsValid(ContainerMesh.Get()) ||
-        !World || !World->AllowAudioPlayback() || !World->GetAudioDeviceRaw())
-    {
-        StopPourAudio(true);
-        return;
-    }
-    if (!bIsPouring || !FMath::IsFinite(ActualFlowMLPerSecond) || ActualFlowMLPerSecond <= 0.0 ||
-        SourceTransform.GetLocation().ContainsNaN() || SourceTransform.GetRotation().ContainsNaN())
-    {
-        StopPourAudio();
-        return;
-    }
-
-    if (!IsValid(PourAudioComponent.Get()))
-    {
-        PourAudioComponent = NewObject<UAudioComponent>(this, NAME_None, RF_Transient);
-        PourAudioComponent->bAutoActivate = false;
-        PourAudioComponent->bAutoDestroy = false;
-        PourAudioComponent->SetUISound(false);
-        PourAudioComponent->bAllowSpatialization = true;
-        PourAudioComponent->bOverrideAttenuation = true;
-        FSoundAttenuationSettings Attenuation;
-        Attenuation.bAttenuate = true;
-        Attenuation.bSpatialize = true;
-        Attenuation.AttenuationShape = EAttenuationShape::Sphere;
-        Attenuation.AttenuationShapeExtents = FVector(35.f);
-        Attenuation.FalloffDistance = 180.f;
-        Attenuation.SpatializationAlgorithm = SPATIALIZATION_Default;
-        PourAudioComponent->AttenuationOverrides = Attenuation;
-        PourAudioComponent->SetupAttachment(ContainerMesh.Get());
-        PourAudioComponent->SetAbsolute(false, false, true);
-        AddInstanceComponent(PourAudioComponent.Get());
-        PourAudioComponent->RegisterComponent();
-        bPourAudioRunning = false;
-    }
-
-    const float ReferenceFlow = FMath::Clamp(FMath::IsFinite(PourAudioReferenceFlow) ? PourAudioReferenceFlow : 40.f, 0.01f, 1000000.f);
-    const double FlowRatio = ActualFlowMLPerSecond / ReferenceFlow;
-    const float BaseVolume = FMath::Clamp(FMath::IsFinite(PourAudioVolume) ? PourAudioVolume : 0.45f, 0.f, 1.f);
-    const float Volume = BaseVolume * FMath::Sqrt(static_cast<float>(FMath::Clamp(FlowRatio, 0.1, 1.25)));
-    const float Pitch = 0.94f + 0.1f * static_cast<float>(FMath::Clamp(FlowRatio, 0.0, 1.0));
-    PourAudioComponent->SetWorldTransform(FTransform(SourceTransform.GetRotation(), SourceTransform.GetLocation(), FVector::OneVector),
-        false, nullptr, ETeleportType::TeleportPhysics);
-    PourAudioComponent->SetPitchMultiplier(Pitch);
-    bPourAudioRequested = true;
-    PourAudioActualFlow = ActualFlowMLPerSecond;
-
-    // 使用自己的请求门禁；没有实际 voice 时也不按 IsPlaying 每帧重启。
-    if (!bPourAudioRunning || PourAudioComponent->Sound.Get() != PourLoopSound.Get())
-    {
-        PourAudioComponent->Stop();
-        PourAudioComponent->SetSound(PourLoopSound.Get());
-        const float FadeInSeconds = FMath::Clamp(FMath::IsFinite(PourAudioFadeIn) ? PourAudioFadeIn : 0.06f, 0.f, 10.f);
-        // VolumeMultiplier carries the flow gain; FadeIn fades to unity so it
-        // does not multiply the configured flow volume a second time.
-        PourAudioComponent->SetVolumeMultiplier(Volume);
-        PourAudioComponent->FadeIn(FadeInSeconds, 1.f, FMath::FRandRange(0.f, 0.5f));
-        ++AudioStartCount;
-        bPourAudioRunning = true;
-    }
-    else
-    {
-        PourAudioComponent->SetVolumeMultiplier(Volume);
-    }
+    Audio->UpdatePourAudio(ActualFlowMLPerSecond, SourceTransform);
 }
 
 void ALiquidContainerActor::StopPourAudio(bool bImmediate)
 {
-    bPourAudioStopOnNextTick = false;
-    bPourAudioRequested = false;
-    PourAudioActualFlow = 0.0;
-    const bool bWasRunning = bPourAudioRunning;
-    bPourAudioRunning = false;
-    if (!IsValid(PourAudioComponent.Get())) return;
-    if (bImmediate)
-    {
-        PourAudioComponent->Stop();
-    }
-    else if (bWasRunning)
-    {
-        const float FadeOutSeconds = FMath::Clamp(FMath::IsFinite(PourAudioFadeOut) ? PourAudioFadeOut : 0.12f, 0.f, 10.f);
-        PourAudioComponent->FadeOut(FadeOutSeconds, 0.f);
-    }
+    Audio->StopPourAudio(bImmediate);
 }
 
 //=====================================================================
@@ -970,7 +684,7 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
         // while preserving the existing immediate end of the Niagara spawn state.
         TGuardValue<bool> HoldLastAudio(bPreserveLastEmissionAudio, Emitted > 0.0 && bIsPouring && bCanPour && !bLiquidFrozen && !bBroken);
         StopPouring();
-        bPourAudioStopOnNextTick = bPreserveLastEmissionAudio && bPourAudioRequested;
+        bPourAudioStopOnNextTick = bPreserveLastEmissionAudio && Audio->IsRequested();
     }
 }
 
@@ -980,103 +694,17 @@ void ALiquidContainerActor::UpdatePouring(float DeltaTime)
 
 void ALiquidContainerActor::SetLiquidMaterialAsset(UMaterialInterface* NewMaterial, bool bReadColor)
 {
-    if (bBroken || !NewMaterial)
-    {
-        return;
-    }
-
-    // ==============================================================
-    // 平滑过渡策略（方案 A：MID + 颜色参数插值）
-    //
-    // 现在杯子液体的外观由 LiquidMID + 其 Liquid_Color01 参数共同决定。
-    // 大部分"倒酒进杯"场景下，我们不再整块替换材质，只依靠 AddLiquid 的
-    // 体积加权混色更新 LiquidColor，然后由 RefreshLiquidFX → ApplyLiquidColorToMID
-    // 把颜色平滑写进 MID，避免"第一颗粒子命中就整杯变色"的僵硬感。
-    //
-    // 两种情形分别处理：
-    //   1) 目标杯子几乎为空（FillAmount ≈ 0）——这是"换酒"场景，允许整体切换：
-    //      - 更新 LiquidMaterialAsset
-    //      - 用新材质派生一个新 MID 并绑到 LiquidFX.User.Material
-    //      - 从材质读色一次（bReadColor）
-    //      - 由 RefreshLiquidFX 走一遍参数刷新（不做 Reinitialize，Fill=0 时它会
-    //        DeactivateImmediate，等下一颗粒子加液再 Activate 自然重启）
-    //   2) 目标杯子已经有液体——保持当前 MID 不动，只做"目标色引导"：
-    //      - 从新材质读一次目标颜色，但只用来作为"下一次混色的另一头"，不覆盖当前混色
-    //        （颜色实际过渡完全由 AddLiquid 的加权公式驱动）
-    //      - 不替换 User.Material、不 Reinitialize，Niagara 不会闪一下
-    //
-    // 注：本函数依然可以被蓝图强行调用来"硬切材质"（例如清空杯子/道具重置），
-    //     调用前把 FillAmount 置 0 即可走情形 1。
-    // ==============================================================
-
-    const bool bTargetEmpty = (FillAmount <= KINDA_SMALL_NUMBER);
-
-    if (bTargetEmpty)
-    {
-        // 情形 1：空杯换酒——允许整体切换材质
-        LiquidMaterialAsset = NewMaterial;
-
-        if (bReadColor)
-        {
-            TryReadColorFromMaterial();
-        }
-
-        // 用新材质派生 MID 并绑定到 LiquidFX.User.Material
-        EnsureLiquidMID(/*bForceRecreate=*/true);
-    }
-    else
-    {
-        // 情形 2：杯里已经有液体——只更新"数据源材质"的引用（用于 PourFX/Splash 读色引导），
-        //         不动 LiquidMID、不动 User.Material，颜色由 AddLiquid 混色 + RefreshLiquidFX 写 MID 自然过渡。
-        LiquidMaterialAsset = NewMaterial;
-        // 注意：这里刻意不再调用 TryReadColorFromMaterial()——那会把当前混色结果冲掉，
-        //       导致杯子颜色"瞬跳到源色"，正是我们要避免的僵硬感来源。
-    }
-
-    // 广播一次事件，便于蓝图侧联动（例如刷新 3D UI 上的酒名）
-    OnLiquidChanged.Broadcast(FillAmount, LiquidColor);
+    Presentation->SetLiquidMaterialAsset(NewMaterial, bReadColor);
 }
 
 void ALiquidContainerActor::EnsureLiquidMID(bool bForceRecreate)
 {
-    if (bBroken || !LiquidFX || !LiquidMaterialAsset)
-    {
-        return;
-    }
-
-    // 已有 MID 且父级仍是当前 LiquidMaterialAsset —— 直接复用
-    if (!bForceRecreate && LiquidMID && LiquidMID->Parent == LiquidMaterialAsset)
-    {
-        return;
-    }
-
-    // 用当前 LiquidMaterialAsset 派生一个新 MID
-    LiquidMID = UMaterialInstanceDynamic::Create(LiquidMaterialAsset, this);
-    if (!LiquidMID)
-    {
-        return;
-    }
-
-    // 立即把当前 LiquidColor 写进 MID，防止第一帧出现"MID 用父级默认色"的闪烁
-    LiquidMID->SetVectorParameterValue(LiquidColorParamName, LiquidColor);
-
-    // 绑定到 P_Liquid.User.Material —— 使用与旧 SetLiquidMaterialAsset 一致的 SetVariableMaterial 路径，
-    // 它会正确匹配 Niagara 里 User.Material 的类型声明，并触发 PSO 重编译。
-    LiquidFX->SetVariableMaterial(FName(TEXT("User.Material")), LiquidMID);
-
-    // 材质换了根，Niagara 需要重启一次让 Mesh Renderer 立刻用新 MID 渲染。
-    // 只有在"派生了新 MID"这条路径上才需要重启——常规颜色渐变不再走这里。
-    LiquidFX->ReinitializeSystem();
+    Presentation->EnsureLiquidMID(bForceRecreate);
 }
 
 void ALiquidContainerActor::ApplyLiquidColorToMID()
 {
-    if (!LiquidMID || LiquidColorParamName.IsNone())
-    {
-        return;
-    }
-
-    LiquidMID->SetVectorParameterValue(LiquidColorParamName, LiquidColor);
+    Presentation->ApplyLiquidColorToMID();
 }
 
 void ALiquidContainerActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors) const
@@ -1087,21 +715,7 @@ void ALiquidContainerActor::GetPourTraceIgnoreActors(TArray<AActor*>& OutActors)
 
 bool ALiquidContainerActor::TryReadColorFromMaterial()
 {
-    if (!LiquidMaterialAsset || LiquidColorParamName.IsNone())
-    {
-        return false;
-    }
-
-    // UMaterialInterface::GetVectorParameterValue 对 MI / M 都能用；
-    // 参数不存在时返回 false，不修改 OutValue。
-    FLinearColor Out;
-    if (LiquidMaterialAsset->GetVectorParameterValue(FMaterialParameterInfo(LiquidColorParamName), Out))
-    {
-        LiquidColor = Out;
-        LiquidColor.A = 1.f;
-        return true;
-    }
-    return false;
+    return Presentation->TryReadColorFromMaterial();
 }
 
 // Niagara exports remain connected for asset compatibility, but never own volume.
@@ -1111,4 +725,9 @@ void ALiquidContainerActor::ReceiveParticleData_Implementation(
     const FVector& SimulationPositionOffset)
 {
     // @trace LQ-05. Actual reception is settled by LiquidTransferSubsystem.
+}
+
+bool ALiquidContainerActor::IsPourAudioRequested() const
+{
+    return Audio->IsRequested();
 }

@@ -6,7 +6,7 @@
 #include "Liquid/LiquidContainerActor.h"
 #include "Serving/DrinkRecipe.h"
 #include "Serving/ServingSpotActor.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/Steps/TutorialStep_ShowMessage.h"

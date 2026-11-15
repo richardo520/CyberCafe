@@ -1,5 +1,5 @@
 #include "Tests/CustomerDrinkTestProbe.h"
-#include "Tutorial/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkComponent.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"
 #include "Liquid/LiquidContainerActor.h"

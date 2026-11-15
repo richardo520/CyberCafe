@@ -1,7 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Tutorial/Steps/TutorialStep_Grab.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "GameFramework/Actor.h"
 

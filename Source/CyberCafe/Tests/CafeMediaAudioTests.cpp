@@ -9,10 +9,10 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Misc/AutomationTest.h"
-#include "CafeSceneMusicComponent.h"
+#include "Media/CafeSceneMusicComponent.h"
 #include "Media/CafeTVPlaybackComponent.h"
-#include "Tutorial/CustomerDrinkComponent.h"
-#include "Tutorial/CustomerDrinkMotion.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkMotion.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Animation/AnimSequence.h"

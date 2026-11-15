@@ -59,6 +59,7 @@ protected:
 private:
     UFUNCTION() void HandleCustomerDrinkEnded(class ALiquidContainerActor* Cup,bool Completed,double ConsumedML);
     UPROPERTY(Transient) TWeakObjectPtr<class UCustomerDrinkComponent> DrinkingComponent;
+    UPROPERTY(Transient) TWeakObjectPtr<class UCustomerOrderComponent> ObservedOrder;
     UPROPERTY(Transient) TWeakObjectPtr<class ALiquidContainerActor> OwnedDrinkCup;
     bool bActiveCustomerStep=false,bUsesCustomerPerformance=false;
     FTimerHandle PreDrinkTimer;

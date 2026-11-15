@@ -13,7 +13,7 @@
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "TimerManager.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNarrativePolicyTest, "CyberCafe.Narrative.TextPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

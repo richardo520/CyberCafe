@@ -67,6 +67,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Tutorial|Step")
     virtual void ExitStep();
 
+    // Cancellation is distinct from normal progression: an accepted order may outlive its wait step.
+    virtual void CancelStep() { ExitStep(); }
+    virtual bool WaitForCompletionPresentation() const { return true; }
+
     /** 当前步骤是否已经完成 */
     UFUNCTION(BlueprintPure, Category = "Tutorial|Step")
     bool IsCompleted() const { return bCompleted; }

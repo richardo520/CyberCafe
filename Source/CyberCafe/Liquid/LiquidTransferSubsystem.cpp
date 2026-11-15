@@ -11,7 +11,7 @@
 #include "GrabComponent.h"
 #include "MotionControllerComponent.h"
 #include "CollisionQueryParams.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "HAL/IConsoleManager.h"

@@ -4,7 +4,9 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Tutorial/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkMotion.h"
+#include "Customers/CustomerOrderComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
 ATutorialNPC::ATutorialNPC()
@@ -13,6 +15,7 @@ ATutorialNPC::ATutorialNPC()
     // 后续真要加"眼神朝向玩家"时再在蓝图或子类里 bCanEverTick=true 并实现
     PrimaryActorTick.bCanEverTick = false;
     CustomerDrink=CreateDefaultSubobject<UCustomerDrinkComponent>(TEXT("CustomerDrink"));
+    CustomerOrder=CreateDefaultSubobject<UCustomerOrderComponent>(TEXT("CustomerOrder"));
 
     // Capsule 碰撞策略：
     //   - 对 WorldStatic/WorldDynamic：Block，保证 Character 能站在地面上（不穿地）
@@ -50,7 +53,8 @@ void ATutorialNPC::BeginPlay()
         GetMesh()->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
         GetMesh()->bEnableUpdateRateOptimizations=false;
         if(CustomerDrink->IdleAnimation)GetMesh()->PlayAnimation(CustomerDrink->IdleAnimation,true);
-        HeadAnchor->AttachToComponent(GetMesh(),FAttachmentTransformRules::SnapToTargetNotIncludingScale,TEXT("head"));
+        const FName VoiceSocket=CustomerDrink->Motion?CustomerDrink->Motion->VoiceSocket:NAME_None;
+        HeadAnchor->AttachToComponent(GetMesh(),FAttachmentTransformRules::SnapToTargetNotIncludingScale,VoiceSocket);
         HeadAnchor->SetRelativeLocation(FVector::ZeroVector);HeadAnchor->SetRelativeScale3D(FVector(.01));
     }
 }

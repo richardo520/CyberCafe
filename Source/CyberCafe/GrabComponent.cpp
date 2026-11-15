@@ -14,7 +14,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Haptics/HapticFeedbackEffect_Base.h"
 #include "Animation/AnimInstance.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 
 UGrabComponent::UGrabComponent()
 {

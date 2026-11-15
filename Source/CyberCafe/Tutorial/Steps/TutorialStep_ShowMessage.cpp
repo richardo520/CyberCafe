@@ -3,7 +3,7 @@
 #include "Tutorial/TutorialDirector.h"
 #include "Serving/OrderHologramActor.h"
 #include "Serving/DrinkRecipe.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
 #include "UI/Narrative/NarrativeTextPolicy.h"
 #include "Engine/World.h"

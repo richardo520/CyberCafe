@@ -10,6 +10,24 @@ UENUM(BlueprintType)
 enum class EDrinkValidationReason : uint8
 {Accepted,Empty,WrongIngredient,MissingIngredient,TooLittle,TooMuch,WrongRatio,WrongCup,InvalidRecipe,Unavailable,WrongIce};
 
+UENUM(BlueprintType)
+enum class EDrinkValidationDetail : uint8
+{None, BrokenContainer, InvalidVolumeConfiguration, InvalidIceConfiguration, InvalidIngredientConfiguration, InvalidFractionSum, InconsistentComposition, InvalidComposition, UnknownIngredient};
+
+USTRUCT(BlueprintType)
+struct CYBERCAFE_API FDrinkPreparationSnapshot
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") bool bAvailable=false;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") bool bBroken=false;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") bool bMatchesCupClass=true;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") double TotalML=0;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") FLiquidComposition Composition;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") int32 LiquidRevision=0;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") int32 IceCount=0;
+    UPROPERTY(BlueprintReadWrite,Category="Recipe") int32 IceRevision=0;
+};
+
 USTRUCT(BlueprintType)
 struct CYBERCAFE_API FDrinkIngredientRule
 {
@@ -32,6 +50,11 @@ struct CYBERCAFE_API FDrinkValidationResult
     UPROPERTY(BlueprintReadOnly,Category="Recipe") int32 IceCount=0;
     UPROPERTY(BlueprintReadOnly,Category="Recipe") int32 IceRevision=0;
     UPROPERTY(BlueprintReadOnly,Category="Recipe") FLiquidComposition Composition;
+    UPROPERTY(BlueprintReadOnly,Category="Recipe") EDrinkValidationDetail Detail=EDrinkValidationDetail::None;
+    UPROPERTY(BlueprintReadOnly,Category="Recipe") FName FailingIngredient;
+    UPROPERTY(BlueprintReadOnly,Category="Recipe") double ActualFraction=0;
+    UPROPERTY(BlueprintReadOnly,Category="Recipe") double MinFraction=0;
+    UPROPERTY(BlueprintReadOnly,Category="Recipe") double MaxFraction=0;
 };
 
 /** Pure rule evaluation, independent of actors that detect the serving area. */
@@ -59,4 +82,6 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") TMap<EDrinkValidationReason,FText> FailureFeedbackOverrides;
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText MissingMilkFeedback;
     UFUNCTION(BlueprintPure,Category="Recipe") FDrinkValidationResult Evaluate(ALiquidContainerActor* Cup) const;
+    // Pure evaluation: no Actor access, text generation or UI dependencies.
+    UFUNCTION(BlueprintPure,Category="Recipe") FDrinkValidationResult EvaluateSnapshot(const FDrinkPreparationSnapshot& Snapshot) const;
 };

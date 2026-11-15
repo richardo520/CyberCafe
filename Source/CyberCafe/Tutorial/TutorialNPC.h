@@ -41,6 +41,7 @@ public:
     virtual void BeginPlay() override;
     // @trace BC-01. Defaults opt out so unrelated NPCs keep their existing behaviour.
     UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Customer") TObjectPtr<class UCustomerDrinkComponent> CustomerDrink;
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="Customer") TObjectPtr<class UCustomerOrderComponent> CustomerOrder;
 
 protected:
     /** 头部挂载点：预留给未来的"眼神看向玩家手部"等 Look-At 系统使用 */

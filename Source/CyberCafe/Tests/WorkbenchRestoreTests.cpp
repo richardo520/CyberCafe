@@ -15,7 +15,7 @@
 #include "Serving/ServingSpotActor.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/Steps/TutorialStep_Grab.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "GrabComponent.h"
 #include "MotionControllerComponent.h"
 #include "Components/BoxComponent.h"

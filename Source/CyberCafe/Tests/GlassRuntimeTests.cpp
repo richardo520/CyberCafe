@@ -13,7 +13,7 @@
 #include "Liquid/BottleCapActor.h"
 #include "GrabComponent.h"
 #include "Character/VRPawn.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"

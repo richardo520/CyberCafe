@@ -8,7 +8,7 @@
 #include "Serving/ServingSpotActor.h"
 #include "Liquid/CupActor.h"
 #include "GrabComponent.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"

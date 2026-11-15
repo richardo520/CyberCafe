@@ -4,7 +4,7 @@
 #include "Serving/DrinkMenuData.h"
 #include "Serving/ServingSpotActor.h"
 #include "Serving/OrderHologramActor.h"
-#include "Tutorial/CustomerDrinkMotion.h"
+#include "Customers/CustomerDrinkMotion.h"
 #include "Liquid/CupActor.h"
 #include "Liquid/IceInteraction.h"
 #include "Liquid/GlassRecoveryActor.h"

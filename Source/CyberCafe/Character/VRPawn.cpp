@@ -18,7 +18,7 @@
 #include "InputMappingContext.h"
 #include "InputAction.h"
 
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Actor.h"

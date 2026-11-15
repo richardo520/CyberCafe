@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Serving/DrinkRecipe.h"
+#include "Serving/ServingOrderComponent.h"
 #include "ServingSpotActor.generated.h"
 
 class UBoxComponent;
@@ -41,6 +42,7 @@ class CYBERCAFE_API AServingSpotActor : public AActor
 
 public:
     AServingSpotActor();
+    UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category="ServingSpot|Order") TObjectPtr<UServingOrderComponent> OrderSession;
 
     // @trace RC-03 RC-05. Null recipe retains legacy generic serving behaviour.
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="ServingSpot|Recipe")
@@ -58,11 +60,14 @@ public:
     UFUNCTION(BlueprintCallable,Category="ServingSpot|Recipe")
     bool TrySubmitCup(ALiquidContainerActor* Cup);
     UFUNCTION(BlueprintPure,Category="ServingSpot|Recipe")
-    FDrinkValidationResult GetLastValidation() const { return LastValidation; }
+    FDrinkValidationResult GetLastValidation() const { return OrderSession->LastValidation; }
     bool HasAcceptedCup(const ALiquidContainerActor* Cup,FName RecipeId) const;
-    uint32 GetOrderSerial() const { return OrderSerial; }
-    uint32 GetAcceptedOrderSerial() const { return AcceptedOrderSerial; }
+    uint32 GetOrderSerial() const { return OrderSession->OrderSerial; }
+    uint32 GetAcceptedOrderSerial() const { return OrderSession->AcceptedOrderSerial; }
     bool IsInServingArea(const ALiquidContainerActor* Cup) const;
+    // Generic ownership contract; the spot does not depend on customer/tutorial types.
+    bool TryClaimOrder(UObject* Requester);
+    void ReleaseOrder(UObject* Requester);
 
     //~ Begin AActor
     virtual void BeginPlay() override;
@@ -146,6 +151,7 @@ public:
     void ForgetRestoredContainers(const TArray<ALiquidContainerActor*>& ContainersToRestore);
 
 protected:
+    friend class UServingOrderComponent;
     /** Overlap 开始：记录候选杯子 */
     UFUNCTION()
     void HandleDetectBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
@@ -174,15 +180,16 @@ private:
     /** 已被服务上来的杯子（Attach 到本 Spot）*/
     UPROPERTY(Transient)
     TWeakObjectPtr<ALiquidContainerActor> ServedCup;
-    UPROPERTY(Transient) FDrinkValidationResult LastValidation;
+
     UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> LastAttemptCup;
     int32 LastAttemptRevision = -1;
     int32 LastAttemptIceRevision = -1;
     int32 ObservedRevision = -1;
     int32 ObservedIceRevision = -1;
-    uint32 OrderSerial = 0;
-    uint32 AcceptedOrderSerial = 0;
+
+
     float StableElapsed = 0;
-    UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> CommittingCup;
-    bool bCommitting = false;
+
+
+
 };

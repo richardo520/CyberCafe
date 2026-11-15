@@ -2,13 +2,15 @@
 
 #include "Tutorial/Steps/TutorialStep_WaitForServe.h"
 #include "Tutorial/TutorialDirector.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Serving/ServingSpotActor.h"
 #include "Serving/OrderHologramActor.h"
 // @trace RC-04
 #include "Liquid/LiquidContainerActor.h"
 #include "UI/Narrative/NarrativeSubsystem.h"
 #include "Tutorial/TutorialNPC.h"
+#include "Customers/CustomerOrderComponent.h"
+#include "Customers/CustomerDrinkComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 
@@ -16,11 +18,28 @@ void UTutorialStep_WaitForServe::EnterStep(ATutorialDirector* InDirector)
 {
     Super::EnterStep(InDirector);
     bActive = true;
+    CustomerOrder.Reset();
+    bOwnsOrderConfiguration = false;
     if (RequiredSpot && RequiredRecipe)
     {
         PreviousRecipe = RequiredSpot->ActiveRecipe; bPreviousEnabled = RequiredSpot->bAcceptSubmissions;
-        RequiredSpot->SetActiveRecipe(RequiredRecipe);
-        RequiredSpot->SetSubmissionEnabled(true);
+        CustomerOrder = IsValid(InDirector) && IsValid(InDirector->NPCRef) ? InDirector->NPCRef->CustomerOrder : nullptr;
+        const bool bUseCustomerOrder = CustomerOrder.IsValid() && InDirector->NPCRef->CustomerDrink && InDirector->NPCRef->CustomerDrink->bEnabled;
+        if (bUseCustomerOrder && !CustomerOrder->BeginOrder(RequiredSpot, RequiredRecipe, InDirector->CheerDuration))
+        {
+            // Do not overwrite another customer's claimed spot or an active order.
+            CustomerOrder.Reset();
+            bActive = false;
+            UE_LOG(LogTemp, Warning, TEXT("[Tutorial] Could not begin customer order at %s"), *GetNameSafe(RequiredSpot.Get()));
+            return;
+        }
+        if (!bUseCustomerOrder)
+        {
+            CustomerOrder.Reset();
+            RequiredSpot->SetActiveRecipe(RequiredRecipe);
+            RequiredSpot->SetSubmissionEnabled(true);
+        }
+        bOwnsOrderConfiguration = true;
         OwnedOrderSerial = RequiredSpot->GetOrderSerial();
         if (IsValid(OrderHologram) && IsValid(InDirector))
             OrderHologram->BeginOrder(RequiredRecipe, RequiredSpot, InDirector->NPCRef, InDirector->DialogueSpeakerName);
@@ -37,15 +56,17 @@ void UTutorialStep_WaitForServe::ExitStep()
 {
     bActive = false;
     if (IsValid(OrderHologram)) OrderHologram->CancelOrder(RequiredSpot, OwnedOrderSerial);
-    if (RequiredSpot && RequiredRecipe)
+    if (RequiredSpot && RequiredRecipe && bOwnsOrderConfiguration)
     {
         RequiredSpot->OnDrinkValidated.RemoveDynamic(this, &UTutorialStep_WaitForServe::HandleDrinkValidated);
-        if (!RequiredSpot->HasBeenServed() && RequiredSpot->ActiveRecipe == RequiredRecipe && RequiredSpot->GetOrderSerial() == OwnedOrderSerial)
+        if (CustomerOrder.IsValid()) CustomerOrder->RestoreUnservedOrder();
+        else if (!RequiredSpot->HasBeenServed() && RequiredSpot->ActiveRecipe == RequiredRecipe && RequiredSpot->GetOrderSerial() == OwnedOrderSerial)
         {
             RequiredSpot->SetActiveRecipe(PreviousRecipe.Get());
             RequiredSpot->SetSubmissionEnabled(bPreviousEnabled);
         }
     }
+    bOwnsOrderConfiguration = false;
     if (FeedbackSerial && GetWorld())
         if (UNarrativeSubsystem* N = GetWorld()->GetSubsystem<UNarrativeSubsystem>()) N->CancelPresentation(FeedbackSerial);
     FeedbackSerial = 0;
@@ -55,6 +76,17 @@ void UTutorialStep_WaitForServe::ExitStep()
     }
 
     Super::ExitStep();
+}
+
+void UTutorialStep_WaitForServe::CancelStep()
+{
+    ExitStep();
+    if (CustomerOrder.IsValid()) CustomerOrder->CancelOrder();
+}
+
+bool UTutorialStep_WaitForServe::WaitForCompletionPresentation() const
+{
+    return !CustomerOrder.IsValid();
 }
 
 void UTutorialStep_WaitForServe::HandleDrinkServed(AServingSpotActor* ServingSpot, ALiquidContainerActor* Cup)

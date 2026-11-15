@@ -14,7 +14,7 @@
 #include "Liquid/GlassRecoveryActor.h"
 #include "Liquid/GlassBreakableComponent.h"
 #include "Liquid/IceInteraction.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialStep.h"

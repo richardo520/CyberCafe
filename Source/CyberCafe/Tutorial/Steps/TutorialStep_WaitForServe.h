@@ -40,6 +40,8 @@ public:
     //~ Begin UTutorialStep
     virtual void EnterStep(ATutorialDirector* InDirector) override;
     virtual void ExitStep() override;
+    virtual void CancelStep() override;
+    virtual bool WaitForCompletionPresentation() const override;
     //~ End UTutorialStep
 
 protected:
@@ -52,4 +54,6 @@ protected:
     uint32 OwnedOrderSerial = 0;
     UPROPERTY(Transient) TWeakObjectPtr<UDrinkRecipe> PreviousRecipe;
     bool bPreviousEnabled = true;
+    bool bOwnsOrderConfiguration = false;
+    UPROPERTY(Transient) TWeakObjectPtr<class UCustomerOrderComponent> CustomerOrder;
 };

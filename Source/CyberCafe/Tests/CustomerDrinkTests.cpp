@@ -3,13 +3,15 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/CustomerDrinkTestProbe.h"
-#include "Tutorial/CustomerDrinkComponent.h"
-#include "Tutorial/CustomerDrinkMotion.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Customers/CustomerDrinkMotion.h"
+#include "Customers/CustomerOrderComponent.h"
+#include "Liquid/LiquidConsumptionComponent.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Tutorial/TutorialStep.h"
 #include "Tutorial/Steps/TutorialStep_ConsumeServedDrink.h"
-#include "Tutorial/CyberCafeEventSubsystem.h"
+#include "Core/Events/CyberCafeEventSubsystem.h"
 #include "Liquid/CupActor.h"
 #include "Liquid/BottleActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
@@ -106,12 +108,15 @@ struct FCustomerDrinkWorld
         BarGirl = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/BarGirl/SK_BarGirl.SK_BarGirl"));
         Idle = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/Characters/BarGirl/A_BarGirl_Idle.A_BarGirl_Idle"));
         UClass* CupClass = LoadClass<ACupActor>(nullptr, DrinkCupPath);
-        UDrinkRecipe* Latte = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+        // Native Cup01 motion tests exercise consumption/cancellation, not the saved
+        // Highball iced-latte configuration. Keep their recipe explicit and local;
+        // saved production recipes are covered by CustomerMainMapTests.
+        UDrinkRecipe* Latte = NewObject<UDrinkRecipe>(World);
         if (!Test.TestNotNull(TEXT("必须先保存真实 DA_BarGirlDrinkMotion；禁止合成样本顶替"), Motion) ||
             !Test.TestNotNull(TEXT("真实 SK_BarGirl"), BarGirl) ||
             !Test.TestNotNull(TEXT("真实 BarGirl Idle"), Idle) ||
             !Test.TestNotNull(TEXT("真实已保存 Cup01 蓝图"), CupClass) ||
-            !Test.TestNotNull(TEXT("真实已保存拿铁配方"), Latte)) return false;
+            !Test.TestNotNull(TEXT("原生测试专用配方，不改正式冰拿铁"), Latte)) return false;
         if (!Test.TestTrue(TEXT("已保存动作资产有效"), Motion->IsValidMotion()) ||
             !Test.TestNotNull(TEXT("真实喝饮动画"), Motion->Animation.Get())) return false;
         Test.TestEqual(TEXT("使用第一客人真实动画，不使用旧预览"), Motion->Animation->GetPathName(), FString(DrinkAnimationPath));
@@ -700,18 +705,102 @@ bool FCustomerDrinkReentrantTest::RunTest(const FString&)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSavedFirstCustomerFlowTest,"CyberCafe.Customer.SavedMapNPCInstanceAndRealConsumeStep",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
-bool FSavedFirstCustomerFlowTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCustomerOrderWithoutTutorialTest,
+    "CyberCafe.Customer.Order.WithoutTutorialCompletesAndCancelsSafely",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCustomerOrderWithoutTutorialTest::RunTest(const FString&)
 {
-    FCustomerDrinkWorld T;if(!T.Setup(*this,true,true))return false;
-    FActorSpawnParameters P;P.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-    auto* D=T.World->SpawnActorDeferred<ATutorialDirector>(ATutorialDirector::StaticClass(),FTransform::Identity,nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-    D->bAutoStart=false;D->bDialogueVoice=false;D->NPCRef=T.NPC;D->LastServedCup=T.Cup;D->FinishSpawning(FTransform::Identity);
-    auto* Step=NewObject<UTutorialStep_ConsumeServedDrink>(D);Step->AfterDrinkDelay=0;Step->EnterStep(D);
-    TestTrue(TEXT("保存NPC配置能启动真实Consume步骤"),T.Drink()->IsDrinking());
-    T.AdvanceTo(3.45f);CheckDrinkNumber(*this,TEXT("实际抿饮一半10mL"),T.Drink()->GetConsumedML(),10);
-    T.AdvanceTo(7.f);T.TickFor(.05);TestTrue(TEXT("步骤从真实动画结束通知完成"),Step->IsCompleted());
-    CheckReturnedDrink(*this,T,20);TestEqual(TEXT("只记一次交付和一次结束"),T.Probe->ServedCount,1);TestEqual(TEXT("结束回调一次"),T.Probe->EndedCount,1);
-    SaveDrinkMeasurement(*this,TEXT("savedMapNPCConsumeStepFinal"),T);Step->ExitStep();return true;
+    // No director/steps/HUD are created. Real serving and World Tick must suffice.
+    for (int32 Scenario = 0; Scenario < 4; ++Scenario)
+    {
+        FCustomerDrinkWorld T;
+        if (!T.Setup(*this, false)) return false;
+        UCustomerOrderComponent* Order = T.NPC->CustomerOrder;
+        UDrinkRecipe* Recipe = NewObject<UDrinkRecipe>(T.World);
+        if (!TestNotNull(TEXT("NPC order component"), Order) ||
+            !TestTrue(TEXT("Order begins without tutorial"), Order->BeginOrder(T.Spot, Recipe, .1f))) return false;
+        TestFalse(TEXT("Active order cannot be silently replaced"), Order->BeginOrder(T.Spot, Recipe, 0));
+        auto* Rival = NewObject<UCustomerOrderComponent>(T.NPC);
+        Rival->RegisterComponent();
+        TestFalse(TEXT("A second order cannot claim the same serving spot"), Rival->BeginOrder(T.Spot, Recipe, 0));
+        if (!T.Accept(*this)) return false;
+        TestTrue(TEXT("Acceptance schedules, never starts inside serve commit"),
+            Order->GetState() == ECustomerOrderState::PendingTasting && !T.Drink()->IsDrinking());
+        if (Scenario == 1) Order->CancelOrder();
+        if (Scenario == 2) T.Spot->SetActiveRecipe(NewObject<UDrinkRecipe>(T.World));
+        if (Scenario == 3)
+        {
+            T.TickFor(.12);
+            if (!TestTrue(TEXT("Standalone tasting started"), T.Drink()->IsDrinking())) return false;
+            T.AdvanceTo(3.45f);
+            Order->CancelOrder();
+            TestTrue(TEXT("Mid-sip cancellation has terminal state"), Order->GetState() == ECustomerOrderState::Cancelled);
+            const double Consumed = T.Drink()->GetConsumedML();
+            T.TickFor(10);
+            CheckReturnedDrink(*this, T, Consumed);
+            CheckDrinkNumber(*this, TEXT("Cancelled mid-sip consumption stays committed"), T.Drink()->GetConsumedML(), Consumed);
+            continue;
+        }
+        T.TickFor(9);
+        TestFalse(TEXT("No stale action remains ticking"), T.Drink()->IsDrinking());
+        if (Scenario == 0)
+        {
+            TestTrue(TEXT("Order completes with no tutorial"), Order->GetState() == ECustomerOrderState::Completed);
+            CheckReturnedDrink(*this, T, 20);
+            TestEqual(TEXT("One real completion"), T.Probe->EndedCount, 1);
+        }
+        else
+        {
+            TestTrue(TEXT("Pending cancel/stale order never tastes"), Order->GetState() ==
+                (Scenario == 1 ? ECustomerOrderState::Cancelled : ECustomerOrderState::Failed));
+            CheckDrinkNumber(*this, TEXT("Pending cancel/stale order preserves volume"), T.Cup->GetPreciseVolumeML(), 200);
+            TestEqual(TEXT("Pending action never starts or ends a drink"), T.Probe->EndedCount, 0);
+        }
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGenericServedConsumptionTest,
+    "CyberCafe.Architecture.GenericConsumptionLeaseAndBudget",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGenericServedConsumptionTest::RunTest(const FString&)
+{
+    FCustomerDrinkWorld T;
+    if(!T.Setup(*this))return false;
+    auto* Lease=T.Cup->Consumption.Get();
+    TestTrue(TEXT("Any same-world gameplay owner can acquire, without a CustomerDrink dependency"),Lease->TryAcquire(T.Probe,20));
+    TestFalse(TEXT("Second owner cannot acquire the served cup"),Lease->TryAcquire(T.NPC,20));
+    CheckDrinkNumber(*this,TEXT("Wrong owner cannot debit"),Lease->Consume(T.NPC,100),0);
+    CheckDrinkNumber(*this,TEXT("Budget limits a larger request"),Lease->Consume(T.Probe,100),20);
+    CheckDrinkNumber(*this,TEXT("Exhausted lease cannot remove more"),Lease->Consume(T.Probe,1),0);
+    Lease->Release(T.NPC);
+    TestTrue(TEXT("Wrong owner cannot release another owner's lease"),Lease->IsOwnedBy(T.Probe));
+    Lease->Release(T.Probe);
+    TestFalse(TEXT("Released one-shot served cup cannot be reclaimed"),Lease->TryAcquire(T.Probe,20));
+    TestTrue(TEXT("Consumption preserves frozen state"),T.Cup->IsLiquidFrozen());
+    CheckDrinkLedger(*this,T,20,180);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FScopedCustomerOrderRestoreTest,
+    "CyberCafe.Architecture.ScopedOrderRestoresOnlyItsOwnConfiguration",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FScopedCustomerOrderRestoreTest::RunTest(const FString&)
+{
+    FCustomerDrinkWorld T;
+    if(!T.Setup(*this,false))return false;
+    auto* Original=T.Spot->ActiveRecipe.Get();
+    T.Spot->SetSubmissionEnabled(false);
+    auto* Order=T.NPC->CustomerOrder.Get();
+    auto* Recipe=NewObject<UDrinkRecipe>(T.World);
+    TestTrue(TEXT("Temporary requester starts a scoped order"),Order->BeginOrder(T.Spot,Recipe,0));
+    Order->RestoreUnservedOrder();
+    TestTrue(TEXT("Configuration restores original recipe and disabled submission"),T.Spot->ActiveRecipe==Original&&!T.Spot->bAcceptSubmissions);
+    TestTrue(TEXT("Second scoped request starts"),Order->BeginOrder(T.Spot,Recipe,0));
+    auto* Newer=NewObject<UDrinkRecipe>(T.World);
+    T.Spot->SetActiveRecipe(Newer);
+    Order->RestoreUnservedOrder();
+    TestTrue(TEXT("Stale scope cannot overwrite a newer recipe"),T.Spot->ActiveRecipe==Newer);
+    Order->CancelOrder();
+    return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS
