@@ -561,6 +561,7 @@ void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
     // 使用精确的 GetUMaterialDef() 类型，与 P_Liquid 里 User.Material 的类型声明保持一致，
     // 也与写入端 SetVariableMaterial 使用的类型对齐。
     const FNiagaraVariableBase UserMaterialVar(FNiagaraTypeDefinition::GetUMaterialDef(), FName(TEXT("User.Material")));
+#if WITH_EDITOR
     const FNiagaraVariant Variant = LiquidFX->FindParameterOverride(UserMaterialVar);
     if (Variant.IsValid())
     {
@@ -569,6 +570,16 @@ void ALiquidContainerActor::ResolveLiquidMaterialFromFX()
             LiquidMaterialAsset = Resolved;
         }
     }
+#else
+    // Cook serializes authored overrides into the runtime store. UE5.6's
+    // FindParameterOverride is editor-only; invalid overrides keep the cached material.
+    const FNiagaraVariable RuntimeMaterialVar(FNiagaraTypeDefinition::GetUMaterialDef(), FName(TEXT("User.Material")));
+    const FNiagaraParameterStore& RuntimeOverrides = LiquidFX->GetOverrideParameters();
+    if (UMaterialInterface* Resolved = Cast<UMaterialInterface>(RuntimeOverrides.GetUObject(RuntimeMaterialVar).Get()))
+    {
+        LiquidMaterialAsset = Resolved;
+    }
+#endif
 }
 
 //=====================================================================

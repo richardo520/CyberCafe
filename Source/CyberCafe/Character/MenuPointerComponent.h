@@ -14,6 +14,7 @@ class UMaterialInstanceDynamic;
 class UMotionControllerComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
+struct FHitResult;
 struct FMenuPointerSample;
 struct FMenuPointerInputSample;
 
@@ -28,6 +29,14 @@ public:
 
     void UpdatePointer(float DeltaTime);
     bool TryClickFromOriginalTrigger();
+    bool TraceSurfaceForHand(bool bRightHand, FHitResult& OutHit) const;
+
+    /** 原 IMC 内的独立只读 Axis1D；由实际 VRCharacter 组件 CDO 保存硬引用。 */
+    UPROPERTY(EditDefaultsOnly, Category = "VR|MenuPointer|Input")
+    TObjectPtr<UInputAction> LeftTriggerObserver;
+
+    UPROPERTY(EditDefaultsOnly, Category = "VR|MenuPointer|Input")
+    TObjectPtr<UInputAction> RightTriggerObserver;
 
     UFUNCTION(BlueprintPure, Category = "VR|MenuPointer|Diagnostics")
     FString GetPointerStatus(EControllerHand Hand) const;
@@ -73,10 +82,11 @@ protected:
 private:
     bool ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuPointerInputSample& InputSample) const;
     void RememberOriginalTriggerInput(const FMenuPointerInputSample& InputSample);
-    bool ResolveOriginalTriggerHand(const AVRPawn* Pawn, const FMenuPointerInputSample& InputSample,
+    bool ResolveOriginalTriggerHand(const FMenuPointerInputSample& InputSample,
         bool& bRightHand, FString& Reason) const;
     void CachePointerStatus(int32 HandIndex, const FMenuPointerSample& Sample);
     bool SamplePointer(const AVRPawn* Pawn, bool bRightHand, FMenuPointerSample& Sample) const;
+    bool SamplePhysicalSurface(const AVRPawn* Pawn, bool bRightHand, FMenuPointerSample& Sample) const;
     UMotionControllerComponent* FindPointerOrigin(const AVRPawn* Pawn, bool bRightHand) const;
     void EnsureVisuals();
     void DrawPointer(int32 HandIndex, const FMenuPointerSample& Sample);

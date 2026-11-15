@@ -15,7 +15,17 @@ UDrinkRecipe::UDrinkRecipe()
 FDrinkValidationResult UDrinkRecipe::Evaluate(ALiquidContainerActor* Cup) const
 {
     FDrinkValidationResult R;R.RecipeId=RecipeId;
-    auto Fail=[&](EDrinkValidationReason Reason,const FString& Text){R.Reason=Reason;R.Feedback=FText::FromString(Text);return R;};
+    auto Fail=[&](EDrinkValidationReason Reason,const FString& Text)
+    {
+        R.Reason=Reason;
+        const FText* Authored=FailureFeedbackOverrides.Find(Reason);
+        if(Reason==EDrinkValidationReason::MissingIngredient && !MissingMilkFeedback.IsEmpty() &&
+            IsValid(Cup) && Cup->GetComposition().Get(TEXT("Milk"))<=1.e-9 &&
+            Rules.ContainsByPredicate([](const FDrinkIngredientRule& Rule){return Rule.IngredientId==TEXT("Milk");}))
+            Authored=&MissingMilkFeedback;
+        R.Feedback=Authored&&!Authored->IsEmpty()?*Authored:FText::FromString(Text);
+        return R;
+    };
     if(IsValid(Cup))
     {
         if(const UCupIceComponent* Ice=Cup->FindComponentByClass<UCupIceComponent>())

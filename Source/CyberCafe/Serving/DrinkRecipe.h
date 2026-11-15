@@ -55,5 +55,8 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText CoffeeHighFeedback;
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText MilkHighFeedback;
     UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText AcceptedFeedback;
+    // Optional per-recipe wording only; no change to acceptance rules or failure order.
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") TMap<EDrinkValidationReason,FText> FailureFeedbackOverrides;
+    UPROPERTY(EditAnywhere,BlueprintReadOnly,Category="Recipe|Dialogue") FText MissingMilkFeedback;
     UFUNCTION(BlueprintPure,Category="Recipe") FDrinkValidationResult Evaluate(ALiquidContainerActor* Cup) const;
 };

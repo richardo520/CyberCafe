@@ -3,6 +3,7 @@
 #include "VRPawn.h"
 #include "Serving/OrderHologramActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -25,6 +26,7 @@ struct FMenuPointerSample
     UMotionControllerComponent* Origin = nullptr;
     TWeakObjectPtr<AOrderHologramActor> Screen;
     FMenuPointerHit ScreenHit;
+    FHitResult SurfaceHit;
     FVector Start = FVector::ZeroVector;
     FVector End = FVector::ZeroVector;
     bool bHasTarget = false;
@@ -39,6 +41,11 @@ struct FMenuPointerInputSample
     float NormalizedMax[2] = {0.f, 0.f};
     float Threshold[2] = {.5f, .5f};
     bool bDown[2] = {false, false};
+    float NativeAxes[2] = {0.f, 0.f};
+    bool bObserverInstanceValid[2] = {false, false};
+    bool bNativePair = false;
+    FString ValueSource = TEXT("PhysicalKey");
+    FString ObserverReason = TEXT("observer pair unavailable");
     FString MappingKeys;
     FString Diagnostics = TEXT("source=none LMax=0 RMax=0 threshold=none keys=none");
     FString Reason = TEXT("original input unavailable");
@@ -72,6 +79,11 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
     Sample.Action = Pawn->IA_SkipDialog;
     if (!Sample.Input || !IsValid(Sample.Action)) return false;
     const FInputActionInstance* Instance = Sample.Input->FindActionInstanceData(Sample.Action);
+    if (Instance && Instance->GetSourceAction() != Sample.Action)
+    {
+        Sample.Reason = TEXT("original action instance source mismatch");
+        return false;
+    }
     const auto& ActionTriggers = Instance ? Instance->GetTriggers() : Sample.Action->Triggers;
     const auto& ActionModifiers = Instance ? Instance->GetModifiers() : Sample.Action->Modifiers;
 
@@ -145,23 +157,73 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
     }
     const TArray<FEnhancedActionKeyMapping>* RuntimeMappings =
         MappingsProperty->ContainerPtrToValuePtr<TArray<FEnhancedActionKeyMapping>>(Sample.Input);
+    // 仅认原运行期 Skip 映射中的原生 XR 扳机轴；泛用 Gamepad 键不是手部来源。
+    const auto NativeHand = [](const FKey& Key) -> int32
+    {
+        if (!Key.IsValid() || !Key.IsAxis1D()) return INDEX_NONE;
+        if (Key == EKeys::OculusTouch_Left_Trigger_Axis || Key == EKeys::Vive_Left_Trigger_Axis
+            || Key == EKeys::ValveIndex_Left_Trigger_Axis || Key == EKeys::MixedReality_Left_Trigger_Axis) return 0;
+        if (Key == EKeys::OculusTouch_Right_Trigger_Axis || Key == EKeys::Vive_Right_Trigger_Axis
+            || Key == EKeys::ValveIndex_Right_Trigger_Axis || Key == EKeys::MixedReality_Right_Trigger_Axis) return 1;
+        return INDEX_NONE;
+    };
+    TArray<FKey> OriginalKeys[2];
+    for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
+    {
+        if (Mapping.Action != Sample.Action || Mapping.bShouldBeIgnored) continue;
+        const int32 Hand = NativeHand(Mapping.Key);
+        if (Hand != INDEX_NONE) OriginalKeys[Hand].AddUnique(Mapping.Key);
+    }
+    const UInputAction* Observers[] = {LeftTriggerObserver.Get(), RightTriggerObserver.Get()};
+    bool bObserverMappingsValid = !OriginalKeys[0].IsEmpty() && !OriginalKeys[1].IsEmpty()
+        && IsValid(Observers[0]) && IsValid(Observers[1]) && Observers[0] != Observers[1];
+    for (int32 Hand = 0; bObserverMappingsValid && Hand < 2; ++Hand)
+    {
+        const UInputAction* Observer = Observers[Hand];
+        bObserverMappingsValid = Observer != Sample.Action && Observer->ValueType == EInputActionValueType::Axis1D
+            && !Observer->bConsumeInput && Observer->Triggers.IsEmpty() && Observer->Modifiers.IsEmpty()
+            && Observer->AccumulationBehavior == EInputActionAccumulationBehavior::TakeHighestAbsoluteValue
+            && Observer->GetPathName().StartsWith(TEXT("/Game/VRTemplate/Input/Actions/"));
+        TArray<FKey> ObserverKeys;
+        for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
+        {
+            if (Mapping.Action != Observer) continue;
+            bObserverMappingsValid &= !Mapping.bShouldBeIgnored && NativeHand(Mapping.Key) == Hand
+                && OriginalKeys[Hand].Contains(Mapping.Key) && Mapping.Triggers.IsEmpty() && Mapping.Modifiers.IsEmpty();
+            ObserverKeys.AddUnique(Mapping.Key);
+        }
+        bObserverMappingsValid &= ObserverKeys.Num() == OriginalKeys[Hand].Num();
+    }
+    for (int32 Hand = 0; Hand < 2; ++Hand)
+    {
+        const FInputActionInstance* ObserverInstance = bObserverMappingsValid
+            ? Sample.Input->FindActionInstanceData(Observers[Hand]) : nullptr;
+        Sample.bObserverInstanceValid[Hand] = ObserverInstance && ObserverInstance->GetSourceAction() == Observers[Hand]
+            && ObserverInstance->GetValue().GetValueType() == EInputActionValueType::Axis1D
+            && ObserverInstance->GetTriggers().IsEmpty() && ObserverInstance->GetModifiers().IsEmpty();
+        if (Sample.bObserverInstanceValid[Hand])
+        {
+            Sample.NativeAxes[Hand] = ObserverInstance->GetValue().Get<float>();
+            Sample.bObserverInstanceValid[Hand] = FMath::IsFinite(Sample.NativeAxes[Hand]);
+        }
+    }
+    Sample.bNativePair = Sample.bObserverInstanceValid[0] && Sample.bObserverInstanceValid[1];
+    Sample.ValueSource = Sample.bNativePair ? TEXT("NativeAction") : TEXT("PhysicalKey");
+    Sample.ObserverReason = Sample.bNativePair ? TEXT("valid pair (zero is authoritative)")
+        : (bObserverMappingsValid ? TEXT("observer instance unavailable or invalid") : TEXT("observer pair/mapping invalid"));
     int32 MappingCount = 0;
     FString Keys;
     for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
     {
         if (Mapping.Action != Sample.Action || Mapping.bShouldBeIgnored) continue;
+        const int32 Index = NativeHand(Mapping.Key);
+        if (Index == INDEX_NONE) continue;
         const FString KeyName = Mapping.Key.GetFName().ToString();
-        if (!KeyName.Contains(TEXT("Trigger"))) continue;
-        const bool bLeft = KeyName.Contains(TEXT("Left"));
-        const bool bRight = KeyName.Contains(TEXT("Right"));
-        if (bLeft == bRight) continue;
         ++MappingCount;
         Sample.MappingKeys += KeyName + TEXT(";");
-        const int32 Index = bRight ? 1 : 0;
-        // 即使 IA 是 Boolean，也保留原轴行程；不把 0.01 噪声转换成 true。
-        const float RawValue = Mapping.Key.IsAxis1D()
-            ? PC->GetInputAnalogKeyState(Mapping.Key)
-            : (PC->IsInputKeyDown(Mapping.Key) ? 1.f : 0.f);
+        // 原共享 Boolean 的 1 仅用于诊断；绝不拿它重算两手行程。
+        const float PhysicalValue = Sample.bNativePair ? 0.f : PC->GetInputAnalogKeyState(Mapping.Key);
+        const float RawValue = Sample.bNativePair ? Sample.NativeAxes[Index] : PhysicalValue;
         if (FMath::IsFinite(RawValue)) Sample.RawMax[Index] = FMath::Max(Sample.RawMax[Index], RawValue);
         float Threshold = TNumericLimits<float>::Max();
         FString ThresholdSource;
@@ -176,9 +238,10 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
         FString Failure;
         const bool bScalarAction = Sample.Action->ValueType == EInputActionValueType::Boolean
             || Sample.Action->ValueType == EInputActionValueType::Axis1D;
+        // 空观察轴已经经过引擎处理；不重复施加 Skip 的 Boolean DeadZone 或其他 Modifier。
         const bool bValidValue = bScalarAction && FMath::IsFinite(Value)
-            && ApplyScalarModifiers(Mapping.Modifiers, Sample.Action->ValueType, Value, Failure)
-            && ApplyScalarModifiers(ActionModifiers, Sample.Action->ValueType, Value, Failure);
+            && (Sample.bNativePair || (ApplyScalarModifiers(Mapping.Modifiers, Sample.Action->ValueType, Value, Failure)
+                && ApplyScalarModifiers(ActionModifiers, Sample.Action->ValueType, Value, Failure)));
         const float Normalized = bValidValue && Value > 0.f ? Value / Threshold : 0.f;
         if (FMath::IsFinite(Normalized) && Normalized >= Sample.NormalizedMax[Index])
         {
@@ -186,21 +249,33 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
             Sample.Threshold[Index] = Threshold;
         }
         Sample.bDown[Index] |= bValidValue && Value > 0.f && Value >= Threshold;
-        Keys += FString::Printf(TEXT("%s raw=%.4f modified=%.4f threshold=%.4f from=%s %s; "),
-            *KeyName, RawValue, Value, Threshold, *ThresholdSource,
+        const FString PhysicalText = Sample.bNativePair ? TEXT("not-read(native)") : FString::Printf(TEXT("%.4f"), PhysicalValue);
+        Keys += FString::Printf(TEXT("%s raw=%.4f physical=%s modified=%.4f threshold=%.4f from=%s %s; "),
+            *KeyName, RawValue, *PhysicalText, Value, Threshold, *ThresholdSource,
             bValidValue ? TEXT("valid") : (Failure.IsEmpty() ? TEXT("invalid scalar source") : *Failure));
     }
-    Sample.Reason = MappingCount > 0 ? TEXT("under threshold") : TEXT("original hand mappings unavailable");
-    // Started 时 GetValue 可能为零；事件和共享值只作诊断，绝不作点击门禁。
+    const bool bOriginalPair = !OriginalKeys[0].IsEmpty() && !OriginalKeys[1].IsEmpty();
+    Sample.Reason = bOriginalPair ? TEXT("under threshold") : TEXT("original hand mappings unavailable");
+    if (bOriginalPair && !Sample.bDown[0] && !Sample.bDown[1] && Instance && Instance->GetValue().IsNonZero())
+        Sample.Reason = Sample.bNativePair
+            ? TEXT("under threshold: original Boolean active but observer axes below original gate")
+            : TEXT("critical original Action active but observer unavailable and PhysicalKey axes zero/below gate");
+    const FString LeftAxis = Sample.bObserverInstanceValid[0] ? FString::Printf(TEXT("%.4f"), Sample.NativeAxes[0]) : TEXT("None");
+    const FString RightAxis = Sample.bObserverInstanceValid[1] ? FString::Printf(TEXT("%.4f"), Sample.NativeAxes[1]) : TEXT("None");
+    // 读取真实 GetValue/GetTriggerEvent；不伪造 Started 的共享 Boolean 值或 XR 阈值。
     Sample.Diagnostics = FString::Printf(
-        TEXT("source=%s runtimeSource=%s event=%d actionMagnitude=%.4f LMax=%.4f RMax=%.4f LThreshold=%.4f RThreshold=%.4f LNorm=%.4f RNorm=%.4f LDown=%d RDown=%d keys=[%s]"),
+        TEXT("source=%s runtimeSource=%s event=%d actionMagnitude=%.4f OriginalActionValueNative=%.4f ValueSource=%s ObserverPairValid=%d LObserver=%s RObserver=%s LInstanceValid=%d RInstanceValid=%d HandAxes=[L=%s R=%s] observerReason=%s LMax=%.4f RMax=%.4f LThreshold=%.4f RThreshold=%.4f LNorm=%.4f RNorm=%.4f LDown=%d RDown=%d keys=[%s]"),
         *Sample.Action->GetPathName(), Instance ? *GetNameSafe(Instance->GetSourceAction().Get()) : TEXT("none"),
         Instance ? static_cast<int32>(Instance->GetTriggerEvent()) : 0,
-        Instance ? Instance->GetValue().GetMagnitude() : 0.f,
+        Instance ? Instance->GetValue().GetMagnitude() : 0.f, Instance ? Instance->GetValue().GetMagnitude() : 0.f,
+        *Sample.ValueSource, Sample.bNativePair,
+        *GetPathNameSafe(Observers[0]), *GetPathNameSafe(Observers[1]),
+        Sample.bObserverInstanceValid[0], Sample.bObserverInstanceValid[1],
+        *LeftAxis, *RightAxis, *Sample.ObserverReason,
         Sample.RawMax[0], Sample.RawMax[1], Sample.Threshold[0], Sample.Threshold[1],
         Sample.NormalizedMax[0], Sample.NormalizedMax[1], Sample.bDown[0], Sample.bDown[1],
         Keys.IsEmpty() ? TEXT("none threshold=none") : *Keys);
-    return MappingCount > 0;
+    return MappingCount > 0 && bOriginalPair;
 }
 
 void UMenuPointerComponent::RememberOriginalTriggerInput(const FMenuPointerInputSample& Sample)
@@ -213,8 +288,8 @@ void UMenuPointerComponent::RememberOriginalTriggerInput(const FMenuPointerInput
     for (int32 Index = 0; Index < 2; ++Index) HandPriorAxes[Index] = Sample.NormalizedMax[Index];
 }
 
-bool UMenuPointerComponent::ResolveOriginalTriggerHand(const AVRPawn* Pawn,
-    const FMenuPointerInputSample& Sample, bool& bRightHand, FString& Reason) const
+bool UMenuPointerComponent::ResolveOriginalTriggerHand(const FMenuPointerInputSample& Sample,
+    bool& bRightHand, FString& Reason) const
 {
     Reason = Sample.Reason;
     if (Sample.bDown[0] != Sample.bDown[1])
@@ -223,42 +298,8 @@ bool UMenuPointerComponent::ResolveOriginalTriggerHand(const AVRPawn* Pawn,
         Reason = TEXT("single actuated hand");
         return true;
     }
-    if (!Sample.bDown[0]) return false;
-    if (bHasPriorAxes && PriorInput.Get() == Sample.Input && PriorSkipAction.Get() == Sample.Action
-        && PriorMappingKeys == Sample.MappingKeys)
-    {
-        const bool bLeftEdge = HandPriorAxes[0] < 1.f;
-        const bool bRightEdge = HandPriorAxes[1] < 1.f;
-        if (bLeftEdge != bRightEdge)
-        {
-            bRightHand = bRightEdge;
-            Reason = TEXT("new actuated edge");
-            return true;
-        }
-    }
-
-    // 只在两手实际越阈值时检查双方当前几何；阈值以下的另一手绝不参与。
-    bool bEligible[2] = {false, false};
-    for (int32 Index = 0; Index < 2; ++Index)
-    {
-        FMenuPointerSample Pointer;
-        bEligible[Index] = SamplePointer(Pawn, Index == 1, Pointer) && Pointer.Screen.IsValid()
-            && (Pointer.ScreenHit.bPower || (Pointer.ScreenHit.Action != INDEX_NONE
-                && Pointer.Screen->GetPointerActionAtWorldPoint(Pointer.ScreenHit.Point) == Pointer.ScreenHit.Action));
-    }
-    if (bEligible[0] != bEligible[1])
-    {
-        bRightHand = bEligible[1];
-        Reason = TEXT("two actuated unique UI hand");
-        return true;
-    }
-    if (FMath::Abs(Sample.NormalizedMax[1] - Sample.NormalizedMax[0]) > .05f)
-    {
-        bRightHand = Sample.NormalizedMax[1] > Sample.NormalizedMax[0];
-        Reason = TEXT("two actuated stronger normalized hand");
-        return true;
-    }
-    Reason = TEXT("ambiguous two actuated hands -> OriginalSkip");
+    // 双手越阈无唯一来源：不按历史 edge、悬停或强度猜手，也不合成原 Started。
+    if (Sample.bDown[0]) Reason = TEXT("ambiguous two actuated hands -> OriginalSkip");
     return false;
 }
 
@@ -291,20 +332,15 @@ UMotionControllerComponent* UMenuPointerComponent::FindPointerOrigin(const AVRPa
     return nullptr;
 }
 
-bool UMenuPointerComponent::SamplePointer(const AVRPawn* Pawn, bool bRightHand, FMenuPointerSample& Sample) const
+bool UMenuPointerComponent::SamplePhysicalSurface(const AVRPawn* Pawn, bool bRightHand, FMenuPointerSample& Sample) const
 {
     Sample = FMenuPointerSample();
     const auto Reject = [&Sample](const TCHAR* Reason) { Sample.Reason = Reason; return false; };
-    if (!bEnabled) return Reject(TEXT("disabled"));
     if (bEndingPlay || !IsValid(Pawn) || Pawn->IsActorBeingDestroyed()) return Reject(TEXT("ending play"));
     if (!Pawn->IsLocallyControlled()) return Reject(TEXT("notlocal"));
     UWorld* World = GetWorld();
     if (!World) return Reject(TEXT("world unavailable"));
-    if (Pawn->bTeleportTraceActive) return Reject(TEXT("teleport"));
     if (!FMath::IsFinite(RayMaxDistance) || RayMaxDistance <= 0.f) return Reject(TEXT("invalid ray distance"));
-    // 只读引用，不判断/改变抓取资格，也不清除现有抓取和拉拽。
-    if (bRightHand ? (Pawn->HeldComponentRight || Pawn->PulledGrabComponentRight)
-                   : (Pawn->HeldComponentLeft || Pawn->PulledGrabComponentLeft)) return Reject(TEXT("held"));
     Sample.Origin = FindPointerOrigin(Pawn, bRightHand);
     if (!Sample.Origin) return Reject(TEXT("tracking unavailable"));
     Sample.Start = Sample.Origin->GetComponentLocation();
@@ -318,16 +354,34 @@ bool UMenuPointerComponent::SamplePointer(const AVRPawn* Pawn, bool bRightHand, 
     FCollisionQueryParams Params(SCENE_QUERY_STAT(MenuPointerSurface), true);
     Params.AddIgnoredActor(Pawn);
     FHitResult PhysicalHit;
-    // Only a real Visibility blocker occludes the UI. Object-type queries would
-    // also stop on invisible overlap-only gameplay zones and silently lose menu hits.
+    // 仅真实 Visibility 阻挡遮住 UI；不可见 overlap-only 区域不截断菜单。
     const bool bPhysicalHit = World->LineTraceSingleByChannel(PhysicalHit, Sample.Start, Sample.End, ECC_Visibility, Params);
-    double Closest = Limit;
     if (bPhysicalHit && !PhysicalHit.ImpactPoint.ContainsNaN() && FMath::IsFinite(PhysicalHit.Distance))
     {
-        Closest = PhysicalHit.Distance;
+        Sample.SurfaceHit = PhysicalHit;
         Sample.End = PhysicalHit.ImpactPoint;
         Sample.bHasTarget = true;
     }
+    Sample.Reason = Sample.bHasTarget ? TEXT("surface") : TEXT("empty");
+    return true;
+}
+
+bool UMenuPointerComponent::SamplePointer(const AVRPawn* Pawn, bool bRightHand, FMenuPointerSample& Sample) const
+{
+    Sample = FMenuPointerSample();
+    const auto Reject = [&Sample](const TCHAR* Reason) { Sample.Reason = Reason; return false; };
+    if (!bEnabled) return Reject(TEXT("disabled"));
+    if (bEndingPlay || !IsValid(Pawn) || Pawn->IsActorBeingDestroyed()) return Reject(TEXT("ending play"));
+    if (!Pawn->IsLocallyControlled()) return Reject(TEXT("notlocal"));
+    if (Pawn->bTeleportTraceActive) return Reject(TEXT("teleport"));
+    // 只读引用，不判断/改变抓取资格，也不清除现有抓取和拉拽。
+    if (bRightHand ? (Pawn->HeldComponentRight || Pawn->PulledGrabComponentRight)
+                   : (Pawn->HeldComponentLeft || Pawn->PulledGrabComponentLeft)) return Reject(TEXT("held"));
+    if (!SamplePhysicalSurface(Pawn, bRightHand, Sample)) return false;
+    UWorld* World = GetWorld();
+    const FVector Direction = Sample.Origin->GetForwardVector().GetSafeNormal();
+    const double Limit = FMath::Min(RayMaxDistance, 250.f);
+    double Closest = Sample.SurfaceHit.bBlockingHit ? Sample.SurfaceHit.Distance : Limit;
 
     // 无碰撞全息面使用现有解析接口；每次取当前几何，不缓存上一帧可点击状态。
     for (TActorIterator<AOrderHologramActor> It(World); It; ++It)
@@ -349,6 +403,30 @@ bool UMenuPointerComponent::SamplePointer(const AVRPawn* Pawn, bool bRightHand, 
             : (Sample.ScreenHit.Action != INDEX_NONE
                 ? FString::Printf(TEXT("UIaction%d"), Sample.ScreenHit.Action) : FString(TEXT("UIblank")));
     else Sample.Reason = Sample.bHasTarget ? TEXT("surface") : TEXT("empty");
+    return true;
+}
+
+bool UMenuPointerComponent::TraceSurfaceForHand(bool bRightHand, FHitResult& OutHit) const
+{
+    OutHit = FHitResult();
+    const AVRPawn* Pawn = Cast<AVRPawn>(GetOwner());
+    FMenuPointerSample Sample;
+    // 关闭菜单视觉不禁用原远程物理面查询；同用追踪 Origin、Visibility 和 250cm 上限。
+    if (!(bEnabled ? SamplePointer(Pawn, bRightHand, Sample)
+                   : SamplePhysicalSurface(Pawn, bRightHand, Sample))) return false;
+    if (AOrderHologramActor* Screen = Sample.Screen.Get())
+    {
+        OutHit = FHitResult(Screen, Screen->Panel.Get(), Sample.ScreenHit.Point, Screen->Panel->GetForwardVector());
+        OutHit.bBlockingHit = true;
+        OutHit.Distance = Sample.ScreenHit.Distance;
+        OutHit.Time = Sample.ScreenHit.Distance / FMath::Min(RayMaxDistance, 250.f);
+        OutHit.Location = OutHit.ImpactPoint = Sample.ScreenHit.Point;
+        OutHit.TraceStart = Sample.Start;
+        OutHit.TraceEnd = Sample.Start + Sample.Origin->GetForwardVector().GetSafeNormal() * FMath::Min(RayMaxDistance, 250.f);
+        return true; // 空白屏幕也阻挡，不能抓到可见菜单背后的物体。
+    }
+    if (!Sample.SurfaceHit.bBlockingHit) return false;
+    OutHit = Sample.SurfaceHit;
     return true;
 }
 
@@ -425,7 +503,7 @@ bool UMenuPointerComponent::TryClickFromOriginalTrigger()
     if (bClickInProgress) return Reject(TEXT("callback in progress"));
     if (!bHasInput) return Reject(InputSample.Reason);
     bool bRightHand = false;
-    const bool bResolved = ResolveOriginalTriggerHand(Pawn, InputSample, bRightHand, Selection);
+    const bool bResolved = ResolveOriginalTriggerHand(InputSample, bRightHand, Selection);
     RememberOriginalTriggerInput(InputSample);
     if (!bResolved) return Reject(Selection);
     HandIndex = bRightHand ? 1 : 0;

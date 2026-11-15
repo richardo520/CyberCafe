@@ -123,7 +123,7 @@ bool FTutorialMenuSaved::RunTest(const FString&)
     if (!TestNotNull(TEXT("首单对话类型"), FirstOrder) || !TestNotNull(TEXT("菜单介绍类型"), Intro)
         || !TestNotNull(TEXT("真实菜单操作步骤"), Menu) || !TestNotNull(TEXT("原交付步骤"), Serve)) return false;
     TestEqual(TEXT("批准的新对话全文"), Intro->HintText.ToString(),
-        FString(TEXT("菜单上点一下冰拿铁，就能看怎么做。")));
+        FString(TEXT("伸手在全息菜单上点一下冰拿铁，就能看具体怎么做了。")));
     TestTrue(TEXT("介绍保留逐字和输入跳过"), Intro->bUseTypewriter && Intro->bAllowSkipByInput);
     TestEqual(TEXT("必选索引为 BNT"), Menu->RequiredPinyinIndex, FName(TEXT("BNT")));
     if (!TestNotNull(TEXT("保存菜单屏"), Menu->OrderHologram.Get())

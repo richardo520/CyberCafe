@@ -677,34 +677,25 @@ UGrabComponent* AVRPawn::GetGrabComponentNearMotionController(UMotionControllerC
 
 UGrabComponent* AVRPawn::GetGrabComponentUnderAim(UMotionControllerComponent* MotionControllerAim, UGrabComponent* TargetGrabComponent) const
 {
-    if (TargetGrabComponent)
-    {
-        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(TargetGrabComponent->GetOwner());
-        if (Container && Container->IsBroken()) TargetGrabComponent = nullptr;
-    }
-    if (TargetGrabComponent)
-    {
-        return TargetGrabComponent;
-    }
-    
+    // 高亮缓存不能替代本次射线；只在当前第一命中 Actor 内保留原优先级规则。
+    (void)TargetGrabComponent;
     FHitResult Hit;
     if (!TraceAim(MotionControllerAim, Hit))
     {
         return nullptr;
     }
-    if (AActor* HitActor = Hit.GetActor())
+    AActor* HitActor = Hit.GetActor();
+    if (!IsValid(HitActor) || HitActor->IsActorBeingDestroyed()) return nullptr;
+    const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(HitActor);
+    if (Container && Container->IsBroken()) return nullptr;
+
+    UGrabComponent* Grab = UVRFunctionLibrary::FindTopPrioGrabComponent(HitActor);
+    if (!IsValid(Grab) || Grab->GrabType == EGrabType::None || Grab->IsHeld()
+        || Grab->IsPulled() || !Grab->bAllowRemoteGrab)
     {
-        UGrabComponent* Grab = UVRFunctionLibrary::FindTopPrioGrabComponent(HitActor);
-        // 远程筛选：若组件禁止远程抓取，连高亮/候选者也不归入
-        if (Grab && !Grab->bAllowRemoteGrab)
-        {
-            return nullptr;
-        }
-        const ALiquidContainerActor* Container = Cast<ALiquidContainerActor>(HitActor);
-        if (Container && Container->IsBroken()) return nullptr;
-        return Grab;
+        return nullptr;
     }
-    return nullptr;
+    return Grab;
 }
 
 bool AVRPawn::UpdatePulledObject(UGrabComponent* InGrabComponent, UMotionControllerComponent* InMotionController, float DeltaTime)
@@ -1087,20 +1078,34 @@ void AVRPawn::HideUnhideHand(bool bRightHand, bool bHide)
 
 bool AVRPawn::TraceAim(UMotionControllerComponent* MotionControllerAim, FHitResult& OutHit) const
 {
-    if (MotionControllerAim == nullptr)
-    {
+    OutHit = FHitResult();
+    if (!IsValid(MotionControllerAim) || MotionControllerAim->GetOwner() != this) return false;
+
+    bool bRightHand = false;
+    const FName Source = MotionControllerAim->MotionSource;
+    if (MotionControllerAim == MotionControllerLeftAim)
+        bRightHand = false;
+    else if (MotionControllerAim == MotionControllerRightAim)
+        bRightHand = true;
+    else if (Source == FName(TEXT("LeftAim")) || Source == FName(TEXT("LeftGrip")) || Source == FName(TEXT("Left")))
+        bRightHand = false;
+    else if (Source == FName(TEXT("RightAim")) || Source == FName(TEXT("RightGrip")) || Source == FName(TEXT("Right")))
+        bRightHand = true;
+    else
         return false;
-    }
 
+    if (MenuPointerComp) return MenuPointerComp->TraceSurfaceForHand(bRightHand, OutHit);
+
+    // 仅组件缺失时回退：仍为真实追踪的传入 Origin、Visibility 线检和 250cm 上限。
+    UWorld* World = GetWorld();
+    if (!World || !IsLocallyControlled() || IsActorBeingDestroyed() || !MotionControllerAim->IsRegistered()
+        || !MotionControllerAim->IsActive() || !MotionControllerAim->IsTracked()) return false;
+    const FTransform Transform = MotionControllerAim->GetComponentTransform();
+    const FVector Scale = Transform.GetScale3D();
+    if (Transform.ContainsNaN() || Scale.X <= 0 || Scale.Y <= 0 || Scale.Z <= 0) return false;
     const FVector Start = MotionControllerAim->GetComponentLocation();
-    const FVector End = Start + MotionControllerAim->GetForwardVector() * 10000.f;
-
-    TArray<AActor*> IgnoreActors;
-    IgnoreActors.Add(const_cast<AVRPawn*>(this));
-
-    return UKismetSystemLibrary::SphereTraceSingleForObjects(
-        this, Start, End, 10.f,
-        { UEngineTypes::ConvertToObjectType(ECC_WorldDynamic),
-          UEngineTypes::ConvertToObjectType(ECC_PhysicsBody) },
-        false, IgnoreActors, EDrawDebugTrace::None, OutHit, true);
+    const FVector End = Start + MotionControllerAim->GetForwardVector() * 250.f;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(VRPawnAimSurface), true);
+    Params.AddIgnoredActor(this);
+    return World->LineTraceSingleByChannel(OutHit, Start, End, ECC_Visibility, Params);
 }
