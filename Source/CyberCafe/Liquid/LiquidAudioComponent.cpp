@@ -1,3 +1,4 @@
+#include "Liquid/LiquidAudioComponent.h"
 // Fill out your copyright notice in the Description page of Project Settings.
 
 // @trace LQ-01 LQ-02 LQ-05
@@ -29,7 +30,6 @@
 #include "Core/Events/CyberCafeEventSubsystem.h"
 
 
-#include "Liquid/LiquidAudioComponent.h"
 void ULiquidAudioComponent::UpdatePourAudio(double ActualFlowMLPerSecond, const FTransform& SourceTransform)
 {
     auto& Vessel = *CastChecked<ALiquidContainerActor>(GetOwner());

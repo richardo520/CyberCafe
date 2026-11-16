@@ -26,8 +26,8 @@ namespace CyberCafeSceneMusicTests
 {
 constexpr auto Options = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double ValueTolerance = 1.e-5;
-const TCHAR* MusicAssetPath = TEXT("/Game/VRTemplate/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered");
-const TCHAR* CafeMapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* MusicAssetPath = TEXT("/Game/CyberCafe/Shared/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered");
+const TCHAR* CafeMapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
 
 bool CheckNear(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected,
     double Tolerance = ValueTolerance)

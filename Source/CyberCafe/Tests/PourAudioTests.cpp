@@ -41,11 +41,11 @@ namespace CyberCafePourAudioTests
 constexpr auto Options = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double Tolerance = 1.e-5;
 constexpr float Dt = .02f;
-const TCHAR* SoundPath = TEXT("/Game/VRTemplate/Audio/Pouring/S_PourWaterLoop.S_PourWaterLoop");
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
-const TCHAR* BottlePath = TEXT("/Game/VRTemplate/MenuIngredients/Bottles/BP_Ingredient_Water.BP_Ingredient_Water_C");
-const TCHAR* CupPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* SoundPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Audio/S_PourWaterLoop.S_PourWaterLoop");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
+const TCHAR* KettlePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
+const TCHAR* BottlePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Menu/BP_Ingredient_Water.BP_Ingredient_Water_C");
+const TCHAR* CupPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)
 {

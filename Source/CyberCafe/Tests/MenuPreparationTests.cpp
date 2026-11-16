@@ -36,7 +36,7 @@ struct FWorld
   A->ContainerMesh->SetSimulatePhysics(false);A->GlassBreakProfile=nullptr;A->LiquidFXTemplate=nullptr;A->LiquidFX->SetAsset(nullptr);A->PourFX->SetAsset(nullptr);A->FinishSpawning(Spawn);A->bCanPour=false;return A;
  }
 };
-UDrinkMenuData* Menu(){return LoadObject<UDrinkMenuData>(nullptr,TEXT("/Game/VRTemplate/MenuIngredients/Menu/DA_RecipeMenu.DA_RecipeMenu"));}
+UDrinkMenuData* Menu(){return LoadObject<UDrinkMenuData>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu"));}
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuFixedCupIce,"CyberCafe.MenuPreparation.AllTenRequireSpecificCupAndIcePresence",MenuPreparationTests::TestOptions)
 bool FMenuFixedCupIce::RunTest(const FString&)
@@ -162,14 +162,14 @@ bool FMenuIceRevision::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuHighballMotion,"CyberCafe.MenuPreparation.NewHighballMotionKeepsOriginalAssets",MenuPreparationTests::TestOptions)
 bool FMenuHighballMotion::RunTest(const FString&)
 {
- auto* New=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion"));auto* Old=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion"));
+ auto* New=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion"));auto* Old=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion"));
  if(!TestNotNull(TEXT("authored new motion"),New)||!TestNotNull(TEXT("original retained motion"),Old))return false;
  TestTrue(TEXT("new motion valid"),New->IsValidMotion());TestTrue(TEXT("different new mesh and animation"),New->Animation!=Old->Animation&&New->SupportedCupMesh!=Old->SupportedCupMesh);TestTrue(TEXT("new exactscale1.1"),New->SupportedCupScale.Equals(FVector(1.1),.001));TestTrue(TEXT("legacy exactscale1 unchanged"),Old->SupportedCupScale.Equals(FVector::OneVector,.001));TestEqual(TEXT("7 second duration"),New->Duration(),7.f);TestEqual(TEXT("20mL budget"),New->SipVolumeML,20.f);return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuLostTracking,"CyberCafe.MenuPreparation.TrackingLossReleasesOnlyLostHandLatch",MenuPreparationTests::TestOptions)
 bool FMenuLostTracking::RunTest(const FString&)
 {
- MenuPreparationTests::FWorld F;auto* Class=LoadClass<AOrderHologramActor>(nullptr,TEXT("/Game/VRTemplate/Blueprints/Serving/BP_OrderHologram.BP_OrderHologram_C"));auto* S=F.World->SpawnActor<AOrderHologramActor>(Class);F.Begin();
+ MenuPreparationTests::FWorld F;auto* Class=LoadClass<AOrderHologramActor>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Serving/Blueprints/BP_OrderHologram.BP_OrderHologram_C"));auto* S=F.World->SpawnActor<AOrderHologramActor>(Class);F.Begin();
  const FVector Power=S->ButtonZone->GetComponentLocation();
  TestTrue(TEXT("left hand opens power"),S->ProcessTouchSample(EControllerHand::Left,Power));
  TestFalse(TEXT("lost hand never triggers power"),S->ProcessTouchSample(EControllerHand::Left,Power,false));

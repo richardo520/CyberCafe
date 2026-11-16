@@ -4,6 +4,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "UObject/StrongObjectPtr.h"
 #include "Liquid/GlassBreakableComponent.h"
 #include "Liquid/GlassRecoveryActor.h"
 #include "Liquid/LiquidContainerActor.h"
@@ -48,14 +49,14 @@ namespace GlassRuntimeTests
 constexpr float StepSeconds = .01f;
 constexpr int32 WarmFrames = 100;
 constexpr double VolumeTolerance = 1.e-6;
-const TCHAR* CupClassPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup01.BP_Cup01_C");
+const TCHAR* CupClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup01.BP_Cup01_C");
 // 地图首杯与旧 Cup01 物理/碎片夹具分离，不能全局替换 CupClassPath 或 CupProfilePath。
-const TCHAR* PrimaryCupClassPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
-const TCHAR* PrimaryCupMeshPath = TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup");
-const TCHAR* PrimaryCupProfilePath = TEXT("/Game/VRTemplate/MenuIngredients/Breakage/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
-const TCHAR* MilkClassPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C");
-const TCHAR* CupProfilePath = TEXT("/Game/VRTemplate/Breakage/DA_CupBreak.DA_CupBreak");
-const TCHAR* MilkProfilePath = TEXT("/Game/VRTemplate/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak");
+const TCHAR* PrimaryCupClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* PrimaryCupMeshPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/SM_Highball_Cup.SM_Highball_Cup");
+const TCHAR* PrimaryCupProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Menu/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
+const TCHAR* MilkClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C");
+const TCHAR* CupProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/DA_CupBreak.DA_CupBreak");
+const TCHAR* MilkProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak");
 
 FString Quote(FString Value)
 {
@@ -407,7 +408,7 @@ bool FGlassSavedProfilesShardShapesAndMapRefTest::RunTest(const FString&)
         for (int32 Index = 0; Index < 8; ++Index)
         {
             const FString Name = FString::Printf(TEXT("SM_%sShard_%02d"), Kind, Index);
-            const FString Path = FString::Printf(TEXT("/Game/VRTemplate/Breakage/Meshes/%s/%s.%s"), Kind, *Name, *Name);
+            const FString Path = FString::Printf(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Meshes/%s/%s.%s"), Kind, *Name, *Name);
             UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *Path);
             if (!TestNotNull(TEXT("从磁盘加载指定保存碎片网格"), Mesh)) return false;
             TestFalse(TEXT("两组十六块碎片引用互不重复"), UniqueMeshes.Contains(Mesh));
@@ -448,7 +449,7 @@ bool FGlassSavedProfilesShardShapesAndMapRefTest::RunTest(const FString&)
             Rows.Add(Row.Json());
         }
     }
-    UWorld* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    UWorld* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if (!TestNotNull(TEXT("加载保存地图，不开关卡或 BeginPlay"), Map) ||
         !TestNotNull(TEXT("保存地图 PersistentLevel"), Map->PersistentLevel.Get())) return false;
     AGlassRecoveryActor* Manager = nullptr;
@@ -506,7 +507,7 @@ bool FGlassSavedProfilesShardShapesAndMapRefTest::RunTest(const FString&)
     TestTrue(TEXT("六目标包含新首杯和原奶瓶"), Manager->RestoreTargets.Contains(PrimaryCup) && Manager->RestoreTargets.Contains(Milk));
     TestEqual(TEXT("原奶瓶 class 未替换"), Milk->GetClass()->GetPathName(), FString(MilkClassPath));
     TestEqual(TEXT("原奶瓶保存网格未替换"), GetPathNameSafe(Milk->ContainerMesh->GetStaticMesh().Get()),
-        FString(TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/SM_Bottle04.SM_Bottle04")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/SM_Bottle04.SM_Bottle04")));
     TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     // 原对象及旧索引映射保留；变更文案精确采用 menu_ui_implementation/applied.json.step_texts。
     const TCHAR* StepNames[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"),
@@ -557,9 +558,9 @@ bool FGlassSavedProfilesShardShapesAndMapRefTest::RunTest(const FString&)
     if (!TestNotNull(TEXT("原 Step[6] 上菜步骤"), Wait)) return false;
     TestTrue(TEXT("原上菜步骤仍引用保存的全息"), Wait->OrderHologram.Get() == Hologram);
     TestEqual(TEXT("原配方引用保留"), GetPathNameSafe(Wait->RequiredRecipe.Get()),
-        FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
     TestEqual(TEXT("原上菜点引用保留"), GetPathNameSafe(Wait->RequiredSpot.Get()),
-        FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+        FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
     if (!TestNotNull(TEXT("原拿铁配方有效"), Wait->RequiredRecipe.Get()) || !TestNotNull(TEXT("原服务位存在"), Wait->RequiredSpot.Get())
         || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
     TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
@@ -567,7 +568,7 @@ bool FGlassSavedProfilesShardShapesAndMapRefTest::RunTest(const FString&)
     TestEqual(TEXT("旧加冰建议值保留"), Wait->RequiredRecipe->ExpectedIceCount, 3);
     TestEqual(TEXT("冰拿铁目标仍为 200mL"), Wait->RequiredRecipe->TargetVolumeML, 200.0);
     TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
-    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
     TestTrue(TEXT("原 NPC 位置不变"), Director->NPCRef->GetActorLocation().Equals(FVector(-9, 48, 82), .001));
     TestTrue(TEXT("全息与原容器都属于保存地图"), Hologram->GetLevel() == Map->PersistentLevel &&
         PrimaryCup->GetLevel() == Map->PersistentLevel && Milk->GetLevel() == Map->PersistentLevel);
@@ -784,7 +785,10 @@ bool FGlassDebrisCleanupTest::RunTest(const FString&)
 #if WITH_EDITOR
     FAssetCompilingManager::Get().FinishAllCompilation();
 #endif
-    UGlassBreakProfile* Profile=NewObject<UGlassBreakProfile>(T.World);
+    // Outer alone is not a GC reference. This fixture reuses the temporary
+    // profile after hundreds of World ticks and after the first debris expires.
+    TStrongObjectPtr<UGlassBreakProfile> ProfileOwner(NewObject<UGlassBreakProfile>(T.World));
+    UGlassBreakProfile* Profile=ProfileOwner.Get();
     Profile->Shards=Saved->Shards;Profile->Shards.Append(Saved->Shards);
     Profile->MaxPhysicsShards=16;Profile->LifetimeSeconds=3.f;
     T.BeginPlay();

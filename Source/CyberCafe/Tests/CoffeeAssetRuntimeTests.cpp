@@ -56,14 +56,14 @@ constexpr double LiquidTolerance = 1.e-5;
 // float余额可有有界欠产；总毫升账本和双精度整批上限不放宽。
 constexpr double BudgetRoundingTolerance = 2.e-4;
 const FName Water(TEXT("Water")), Coffee(TEXT("Coffee")), Milk(TEXT("Milk"));
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* GrinderPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
-const TCHAR* DripperPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C");
-const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
-const TCHAR* CupPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C");
-const TCHAR* PrimaryCupClassPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
-const TCHAR* PrimaryCupMeshPath = TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup");
-const TCHAR* PrimaryCupProfilePath = TEXT("/Game/VRTemplate/MenuIngredients/Breakage/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
+const TCHAR* GrinderPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Blueprints/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
+const TCHAR* DripperPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripper.BP_HandDripper_C");
+const TCHAR* KettlePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
+const TCHAR* CupPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup03.BP_Cup03_C");
+const TCHAR* PrimaryCupClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* PrimaryCupMeshPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/SM_Highball_Cup.SM_Highball_Cup");
+const TCHAR* PrimaryCupProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Menu/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected,
     double Tolerance = LiquidTolerance)
@@ -368,11 +368,11 @@ bool FCoffeeSavedAssetsAndSystemsTest::RunTest(const FString&)
     TestNotNull(TEXT("保存滴流声音反馈非空"), D->DripSound.Get());
     TestNotNull(TEXT("保存咖啡输出材质钩子配置非空"), D->CoffeeLiquidMaterial.Get());
     TestNotNull(TEXT("保存清水输出材质非空"), D->WaterLiquidMaterial.Get());
-    if (!CheckSavedMesh(*this, D->ContainerMesh.Get(), TEXT("/Game/VRTemplate/CoffeeBrew/Meshes/SM_HandDripper.SM_HandDripper"), Evidence)
-        || !CheckSavedMesh(*this, K->ContainerMesh.Get(), TEXT("/Game/VRTemplate/CoffeeBrew/Meshes/SM_HandKettle.SM_HandKettle"), Evidence)) return false;
+    if (!CheckSavedMesh(*this, D->ContainerMesh.Get(), TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Meshes/SM_HandDripper.SM_HandDripper"), Evidence)
+        || !CheckSavedMesh(*this, K->ContainerMesh.Get(), TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Meshes/SM_HandKettle.SM_HandKettle"), Evidence)) return false;
     TestTrue(TEXT("滤杯和壶为两个独立模型"), D->ContainerMesh->GetStaticMesh() != K->ContainerMesh->GetStaticMesh());
     TestEqual(TEXT("滤纸复用独立已有源 SM，不替代滤杯外壳"), GetPathNameSafe(D->PaperMesh->GetStaticMesh().Get()),
-        FString(TEXT("/Game/coffee_grinder_scene/CoffeeBean/FilterSet/SM_ConeFilterPaper.SM_ConeFilterPaper")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/FilterSet/SM_ConeFilterPaper.SM_ConeFilterPaper")));
     TestTrue(TEXT("滤纸与滤杯外壳保持分离"), D->PaperMesh->GetStaticMesh() != D->ContainerMesh->GetStaticMesh()
         && D->PaperMesh->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
     TestNotNull(TEXT("粉床复用实际粉网格"), D->GroundBed->GetStaticMesh().Get());
@@ -497,14 +497,14 @@ bool FCoffeeSavedAssetsAndSystemsTest::RunTest(const FString&)
     auto* Wait = Director->Steps.IsValidIndex(6) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[6].Get()) : nullptr;
     if (!TestNotNull(TEXT("旧拿铁 Step[6] 上菜步骤"), Wait) || !TestNotNull(TEXT("原拿铁配方"), Wait->RequiredRecipe.Get())) return false;
     TestTrue(TEXT("原上菜全息引用不变"), Wait->OrderHologram.Get() == Holo);
-    TestEqual(TEXT("原配方路径不变"), Wait->RequiredRecipe->GetPathName(), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
-    TestEqual(TEXT("原上菜点不变"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+    TestEqual(TEXT("原配方路径不变"), Wait->RequiredRecipe->GetPathName(), FString(TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
+    TestEqual(TEXT("原上菜点不变"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
     TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("拿铁杯 class 精确匹配 Highball"), GetPathNameSafe(Wait->RequiredRecipe->AcceptedCupClass.Get()), FString(PrimaryCupClassPath));
     TestEqual(TEXT("旧加冰建议值保留"), Wait->RequiredRecipe->ExpectedIceCount, 3);
     if (!TestNotNull(TEXT("原服务位存在"), Wait->RequiredSpot.Get()) || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
     TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
-    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
     TestTrue(TEXT("原 NPC 位置不变"), Director->NPCRef->GetActorLocation().Equals(FVector(-9, 48, 82), .001));
     Near(*this, TEXT("原拿铁目标200mL"), Wait->RequiredRecipe->TargetVolumeML, 200);
     Near(*this, TEXT("原拿铁下界180mL"), Wait->RequiredRecipe->MinVolumeML, 180);

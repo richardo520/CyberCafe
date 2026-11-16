@@ -203,8 +203,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLiquidBlueprintRuntimeTest,"CyberCafe.Liquid.E
 bool FLiquidBlueprintRuntimeTest::RunTest(const FString&)
 {
     FTestLiquidWorld T;
-    UClass* BottleClass=LoadClass<ABottleActor>(nullptr,TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C"));
-    UClass* CupClass=LoadClass<ACupActor>(nullptr,TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C"));
+    UClass* BottleClass=LoadClass<ABottleActor>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C"));
+    UClass* CupClass=LoadClass<ACupActor>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup03.BP_Cup03_C"));
     if(!TestNotNull(TEXT("Existing milk BP loads"),BottleClass)||!TestNotNull(TEXT("Existing cup BP loads"),CupClass))return false;
     GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(T.World);
     UGameInstance* GI=NewObject<UGameInstance>();T.World->SetGameInstance(GI);GI->Init();

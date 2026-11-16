@@ -37,7 +37,7 @@ struct FMIDArray
 
 /**
  * AVRPawn
- * 对应工程内蓝图 /Game/VRTemplate/Blueprints/VRPawn 的C++版本。
+ * 对应工程内蓝图 /Game/CyberCafe/Player/Blueprints/VRPawn 的C++版本。
  *
  * 提供VR基础交互：
  *   - 双手MotionController + 骨骼手模型

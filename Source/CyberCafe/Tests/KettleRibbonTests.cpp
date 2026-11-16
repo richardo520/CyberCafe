@@ -30,7 +30,7 @@ constexpr EAutomationTestFlags Flags = EAutomationTestFlags::EditorContext | EAu
 constexpr double Tolerance = 1.e-4;
 constexpr float StepSeconds = .02f;
 constexpr int32 SourceFrames = 10;
-const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
+const TCHAR* KettlePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
 const TCHAR* RibbonPath = TEXT("/Game/LiquidMaterials_VFXPack/Effects/P_Ribbon.P_Ribbon");
 const FVector SpoutLocal(17.f, 0.f, 16.f);
 

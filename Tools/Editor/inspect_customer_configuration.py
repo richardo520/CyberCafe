@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unreal
 
-recipe = unreal.load_asset('/Game/VRTemplate/Data/Recipes/DA_Latte')
+recipe = unreal.load_asset('/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte')
 report = {'recipe': {}}
 for name in ['recipe_id', 'expected_ice_count', 'accepted_cup_class', 'min_volume_ml', 'max_volume_ml']:
     report['recipe'][name] = str(recipe.get_editor_property(name))

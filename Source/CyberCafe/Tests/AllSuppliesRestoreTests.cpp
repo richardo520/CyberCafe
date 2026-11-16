@@ -106,10 +106,10 @@ constexpr double Tolerance = 1.e-4;
 const TCHAR* BeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/dripper_grab_polish/current_before.json");
 const TCHAR* FilterName = TEXT("HandDripper_Practice");
 const TCHAR* OldStandName = TEXT("HandDripperStand_Practice");
-const TCHAR* LegacyDripperPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C");
-const TCHAR* AssemblyPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
-const TCHAR* BeanJarPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Blueprints/BP_DirectBeanJar.BP_DirectBeanJar_C");
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* LegacyDripperPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripper.BP_HandDripper_C");
+const TCHAR* AssemblyPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
+const TCHAR* BeanJarPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Blueprints/BP_DirectBeanJar.BP_DirectBeanJar_C");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
 const FName Water(TEXT("Water")), Milk(TEXT("Milk")), Coffee(TEXT("Coffee"));
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)

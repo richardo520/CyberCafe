@@ -22,11 +22,11 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRecipeSavedAssetsTest,"CyberCafe.Recipe.SavedMapIdentityPacketAndTeaching",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FRecipeSavedAssetsTest::RunTest(const FString&)
 {
-    UWorld* Map=LoadObject<UWorld>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    UWorld* Map=LoadObject<UWorld>(nullptr,TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if(!TestNotNull(TEXT("Saved main map"),Map))return false;
-    ABottleActor* MapCoffee=FindObject<ABottleActor>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_Bottle01_C_1"));
-    ABottleActor* MapMilk=FindObject<ABottleActor>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_Bottle04_Milk_Tutorial"));
-    ATutorialDirector* MapDirector=FindObject<ATutorialDirector>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialDirecter_C_0"));
+    ABottleActor* MapCoffee=FindObject<ABottleActor>(nullptr,TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_Bottle01_C_1"));
+    ABottleActor* MapMilk=FindObject<ABottleActor>(nullptr,TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_Bottle04_Milk_Tutorial"));
+    ATutorialDirector* MapDirector=FindObject<ATutorialDirector>(nullptr,TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialDirecter_C_0"));
     if(!TestNotNull(TEXT("Saved coffee identity"),MapCoffee)||!TestNotNull(TEXT("Saved milk bottle"),MapMilk)||!TestNotNull(TEXT("Original director retained"),MapDirector))return false;
     if(!TestEqual(TEXT("菜单插入后恰好八步"),MapDirector->Steps.Num(),8))return false;
     UTutorialStep_WaitForServe* MapStep=Cast<UTutorialStep_WaitForServe>(MapDirector->Steps[6]);

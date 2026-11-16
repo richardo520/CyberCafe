@@ -179,7 +179,7 @@ bool FNarrativeFlowTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FNarrativeAssetBindingTest, "CyberCafe.Narrative.SavedWidgetBindings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FNarrativeAssetBindingTest::RunTest(const FString&)
 {
-    UClass* WidgetClass = LoadClass<UNarrativeWidget>(nullptr, TEXT("/Game/VRTemplate/Blueprints/Tutorial/UI/WBP_NarrativeHUD.WBP_NarrativeHUD_C"));
+    UClass* WidgetClass = LoadClass<UNarrativeWidget>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Tutorial/Blueprints/UI/WBP_NarrativeHUD.WBP_NarrativeHUD_C"));
     if (!TestNotNull(TEXT("Original widget blueprint reloads"), WidgetClass)) return false;
     UWorld::InitializationValues IV;
     IV.AllowAudioPlayback(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);

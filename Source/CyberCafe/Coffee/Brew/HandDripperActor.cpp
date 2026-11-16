@@ -67,9 +67,9 @@ AHandDripperActor::AHandDripperActor()
     PaperButtonLabel=CreateDefaultSubobject<UTextRenderComponent>(TEXT("PaperButtonLabel"));PaperButtonLabel->SetupAttachment(ContainerMesh);PaperButtonLabel->SetRelativeLocation(FVector(0,-7,3));PaperButtonLabel->SetRelativeRotation(FRotator(0,-90,0));PaperButtonLabel->SetHorizontalAlignment(EHTA_Center);PaperButtonLabel->SetWorldSize(.7f);PaperButtonLabel->SetText(FText::FromString(TEXT("NEW FILTER")));
 
     static ConstructorHelpers::FObjectFinder<UStaticMesh> PaperAsset(
-        TEXT("/Game/coffee_grinder_scene/CoffeeBean/FilterSet/SM_ConeFilterPaper.SM_ConeFilterPaper"));
+        TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/FilterSet/SM_ConeFilterPaper.SM_ConeFilterPaper"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> GroundsAsset(
-        TEXT("/Game/coffee_grinder_scene/CoffeeBean/GroundsV02/SM_Grounds_Filter_V02.SM_Grounds_Filter_V02"));
+        TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Grounds/SM_Grounds_Filter_V02.SM_Grounds_Filter_V02"));
     if (PaperAsset.Succeeded()) PaperMesh->SetStaticMesh(PaperAsset.Object);
     if (GroundsAsset.Succeeded())
     {

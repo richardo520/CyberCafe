@@ -13,6 +13,9 @@ try {
     $env:DRINK_FIX_RUN_DIR = Join-Path $runRoot 'Measurements'
     $arguments = @(
         (Join-Path $projectRoot 'CyberCafe.uproject'),
+        # Saved-map fixtures load and duplicate L_Cafe themselves. Keep editor startup
+        # actors out of that source world, independent of the user's startup map.
+        '/Engine/Maps/Entry',
         '-unattended', '-nop4', '-nosplash', '-nullrhi', '-nohmd',
         "-ExecCmds=Automation RunTests $Filter",
         '-TestExit=Automation Test Queue Empty',

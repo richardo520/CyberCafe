@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "main_map": "/Game/VRTemplate/Maps/L_Cafe",
+  "protected_roots": [
+    "/Game/VRTemplate/Maps",
+    "/Game/Cafe/Maps",
+    "/Game/Movies",
+    "/Game/Characters/BarGirl/DrinkPreview/L_BarGirl_DrinkPreview"
+  ],
+  "excluded_assets": [
+    "/Game/VRTemplate/Blueprints/UI/WBP_TutorialHint"
+  ],
+  "prefix_rules": [
+    [
+      "/Game/VRTemplate/Data/Recipes/",
+      "/Game/CyberCafe/Gameplay/Serving/Recipes/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Recipes/",
+      "/Game/CyberCafe/Gameplay/Serving/Recipes/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Menu/",
+      "/Game/CyberCafe/Gameplay/Serving/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Bottles/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Cups/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Breakage/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Materials/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Materials/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/MenuIngredients/Meshes/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Interaction/Bottle/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Interaction/Cup/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/",
+      "/Game/CyberCafe/Gameplay/Coffee/Grinder/Blueprints/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Interaction/Coffee/BeanJar/",
+      "/Game/CyberCafe/Gameplay/Coffee/Beans/Blueprints/"
+    ],
+    [
+      "/Game/VRTemplate/CoffeeBrew/BeanJar/",
+      "/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/"
+    ],
+    [
+      "/Game/VRTemplate/CoffeeBrew/Audio/SC_Grind_Feedback_",
+      "/Game/CyberCafe/Gameplay/Coffee/Grinder/Audio/SC_Grind_Feedback_"
+    ],
+    [
+      "/Game/VRTemplate/CoffeeBrew/",
+      "/Game/CyberCafe/Gameplay/Coffee/Brewing/"
+    ],
+    [
+      "/Game/coffee_grinder_scene/CoffeeBean/FilterSet/",
+      "/Game/CyberCafe/Gameplay/Coffee/Brewing/FilterSet/"
+    ],
+    [
+      "/Game/coffee_grinder_scene/CoffeeBean/GroundsV02/",
+      "/Game/CyberCafe/Gameplay/Coffee/Brewing/Grounds/"
+    ],
+    [
+      "/Game/VRTemplate/Ice/",
+      "/Game/CyberCafe/Gameplay/Drinks/Ice/"
+    ],
+    [
+      "/Game/VRTemplate/Breakage/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/"
+    ],
+    [
+      "/Game/VRTemplate/BarSamples/",
+      "/Game/CyberCafe/Gameplay/Drinks/Containers/BarSamples/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Serving/",
+      "/Game/CyberCafe/Gameplay/Serving/Blueprints/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Tutorial/",
+      "/Game/CyberCafe/Gameplay/Tutorial/Blueprints/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/Characters/",
+      "/Game/CyberCafe/Characters/Manny/Blueprints/"
+    ],
+    [
+      "/Game/VRTemplate/Blueprints/UI/",
+      "/Game/CyberCafe/UI/Widgets/"
+    ],
+    [
+      "/Game/VRTemplate/Input/",
+      "/Game/CyberCafe/Player/Input/"
+    ],
+    [
+      "/Game/VRTemplate/Haptics/",
+      "/Game/CyberCafe/Player/Haptics/"
+    ],
+    [
+      "/Game/VRTemplate/MenuPointerExperiment/",
+      "/Game/CyberCafe/Player/Pointer/"
+    ],
+    [
+      "/Game/VRTemplate/Audio/Mix/",
+      "/Game/CyberCafe/Shared/Audio/Mix/"
+    ],
+    [
+      "/Game/VRTemplate/Audio/Music/",
+      "/Game/CyberCafe/Shared/Audio/Music/"
+    ],
+    [
+      "/Game/VRTemplate/Audio/Narrative/",
+      "/Game/CyberCafe/UI/Audio/"
+    ],
+    [
+      "/Game/VRTemplate/Audio/Pouring/",
+      "/Game/CyberCafe/Gameplay/Drinks/Audio/"
+    ],
+    [
+      "/Game/Characters/BarGirl/",
+      "/Game/CyberCafe/Characters/BarGirl/"
+    ],
+    [
+      "/Game/Cafe/Materials/",
+      "/Game/CyberCafe/Environment/Cafe/Materials/"
+    ],
+    [
+      "/Game/Cafe/Meshes/",
+      "/Game/CyberCafe/Environment/Cafe/Meshes/"
+    ],
+    [
+      "/Game/Cafe/Textures/",
+      "/Game/CyberCafe/Environment/Cafe/Textures/"
+    ],
+    [
+      "/Game/Cafe/TV/",
+      "/Game/CyberCafe/Environment/Cafe/TV/"
+    ]
+  ],
+  "exact_rules": {
+    "/Game/VRTemplate/Blueprints/VRGameMode": "/Game/CyberCafe/Core/Blueprints/VRGameMode",
+    "/Game/VRTemplate/Blueprints/VRPawn": "/Game/CyberCafe/Player/Blueprints/VRPawn",
+    "/Game/VRTemplate/Blueprints/VRCharacter": "/Game/CyberCafe/Player/Blueprints/VRCharacter",
+    "/Game/VRTemplate/Blueprints/VRFunctionLibrary": "/Game/CyberCafe/Player/Blueprints/VRFunctionLibrary",
+    "/Game/VRTemplate/Blueprints/GrabComponent": "/Game/CyberCafe/Player/Blueprints/GrabComponent",
+    "/Game/VRTemplate/Blueprints/GrabType": "/Game/CyberCafe/Player/Blueprints/GrabType",
+    "/Game/VRTemplate/Blueprints/BPI_PawnAnim": "/Game/CyberCafe/Player/Blueprints/BPI_PawnAnim",
+    "/Game/VRTemplate/Blueprints/TwoHandBalanceComponent": "/Game/CyberCafe/Player/Blueprints/TwoHandBalanceComponent",
+    "/Game/VRTemplate/Blueprints/VRTeleportVisualizer": "/Game/CyberCafe/Player/Blueprints/VRTeleportVisualizer",
+    "/Game/VRTemplate/Blueprints/Grabbable_SmallCubeTest": "/Game/CyberCafe/Tests/LegacyTemplate/Grabbable_SmallCubeTest",
+    "/Game/VRTemplate/VFX/NS_MenuLaser": "/Game/CyberCafe/Player/Pointer/VFX/NS_MenuLaser"
+  }
+}

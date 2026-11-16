@@ -53,7 +53,7 @@ struct FWorld
         World->SetGameInstance(GI);
         GI->Init();
         auto* Class = LoadClass<AOrderHologramActor>(nullptr,
-            TEXT("/Game/VRTemplate/Blueprints/Serving/BP_OrderHologram.BP_OrderHologram_C"));
+            TEXT("/Game/CyberCafe/Gameplay/Serving/Blueprints/BP_OrderHologram.BP_OrderHologram_C"));
         Screen = Class ? World->SpawnActor<AOrderHologramActor>(Class,
             FTransform(FRotator(0, 35, 0), FVector(25, 80, 100))) : nullptr;
         Director = World->SpawnActor<ATutorialDirector>();
@@ -97,7 +97,7 @@ struct FWorld
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTutorialMenuSaved, "CyberCafe.TutorialMenu.SavedEightStepsAndOriginalOrder", TutorialMenuTests::TestOptions)
 bool FTutorialMenuSaved::RunTest(const FString&)
 {
-    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if (!TestNotNull(TEXT("保存的主地图"), Map)) return false;
     ATutorialDirector* D = nullptr;
     for (const auto& A : Map->PersistentLevel->Actors)
@@ -148,12 +148,12 @@ bool FTutorialMenuSaved::RunTest(const FString&)
     const auto& Entry = Data->Entries[Index];
     TestEqual(TEXT("BNT 与原交付引用同一 DA"), Entry.Recipe.Get(), Serve->RequiredRecipe.Get());
     TestEqual(TEXT("交付仍引用原 DA_Latte"), GetPathNameSafe(Serve->RequiredRecipe),
-        FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
     TestEqual(TEXT("权威 RecipeId 不变"), Serve->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("菜单显示冰拿铁"), Entry.DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("配方显示冰拿铁"), Serve->RequiredRecipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("固定保存 Highball 杯类"), GetPathNameSafe(Serve->RequiredRecipe->AcceptedCupClass.Get()),
-        FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
     TestEqual(TEXT("旧加冰建议值保留"), Serve->RequiredRecipe->ExpectedIceCount, 3);
     TestEqual(TEXT("原目标仍为 200 mL"), Serve->RequiredRecipe->TargetVolumeML, 200.0);
     TestTrue(TEXT("交付后紧接消费步骤"), Cast<UTutorialStep_ConsumeServedDrink>(D->Steps[7]) != nullptr);

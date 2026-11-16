@@ -66,7 +66,7 @@ struct FWorld
         if (!Screen) return;
         // 配置测试实例，不修改保存资产或原生 CDO；菜单数据必须来自真实保存 DA。
         auto* DefaultRecipeMenu = LoadObject<UDrinkMenuData>(nullptr,
-            TEXT("/Game/VRTemplate/MenuIngredients/Menu/DA_RecipeMenu.DA_RecipeMenu"));
+            TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu"));
         Screen->RecipeMenu = DefaultRecipeMenu;
         Screen->bFaceHeadset = true;
         Screen->FacingInterpSpeed = 4.f;
@@ -167,7 +167,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHeadsetMenuSavedMapOptinConfiguration,
 bool FHeadsetMenuSavedMapOptinConfiguration::RunTest(const FString&)
 {
     if (!TestTrue(TEXT("保存资产只在主线程加载和注册"), IsInGameThread())) return false;
-    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if (!TestNotNull(TEXT("最新保存的原 L_Cafe，不回套备份地图"), Map)
         || !TestNotNull(TEXT("保存的 PersistentLevel"), Map->PersistentLevel.Get())) return false;
     auto* Screen = FindObject<AOrderHologramActor>(Map->PersistentLevel, TEXT("BP_OrderHologram_Tutorial"));
@@ -192,7 +192,7 @@ bool FHeadsetMenuSavedMapOptinConfiguration::RunTest(const FString&)
     TestTrue(TEXT("保存原根缩放为一"), Screen->GetActorScale3D().Equals(FVector::OneVector, .00001));
     TestTrue(TEXT("保存面板已注册，姿态读取不是未注册的零变换"), Screen->Panel->IsRegistered());
     auto* DefaultRecipeMenu = LoadObject<UDrinkMenuData>(nullptr,
-        TEXT("/Game/VRTemplate/MenuIngredients/Menu/DA_RecipeMenu.DA_RecipeMenu"));
+        TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu"));
     if (!TestNotNull(TEXT("保存菜单数据"), DefaultRecipeMenu)) return false;
     TestEqual(TEXT("原实例引用真实保存菜单"), Screen->RecipeMenu.Get(), DefaultRecipeMenu);
     TestTrue(TEXT("保存菜单有效"), DefaultRecipeMenu->IsValidMenu());
@@ -406,7 +406,7 @@ bool FHeadsetMenuRotatedParentAndOpenAnimation::RunTest(const FString&)
     TestEqual(TEXT("实际订单页索引 0"), Pages->GetActiveWidgetIndex(), 0);
     if (!TestTrue(TEXT("真实 Action1 可再次切配方页"), TutorialMenuTestHelpers::TouchAction(Screen, 1))) return false;
     // Action2 只在订单页且有真实展示配方时有效，不通过脚本动作冒充手输入。
-    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("真实保存首单配方"), Recipe)
         || !TestTrue(TEXT("真实配方自动展示到订单页"), Screen->RevealFirstOrderRecipe(Recipe))) return false;
     TestEqual(TEXT("自动展示实际页为 0"), Pages->GetActiveWidgetIndex(), 0);
@@ -583,7 +583,7 @@ bool FHeadsetMenuLocalCameraManagerTick::RunTest(const FString&)
         HeadsetMenuFacingTests::AngleDegrees(SeatedFacing, Screen->Panel->GetComponentQuat()) > 30);
     Fixed.Check(*this, Screen);
 
-    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("Action2 依赖真实保存的首单配方"), Recipe)
         || !TestTrue(TEXT("真实首单预览打开订单页以接受 Action2"), Screen->RevealFirstOrderRecipe(Recipe))) return false;
     const FQuat FacingBeforeCameraTurn = Screen->Panel->GetComponentQuat();

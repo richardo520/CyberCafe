@@ -255,7 +255,7 @@ struct FRun
         if (!Need(!OutputDir.IsEmpty(), TEXT("必须提供 DRINK_FIX_RUN_DIR，禁止无诊断记录运行"))) return false;
         Record(TEXT("加载前"));
         if (!Need(GEngine != nullptr, TEXT("GEngine 不可用"))) return false;
-        Source = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+        Source = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
         if (!Need(IsValid(Source) && Source->PersistentLevel, TEXT("无法读取真实保存 L_Cafe"))) return false;
         bSourceWasDirty = Source->GetOutermost()->IsDirty();
         if (!Need(Source->GetStreamingLevels().IsEmpty(), TEXT("L_Cafe 含 streaming levels；本夹具未加载子关卡，停止而非伪称完整地图"))) return false;
@@ -305,7 +305,9 @@ struct FRun
             }
         }
         for (const auto& A : Source->PersistentLevel->Actors) if (IsValid(A.Get()))
-            if (!Need(ByName.Contains(A->GetFName()) && ByName[A->GetFName()] != A.Get(), TEXT("源地图 Actor 未完整复制"))) return false;
+            if (!ByName.Contains(A->GetFName()) || ByName[A->GetFName()] == A.Get())
+                return Fail(FString::Printf(TEXT("源地图 Actor 未完整复制：%s，Flags=%u，源 World 已初始化=%d"),
+                    *A->GetPathName(), static_cast<uint32>(A->GetFlags()), Source->IsInitialized()));
         if (!Need(IsValid(Director) && IsValid(Director->NPCRef), TEXT("保存 Director/NPCRef 不完整"))) return false;
         NPC = Director->NPCRef.Get();
         if (!Need(NPC->GetWorld() == World && Drink() && Mesh(), TEXT("NPC 或组件引用未重映射至副本"))) return false;
@@ -365,7 +367,7 @@ struct FRun
         if (!Need(Cup->GetWorld() == World && Spot->GetWorld() == World && Wait->GetOuter() == Director && Consume->GetOuter() == Director,
             TEXT("保存杯/Spot/Instanced Steps 仍指向源地图"))) return false;
         UClass* HighballClass = LoadClass<ACupActor>(nullptr,
-            TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C"));
+            TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C"));
         if (!Need(IsValid(HighballClass) && Cup->GetClass() == HighballClass, TEXT("恢复经理教学杯不是保存 Highball 类"))) return false;
         if (!Need(Drink()->bEnabled && IsValid(Drink()->Motion) && Drink()->Motion->IsValidMotion() && IsValid(Drink()->Motion->Animation),
             TEXT("保存 NPC 未启用或真实喝饮 Motion 无效；禁止夹具修补"))) return false;

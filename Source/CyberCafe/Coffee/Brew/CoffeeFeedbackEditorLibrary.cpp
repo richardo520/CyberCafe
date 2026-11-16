@@ -37,8 +37,8 @@ namespace CoffeeFeedbackEditorPrivate
 {
     constexpr const TCHAR* SteamPath = TEXT("/Game/Coffee_Equipment/Particles/P_Steam_Lit.P_Steam_Lit");
     constexpr const TCHAR* GrindPath = TEXT("/Game/coffee_grinder_scene/Sound/S_Grind.S_Grind");
-    constexpr const TCHAR* OwnedCuePrefix = TEXT("/Game/VRTemplate/CoffeeBrew/Audio/SC_Grind_Feedback_");
-    constexpr const TCHAR* GrinderClassPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
+    constexpr const TCHAR* OwnedCuePrefix = TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Audio/SC_Grind_Feedback_");
+    constexpr const TCHAR* GrinderClassPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Blueprints/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
     constexpr int32 SampleSeed = 56012;
 
     FString ToJson(const TSharedRef<FJsonObject>& Report)
@@ -498,7 +498,7 @@ FString UCoffeeFeedbackEditorLibrary::TunePourSteam(UParticleSystem* Target)
 {
 #if WITH_EDITOR
     using namespace CoffeeFeedbackEditorPrivate;
-    constexpr const TCHAR* PourPackagePath = TEXT("/Game/VRTemplate/CoffeeBrew/Particles/P_Steam_Pour_Feedback");
+    constexpr const TCHAR* PourPackagePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Particles/P_Steam_Pour_Feedback");
     const FString PourObjectPath = FString(PourPackagePath) + TEXT(".P_Steam_Pour_Feedback");
     if (!GIsEditor || !IsInGameThread()) return FeedbackFailureJson(TEXT("仅可在编辑器游戏线程显式调整蒸汽副本"));
     if (!IsValid(Target) || Target->IsTemplate() || Target->GetClass() != UParticleSystem::StaticClass()
@@ -791,7 +791,7 @@ FString UCoffeeFeedbackEditorLibrary::CreateGrindLoopCue(const FString& PackageP
     using namespace CoffeeFeedbackEditorPrivate;
     if (!GIsEditor || !IsInGameThread()) return FeedbackFailureJson(TEXT("仅可在编辑器游戏线程显式创建素材"));
     if (!PackagePath.StartsWith(OwnedCuePrefix, ESearchCase::CaseSensitive) || !FPackageName::IsValidLongPackageName(PackagePath))
-        return FeedbackFailureJson(TEXT("仅允许 /Game/VRTemplate/CoffeeBrew/Audio/SC_Grind_Feedback_ 前缀的完整 package 路径，不接受文件路径或对象路径"));
+        return FeedbackFailureJson(TEXT("仅允许 /Game/CyberCafe/Gameplay/Coffee/Grinder/Audio/SC_Grind_Feedback_ 前缀的完整 package 路径，不接受文件路径或对象路径"));
     const FString Suffix = PackagePath.Mid(FCString::Strlen(OwnedCuePrefix));
     if (Suffix.IsEmpty()) return FeedbackFailureJson(TEXT("反馈 Cue 名称后缀不能为空"));
     for (const TCHAR Character : Suffix)

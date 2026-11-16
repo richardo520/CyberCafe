@@ -77,13 +77,13 @@
 namespace CafeMediaAudioTests
 {
 constexpr auto Options = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* TVMeshPath = TEXT("/Game/Cafe/Meshes/B05/SM_B05_CRT_TV.SM_B05_CRT_TV");
-const TCHAR* ScreenMaterialPath = TEXT("/Game/Cafe/TV/M_CafeTVVideo.M_CafeTVVideo");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
+const TCHAR* TVMeshPath = TEXT("/Game/CyberCafe/Environment/Cafe/Meshes/B05/SM_B05_CRT_TV.SM_B05_CRT_TV");
+const TCHAR* ScreenMaterialPath = TEXT("/Game/CyberCafe/Environment/Cafe/TV/M_CafeTVVideo.M_CafeTVVideo");
 const TCHAR* MasterPath = TEXT("/Engine/EngineSounds/Master.Master");
-const TCHAR* MusicPath = TEXT("/Game/VRTemplate/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered");
-const TCHAR* MotionPath = TEXT("/Game/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion");
-const TCHAR* CalibratedAnimationPath = TEXT("/Game/Characters/BarGirl/FirstCustomer/Highball/A_BarGirl_HighballDrink_Calibrated.A_BarGirl_HighballDrink_Calibrated");
+const TCHAR* MusicPath = TEXT("/Game/CyberCafe/Shared/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered");
+const TCHAR* MotionPath = TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion");
+const TCHAR* CalibratedAnimationPath = TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/Highball/A_BarGirl_HighballDrink_Calibrated.A_BarGirl_HighballDrink_Calibrated");
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected, double Tolerance = 1.e-5)
 {
@@ -430,7 +430,7 @@ bool FCafeMediaSavedTVAttachments::RunTest(const FString&)
         TestEqual(FString::Printf(TEXT("保存槽位 %d：仅槽 1 是授权视频材质，其余保留原名"), Slot), GetNameSafe(Mesh->GetMaterial(Slot)), FString(Materials[Slot]));
         if (Slot != 1)
             TestEqual(FString::Printf(TEXT("保存非屏幕槽位 %d 精确保留 baseline 原资产"), Slot), GetPathNameSafe(Mesh->GetMaterial(Slot)),
-                FString::Printf(TEXT("/Game/Cafe/Materials/%s.%s"), Materials[Slot], Materials[Slot]));
+                FString::Printf(TEXT("/Game/CyberCafe/Environment/Cafe/Materials/%s.%s"), Materials[Slot], Materials[Slot]));
     }
     TestNotNull(TEXT("保存屏幕材质硬引用已存在"), Scene.Playback->ScreenMaterial.Get());
     TestTrue(TEXT("保存槽 1 精确等于播放组件 ScreenMaterial"), Mesh->GetMaterial(1) == Scene.Playback->ScreenMaterial);
@@ -604,7 +604,7 @@ bool FCafeMediaSavedCalibratedMotion::RunTest(const FString&)
     Near(*this, TEXT("不以扩大拒绝阈值掩盖起点偏差"), Motion->MaxStartOffsetCM, 5);
     TestTrue(TEXT("Highball 支持缩放仍为 1.1"), Motion->SupportedCupScale.Equals(FVector(1.1), 1.e-5));
     TestEqual(TEXT("支持网格仍为原 Highball"), GetPathNameSafe(Motion->SupportedCupMesh),
-        FString(TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/SM_Highball_Cup.SM_Highball_Cup")));
     TestTrue(TEXT("新动画与原 NPC 网格 Skeleton 相同"), NPC->GetMesh()->GetSkeletalMeshAsset()
         && NPC->GetMesh()->GetSkeletalMeshAsset()->GetSkeleton() == Animation->GetSkeleton());
     Near(*this, TEXT("喝掉体积仍为 20mL"), Motion->SipVolumeML, 20);

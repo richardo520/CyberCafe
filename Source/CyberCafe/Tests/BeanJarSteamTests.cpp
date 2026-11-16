@@ -58,20 +58,20 @@ namespace BeanJarSteamTests
 {
 constexpr EAutomationTestFlags TestFlags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double Tolerance = 1.e-5;
-const TCHAR* JarPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Blueprints/BP_DirectBeanJar.BP_DirectBeanJar_C");
-const TCHAR* LidPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Blueprints/BP_ScrewBeanJarLid.BP_ScrewBeanJarLid_C");
-const TCHAR* BodyPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_BeanJar_Body.SM_BeanJar_Body");
-const TCHAR* LidMeshPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_BeanJar_Lid.SM_BeanJar_Lid");
-const TCHAR* BeansPath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/Meshes/SM_BeanJar_Beans.SM_BeanJar_Beans");
-const TCHAR* ProfilePath = TEXT("/Game/VRTemplate/CoffeeBrew/BeanJar/DA_BeanJarBreak.DA_BeanJarBreak");
-const TCHAR* SteamPath = TEXT("/Game/VRTemplate/CoffeeBrew/Particles/P_Steam_Pour_Feedback.P_Steam_Pour_Feedback");
-const TCHAR* GrinderPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
-const TCHAR* KettlePath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
-const TCHAR* CupPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C");
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* JarPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Blueprints/BP_DirectBeanJar.BP_DirectBeanJar_C");
+const TCHAR* LidPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Blueprints/BP_ScrewBeanJarLid.BP_ScrewBeanJarLid_C");
+const TCHAR* BodyPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Meshes/SM_BeanJar_Body.SM_BeanJar_Body");
+const TCHAR* LidMeshPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Meshes/SM_BeanJar_Lid.SM_BeanJar_Lid");
+const TCHAR* BeansPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/Meshes/SM_BeanJar_Beans.SM_BeanJar_Beans");
+const TCHAR* ProfilePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Beans/BeanJar/DA_BeanJarBreak.DA_BeanJarBreak");
+const TCHAR* SteamPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Particles/P_Steam_Pour_Feedback.P_Steam_Pour_Feedback");
+const TCHAR* GrinderPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Blueprints/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
+const TCHAR* KettlePath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandPourKettle.BP_HandPourKettle_C");
+const TCHAR* CupPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup03.BP_Cup03_C");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
 const TCHAR* DripperBeforePath = TEXT("C:/Users/cloudcheng/WorkBuddy/2026-11-01-16-35-18/dripper_grab_polish/current_before.json");
-const TCHAR* AssemblyPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
-const TCHAR* LegacyDripperPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C");
+const TCHAR* AssemblyPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
+const TCHAR* LegacyDripperPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripper.BP_HandDripper_C");
 const TCHAR* FilterName = TEXT("HandDripper_Practice");
 const TCHAR* OldStandName = TEXT("HandDripperStand_Practice");
 
@@ -426,7 +426,7 @@ bool FBeanJarSteamAssets::RunTest(const FString&)
         && Cap->UnlockAngleDegrees == 120 && Cap->OpeningDirection == 1);
     TestTrue(TEXT("保存豆流仅视觉缩放迁移到 .4，克数契约不变"), Jar->BeanStream->GetRelativeScale3D().Equals(FVector(.4), BeanJarSteamTests::Tolerance));
     auto* OldBottleClass = LoadClass<ABottleActor>(nullptr,
-        TEXT("/Game/VRTemplate/MenuIngredients/Bottles/BP_Ingredient_Water.BP_Ingredient_Water_C"));
+        TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Menu/BP_Ingredient_Water.BP_Ingredient_Water_C"));
     if (!TestNotNull(TEXT("原保存水瓶资产，旧盖开盖方式不使用原生兜底"), OldBottleClass)) return false;
     const auto* OldBottle = OldBottleClass->GetDefaultObject<ABottleActor>();
     if (!TestNotNull(TEXT("原水瓶保存真实 CapClass"), OldBottle->CapClass.Get())) return false;
@@ -1279,7 +1279,7 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
     using namespace BeanJarSteamTests;
     FJarAssets A; if (!A.Check(*this)) return false;
     UClass* DripperClass = LoadClass<AHandDripperActor>(nullptr,
-        TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripper.BP_HandDripper_C"));
+        TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripper.BP_HandDripper_C"));
     UClass* KettleClass = LoadClass<AHandPourKettleActor>(nullptr, KettlePath);
     UClass* CupClass = LoadClass<ACupActor>(nullptr, CupPath);
     UClass* GrinderClass = LoadClass<ACoffeeGrinderActor>(nullptr, GrinderPath);
@@ -1339,7 +1339,7 @@ bool FBeanJarSteamCoffeeChain::RunTest(const FString&)
     TestTrue(TEXT("声音配置仍来自实际 Source SFX，不补玩家音频 hook"),
         (G->LoadedGrindSound || G->GrindSFX->Sound) && Drawer->GroundPourSound && D->DripSound && K->PourLoopSound);
     auto* GrindCue = LoadObject<USoundCue>(nullptr,
-        TEXT("/Game/VRTemplate/CoffeeBrew/Audio/SC_Grind_Feedback_Loop.SC_Grind_Feedback_Loop"));
+        TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Audio/SC_Grind_Feedback_Loop.SC_Grind_Feedback_Loop"));
     auto* GrindWave = LoadObject<USoundWave>(nullptr, TEXT("/Game/coffee_grinder_scene/Sound/S_Grind.S_Grind"));
     if (!TestNotNull(TEXT("保存的新研磨 Cue，测试不补造"), GrindCue)
         || !TestNotNull(TEXT("保留原研磨 Wave 资产"), GrindWave)) return false;

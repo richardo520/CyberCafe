@@ -1,3 +1,4 @@
+#include "Liquid/LiquidPresentationComponent.h"
 // Fill out your copyright notice in the Description page of Project Settings.
 
 // @trace LQ-01 LQ-02 LQ-05
@@ -29,7 +30,6 @@
 #include "Core/Events/CyberCafeEventSubsystem.h"
 
 
-#include "Liquid/LiquidPresentationComponent.h"
 void ULiquidPresentationComponent::RefreshLiquidFX()
 {
     auto& Vessel = *CastChecked<ALiquidContainerActor>(GetOwner());

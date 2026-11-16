@@ -1,5 +1,7 @@
 # CyberCafe 架构与资源整理（第一轮）
 
+资源目录更新：706 个非地图资源与主关卡现已迁入 `/Game/CyberCafe`，主关卡为 `/Game/CyberCafe/Maps/L_Cafe`。当前入口与规则见 [AssetOrganization.md](AssetOrganization.md)。下文资源盘点和路径示例为首次整理时的历史记录。
+
 更新：五项内部实现重构已完成，当前职责、验证结果与头显验收顺序见 [RefactorAcceptance.md](RefactorAcceptance.md)。[CustomerOrderFlow.md](CustomerOrderFlow.md) 保留第一阶段订单解耦设计。下文“本轮验证结果”保留第一轮整理时的历史记录。
 
 ## 当前入口与事实

@@ -14,7 +14,7 @@ def main():
         include_soft_management_references=True,
         include_hard_management_references=True,
     )
-    root = '/Game/VRTemplate/Maps/L_Cafe'
+    root = '/Game/CyberCafe/Maps/L_Cafe'
     if not registry.get_assets_by_package_name(root):
         raise RuntimeError('Main map is missing: ' + root)
     pending, visited, edges = [root], set(), {}

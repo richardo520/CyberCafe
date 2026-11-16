@@ -43,9 +43,9 @@ namespace CyberCafeDripperAssemblyTests
 {
 constexpr EAutomationTestFlags AssemblyTestFlags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr double Tolerance = 1.e-4;
-const TCHAR* AssemblyPath = TEXT("/Game/VRTemplate/CoffeeBrew/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
-const TCHAR* GrinderPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Coffee/Grinder/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* AssemblyPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Brewing/Blueprints/BP_HandDripperWithStand.BP_HandDripperWithStand_C");
+const TCHAR* GrinderPath = TEXT("/Game/CyberCafe/Gameplay/Coffee/Grinder/Blueprints/BP_CoffeeGrinder.BP_CoffeeGrinder_C");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
 const FName Water(TEXT("Water")), Coffee(TEXT("Coffee"));
 
 bool Near(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)

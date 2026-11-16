@@ -1,10 +1,10 @@
+#include "Liquid/LiquidContainerActor.h"
 // Fill out your copyright notice in the Description page of Project Settings.
 
 // @trace LQ-01 LQ-02 LQ-05
 #include "Liquid/LiquidConsumptionComponent.h"
 #include "Liquid/LiquidPresentationComponent.h"
 #include "Liquid/LiquidAudioComponent.h"
-#include "Liquid/LiquidContainerActor.h"
 #include "Liquid/LiquidTransferSubsystem.h"
 #include "Liquid/GlassBreakableComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -130,7 +130,7 @@ ALiquidContainerActor::ALiquidContainerActor()
     bIsPouring              = false;
 
     static ConstructorHelpers::FObjectFinder<USoundBase> DefaultPourSound(
-        TEXT("/Game/VRTemplate/Audio/Pouring/S_PourWaterLoop.S_PourWaterLoop"));
+        TEXT("/Game/CyberCafe/Gameplay/Drinks/Audio/S_PourWaterLoop.S_PourWaterLoop"));
     PourLoopSound = DefaultPourSound.Object;
 }
 

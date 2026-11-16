@@ -10,7 +10,7 @@ class UGrabComponent;
 
 /**
  * UVRFunctionLibrary
- * VR相关的通用蓝图静态函数库，对应工程内蓝图 /Game/VRTemplate/Blueprints/VRFunctionLibrary。
+ * VR相关的通用蓝图静态函数库，对应工程内蓝图 /Game/CyberCafe/Player/Blueprints/VRFunctionLibrary。
  *
  * 目前提供：
  *   - FindTopPrioGrabComponent：从一组GrabComponent中，按GrabType优先级找出最合适的抓取候选。

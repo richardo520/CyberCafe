@@ -15,7 +15,7 @@
 
 namespace
 {
-    int32 GetServingSpotCupIcePreparationRevision(const ALiquidContainerActor* Cup)
+    int32 GetOrderCupIcePreparationRevision(const ALiquidContainerActor* Cup)
     {
         if (!IsValid(Cup)) return 0;
         const UCupIceComponent* Ice = Cup->FindComponentByClass<UCupIceComponent>();
@@ -84,7 +84,7 @@ bool UServingOrderComponent::TrySubmitCup(ALiquidContainerActor* Cup)
         return false;
     }
     // 冻结前复核结果快照：旧计时器或回调中的补冰/换冰不能锁定已改变的杯子。
-    if (Serial != OrderSerial || Recipe != Spot.ActiveRecipe || !Spot.bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || Cup->IsLiquidFrozen() || Cup->bIsPouring || !Spot.IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision || GetServingSpotCupIcePreparationRevision(Cup) != Result.IceRevision) return false;
+    if (Serial != OrderSerial || Recipe != Spot.ActiveRecipe || !Spot.bAcceptSubmissions || Cup->IsBroken() || Cup->IsHeld() || Cup->IsLiquidFrozen() || Cup->bIsPouring || !Spot.IsInServingArea(Cup) || Cup->GetLiquidRevision() != Result.LiquidRevision || GetOrderCupIcePreparationRevision(Cup) != Result.IceRevision) return false;
     Cup->FreezeLiquidForServing();
     Cup = SubmissionCup.Get();
     if (!IsValid(&Spot) || !Cup || CommittingCup != SubmissionCup) return false;

@@ -38,8 +38,8 @@
 namespace ColleagueDialogueTests
 {
 constexpr auto Options = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
-const TCHAR* const LattePath = TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte");
-const TCHAR* const MenuPath = TEXT("/Game/VRTemplate/MenuIngredients/Menu/DA_RecipeMenu.DA_RecipeMenu");
+const TCHAR* const LattePath = TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte");
+const TCHAR* const MenuPath = TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu");
 // 保留原字符、空格与标点；尤其 C7 是“么”，不能替换成“吗”。
 const TCHAR* const ExcelTexts[] = {
     TEXT("你醒了？……刚刚说到我教你做一杯拿铁，你就睡着了。快，先看看你的台子。"),
@@ -268,10 +268,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FColleagueSavedTenLinesExact,
 bool FColleagueSavedTenLinesExact::RunTest(const FString&)
 {
     using namespace ColleagueDialogueTests;
-    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    auto* Map = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if (!TestNotNull(TEXT("读取保存原地图"), Map) || !TestNotNull(TEXT("保存 PersistentLevel"), Map->PersistentLevel.Get())) return false;
     auto* Director = FindObject<ATutorialDirector>(nullptr,
-        TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialDirecter_C_0"));
+        TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialDirecter_C_0"));
     auto* Recipe = SavedLatte(*this);
     if (!TestNotNull(TEXT("保存原导演实例"), Director) || !Recipe
         || !TestEqual(TEXT("保存地图恰好八步"), Director->Steps.Num(), 8)) return false;
@@ -311,11 +311,11 @@ bool FColleagueSavedTenLinesExact::RunTest(const FString&)
     TestEqual(TEXT("说话人仍是时零"), Director->DialogueSpeakerName.ToString(), FString(TEXT("时零")));
     if (!TestNotNull(TEXT("保留原 NPC 外观实例"), Director->NPCRef.Get())) return false;
     TestEqual(TEXT("原 NPC 引用不换人"), Director->NPCRef->GetPathName(),
-        FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+        FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
     TestTrue(TEXT("原 NPC 仍属于保存地图"), Director->NPCRef->GetWorld() == Map);
     if (!TestNotNull(TEXT("原 NPC 外观组件"), Director->NPCRef->GetMesh())) return false;
     TestEqual(TEXT("时零保留原 BarGirl 外观"), GetPathNameSafe(Director->NPCRef->GetMesh()->GetSkeletalMeshAsset()),
-        FString(TEXT("/Game/Characters/BarGirl/SK_BarGirl.SK_BarGirl")));
+        FString(TEXT("/Game/CyberCafe/Characters/BarGirl/SK_BarGirl.SK_BarGirl")));
     TestEqual(TEXT("完成反馈停留配置不变"), Director->CheerDuration, 1.5f);
     for (int32 I : {0, 1, 2, 3, 4})
     {
@@ -351,10 +351,10 @@ bool FColleagueSavedTenLinesExact::RunTest(const FString&)
     TestTrue(TEXT("Show1/Menu5/Serve6 仍同一原屏"), First->FirstOrderMenu == MenuStep->OrderHologram
         && Serve->OrderHologram == MenuStep->OrderHologram && MenuStep->OrderHologram->GetWorld() == Map);
     TestEqual(TEXT("保存原屏身份"), MenuStep->OrderHologram->GetPathName(),
-        FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_OrderHologram_Tutorial")));
+        FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_OrderHologram_Tutorial")));
     TestTrue(TEXT("Show1 与 Serve6 保留同一真实 Latte DA"), First->FirstOrderRecipe.Get() == Recipe && Serve->RequiredRecipe.Get() == Recipe);
     TestEqual(TEXT("原交付 Spot 身份"), Serve->RequiredSpot->GetPathName(),
-        FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+        FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
     TestFalse(TEXT("原 Spot 不提前启用交付"), Serve->RequiredSpot->bAcceptSubmissions);
     TestEqual(TEXT("品尝前等待不变"), Consume->PreDrinkDelay, 1.f);
     TestEqual(TEXT("品尝后等待不变"), Consume->AfterDrinkDelay, .3f);
@@ -365,7 +365,7 @@ bool FColleagueSavedTenLinesExact::RunTest(const FString&)
     TestEqual(TEXT("原 Target 200 不变"), Recipe->TargetVolumeML, 200.0);
     TestEqual(TEXT("原加冰建议 3 不变"), Recipe->ExpectedIceCount, 3);
     TestEqual(TEXT("原 Highball 杯不变"), GetPathNameSafe(Recipe->AcceptedCupClass.Get()),
-        FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
     if (!TestEqual(TEXT("原配方恰好两规则"), Recipe->Rules.Num(), 2)) return false;
     TestEqual(TEXT("原 Coffee 规则顺序"), Recipe->Rules[0].IngredientId, FName(TEXT("Coffee")));
     TestEqual(TEXT("原 Milk 规则顺序"), Recipe->Rules[1].IngredientId, FName(TEXT("Milk")));
@@ -512,7 +512,7 @@ bool FColleagueAcceptedAndLimits::RunTest(const FString&)
         TEXT("这杯多了配方以外的原料。倒空后重做，或换一只空杯。"));
     // Native ACupActor has no authored ice interior. Use an actual configured
     // Rocks cup for a wrong-class fixture, not a fabricated ice count/geometry.
-    auto* WrongClass=LoadClass<ACupActor>(nullptr,TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Rocks.BP_MenuCup_Rocks_C"));
+    auto* WrongClass=LoadClass<ACupActor>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Rocks.BP_MenuCup_Rocks_C"));
     if(!TestNotNull(TEXT("另一实际杯型Rocks存在"),WrongClass))return false;
     auto* WrongCup = F.Cup(*this, WrongClass);
     if (!WrongCup) return false;

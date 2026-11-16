@@ -64,7 +64,7 @@ namespace CyberCafeMenuPointerExperimentTests
 constexpr auto Flags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 constexpr int32 ControllerId = 1721;
 constexpr float Dt = 1.f / 60.f;
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
 const FName Sources[] = {TEXT("LeftGrip"), TEXT("LeftAim"), TEXT("RightGrip"), TEXT("RightAim")};
 
 // 保持四个原 MotionSource；用独立玩家索引隔离已有 XR 服务，不注销现有服务。
@@ -238,7 +238,7 @@ struct FFixture final : public FGCObject
         Test.TestEqual(TEXT("原IndexCurl四设备双手8条保持"), IndexCurlMappings, 8);
         for (const auto& Mapping : Pawn->HandsMappingContext->GetMappings())
             Test.TestTrue(TEXT("Hands 不混入 Skip 或新增菜单 Action"), Mapping.Action && Mapping.Action != Skip
-                && Mapping.Action->GetPathName().StartsWith(TEXT("/Game/VRTemplate/Input/Actions/Hands/")));
+                && Mapping.Action->GetPathName().StartsWith(TEXT("/Game/CyberCafe/Player/Input/Actions/Hands/")));
         Test.TestEqual(TEXT("原 Skip Started 只绑定一次"), BindingCount(Input, Skip, ETriggerEvent::Started), 1);
         Test.TestEqual(TEXT("原 Skip 无新 Triggered 绑定"), BindingCount(Input, Skip, ETriggerEvent::Triggered), 0);
         for (const auto& Binding : Input->GetActionEventBindings())
@@ -284,7 +284,7 @@ struct FFixture final : public FGCObject
         PawnClass = ModeClass->GetDefaultObject<AGameModeBase>()->DefaultPawnClass.Get();
         if (!Test.TestNotNull(TEXT("实际 DefaultPawnClass"), PawnClass)
             || !Test.TestEqual(TEXT("必须使用保存 VRCharacter，不用伪 Pawn"), PawnClass->GetPathName(),
-                FString(TEXT("/Game/VRTemplate/Blueprints/VRCharacter.VRCharacter_C")))) return false;
+                FString(TEXT("/Game/CyberCafe/Player/Blueprints/VRCharacter.VRCharacter_C")))) return false;
         SavedScreen = FindObject<AOrderHologramActor>(SavedMap->PersistentLevel, TEXT("BP_OrderHologram_Tutorial"));
         if (!Test.TestNotNull(TEXT("保存教学菜单提供原数据及显示类"), SavedScreen)) return false;
         UWorld::InitializationValues IV;
@@ -460,7 +460,7 @@ struct FFixture final : public FGCObject
         {
             if (!Test.TestNotNull(TEXT("已保存观察 Action 硬引用，不创建替身"), Observers[Hand])) return false;
             Test.TestTrue(TEXT("运行实例继承实际 VRCharacter 组件 CDO 硬引用"), Observers[Hand] == SavedObservers[Hand]);
-            Test.TestTrue(TEXT("观察 Action 属于原输入资产目录"), Observers[Hand]->GetPathName().StartsWith(TEXT("/Game/VRTemplate/Input/Actions/")));
+            Test.TestTrue(TEXT("观察 Action 属于原输入资产目录"), Observers[Hand]->GetPathName().StartsWith(TEXT("/Game/CyberCafe/Player/Input/Actions/")));
             Test.TestTrue(TEXT("独立 Axis1D 非消费、空 Triggers/Modifiers"), Observers[Hand] != Pawn->IA_SkipDialog
                 && Observers[Hand]->ValueType == EInputActionValueType::Axis1D && !Observers[Hand]->bConsumeInput
                 && Observers[Hand]->Triggers.IsEmpty() && Observers[Hand]->Modifiers.IsEmpty());

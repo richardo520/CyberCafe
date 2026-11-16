@@ -3,8 +3,8 @@ Type:Static
 
 /Game/VRTemplate/Audio/Fire_Cue.Fire_Cue
 /Game/VRTemplate/Audio/Fire01.Fire01
-/Game/VRTemplate/Audio/Mix/SM_CafeGlobal2x.SM_CafeGlobal2x
-/Game/VRTemplate/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered
-/Game/VRTemplate/Audio/Narrative/S_NarrativeVoiceTick.S_NarrativeVoiceTick
-/Game/VRTemplate/Audio/Narrative/SA_NarrativeVoice.SA_NarrativeVoice
-/Game/VRTemplate/Audio/Pouring/S_PourWaterLoop.S_PourWaterLoop
+/Game/CyberCafe/Shared/Audio/Mix/SM_CafeGlobal2x.SM_CafeGlobal2x
+/Game/CyberCafe/Shared/Audio/Music/S_WarmColdContrast_Remastered.S_WarmColdContrast_Remastered
+/Game/CyberCafe/UI/Audio/S_NarrativeVoiceTick.S_NarrativeVoiceTick
+/Game/CyberCafe/UI/Audio/SA_NarrativeVoice.SA_NarrativeVoice
+/Game/CyberCafe/Gameplay/Drinks/Audio/S_PourWaterLoop.S_PourWaterLoop

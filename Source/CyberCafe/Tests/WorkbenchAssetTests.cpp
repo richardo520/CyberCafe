@@ -46,30 +46,30 @@ namespace WorkbenchAssetTests
 {
 constexpr float StepSeconds = .01f;
 constexpr double VolumeTolerance = 1.e-6;
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* PrimaryCupClassPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
-const TCHAR* PrimaryCupMeshPath = TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup");
-const TCHAR* PrimaryCupProfilePath = TEXT("/Game/VRTemplate/MenuIngredients/Breakage/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
+const TCHAR* PrimaryCupClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* PrimaryCupMeshPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/SM_Highball_Cup.SM_Highball_Cup");
+const TCHAR* PrimaryCupProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Menu/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
 struct FVariant { const TCHAR* Label; const TCHAR* ClassPath; };
 const FVariant Variants[] = {
-    {TEXT("Bottle01"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle01/BP_Bottle01.BP_Bottle01_C")},
-    {TEXT("Bottle02"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle02/BP_Bottle02.BP_Bottle02_C")},
-    {TEXT("Bottle03"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle03/BP_Bottle03.BP_Bottle03_C")},
-    {TEXT("Bottle04"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C")},
-    {TEXT("Bottle05"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle05/BP_Bottle05.BP_Bottle05_C")},
-    {TEXT("Bottle06"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle06/BP_Bottle06.BP_Bottle06_C")},
-    {TEXT("Cup01"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup01.BP_Cup01_C")},
-    {TEXT("Cup02"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup02.BP_Cup02_C")},
-    {TEXT("Cup03"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C")},
-    {TEXT("Cup04"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup04.BP_Cup04_C")},
-    {TEXT("Cup05"), TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup05.BP_Cup05_C")}
+    {TEXT("Bottle01"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle01/BP_Bottle01.BP_Bottle01_C")},
+    {TEXT("Bottle02"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle02/BP_Bottle02.BP_Bottle02_C")},
+    {TEXT("Bottle03"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle03/BP_Bottle03.BP_Bottle03_C")},
+    {TEXT("Bottle04"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C")},
+    {TEXT("Bottle05"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle05/BP_Bottle05.BP_Bottle05_C")},
+    {TEXT("Bottle06"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle06/BP_Bottle06.BP_Bottle06_C")},
+    {TEXT("Cup01"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup01.BP_Cup01_C")},
+    {TEXT("Cup02"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup02.BP_Cup02_C")},
+    {TEXT("Cup03"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup03.BP_Cup03_C")},
+    {TEXT("Cup04"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup04.BP_Cup04_C")},
+    {TEXT("Cup05"), TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup05.BP_Cup05_C")}
 };
 
 FString ProfilePath(const FVariant& V)
 {
-    if (FString(V.Label) == TEXT("Cup01")) return TEXT("/Game/VRTemplate/Breakage/DA_CupBreak.DA_CupBreak");
-    if (FString(V.Label) == TEXT("Bottle04")) return TEXT("/Game/VRTemplate/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak");
-    return FString::Printf(TEXT("/Game/VRTemplate/Breakage/Expanded/%s/DA_%sBreak.DA_%sBreak"), V.Label, V.Label, V.Label);
+    if (FString(V.Label) == TEXT("Cup01")) return TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/DA_CupBreak.DA_CupBreak");
+    if (FString(V.Label) == TEXT("Bottle04")) return TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak");
+    return FString::Printf(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Expanded/%s/DA_%sBreak.DA_%sBreak"), V.Label, V.Label, V.Label);
 }
 
 void FinishCompilation()
@@ -274,7 +274,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         if (FString(V.Label) == TEXT("Cup01")) TestEqual(TEXT("旧 Cup01 原网格未改"), GetPathNameSafe(CDO->ContainerMesh->GetStaticMesh().Get()),
             FString(TEXT("/Game/LiquidMaterials_VFXPack/Meshes/Glass05/SM_Glass_Glass_05.SM_Glass_Glass_05")));
         if (FString(V.Label) == TEXT("Bottle04")) TestEqual(TEXT("旧奶瓶原网格未改"), GetPathNameSafe(CDO->ContainerMesh->GetStaticMesh().Get()),
-            FString(TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/SM_Bottle04.SM_Bottle04")));
+            FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/SM_Bottle04.SM_Bottle04")));
         TestFalse(TEXT("保存 CDO 没有冻结"), CDO->IsLiquidFrozen());
         TestEqual(TEXT("保存八块玻璃"), Profile->Shards.Num(), 8);
         TestEqual(TEXT("保存八块物理预算"), Profile->MaxPhysicsShards, 8);
@@ -391,8 +391,8 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
     if (TestNotNull(TEXT("原 Step[6] 上菜步骤"), Wait))
     {
         TestTrue(TEXT("旧全息引用保持"), Wait->OrderHologram.Get() == Hologram);
-        TestEqual(TEXT("原拿铁配方引用保持"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
-        TestEqual(TEXT("原上菜点引用保持"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+        TestEqual(TEXT("原拿铁配方引用保持"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
+        TestEqual(TEXT("原上菜点引用保持"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
         if (!TestNotNull(TEXT("原拿铁配方有效"), Wait->RequiredRecipe.Get()) || !TestNotNull(TEXT("原服务位存在"), Wait->RequiredSpot.Get())
             || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
         TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
@@ -400,7 +400,7 @@ bool FWorkbenchSavedAllProfilesTest::RunTest(const FString&)
         TestEqual(TEXT("旧加冰建议值保留"), Wait->RequiredRecipe->ExpectedIceCount, 3);
         TestEqual(TEXT("冰拿铁目标仍为 200mL"), Wait->RequiredRecipe->TargetVolumeML, 200.0);
         TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
-        TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+        TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
         TestTrue(TEXT("原 NPC 位置不变"), Director->NPCRef->GetActorLocation().Equals(FVector(-9, 48, 82), .001));
     }
     TestTrue(TEXT("冰站仍引用经理冰铲"), Station->Scoop.Get() == Manager->RestoreScoop.Get());

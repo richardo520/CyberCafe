@@ -33,7 +33,7 @@ namespace RecipeMenuTest
 constexpr auto MenuTestFlags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 UDrinkMenuData* Data()
 {
-    return LoadObject<UDrinkMenuData>(nullptr, TEXT("/Game/VRTemplate/MenuIngredients/Menu/DA_RecipeMenu.DA_RecipeMenu"));
+    return LoadObject<UDrinkMenuData>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu"));
 }
 struct World
 {
@@ -53,7 +53,7 @@ struct World
         W->SetGameInstance(GI);
         GI->Init();
         auto* Class = LoadClass<AOrderHologramActor>(nullptr,
-            TEXT("/Game/VRTemplate/Blueprints/Serving/BP_OrderHologram.BP_OrderHologram_C"));
+            TEXT("/Game/CyberCafe/Gameplay/Serving/Blueprints/BP_OrderHologram.BP_OrderHologram_C"));
         Screen = Class ? W->SpawnActor<AOrderHologramActor>(Class,
             FTransform(FRotator(0, 32, 0), FVector(30, 50, 100))) : nullptr;
     }
@@ -126,7 +126,7 @@ bool FMenuSavedData::RunTest(const FString&)
         UClass* CupClass = E.Recipe->AcceptedCupClass.Get();
         if (!TestNotNull(TEXT("固定 AcceptedCupBP，不允许默认杯兜底"), CupClass)) return false;
         TestTrue(TEXT("指定杯派生自 ACupActor"), CupClass->IsChildOf(ACupActor::StaticClass()));
-        TestTrue(TEXT("指定的是保存菜单杯 BP"), CupClass->GetPathName().StartsWith(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_"))
+        TestTrue(TEXT("指定的是保存菜单杯 BP"), CupClass->GetPathName().StartsWith(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_"))
             && CupClass->GetPathName().EndsWith(TEXT("_C")));
         TestTrue(TEXT("保存冰量字段仍为无冰 0 或旧建议量 3"), E.Recipe->ExpectedIceCount == 0 || E.Recipe->ExpectedIceCount == 3);
         WithoutIce += E.Recipe->ExpectedIceCount == 0 ? 1 : 0;
@@ -136,13 +136,13 @@ bool FMenuSavedData::RunTest(const FString&)
     TestTrue(TEXT("菜单覆盖保留旧建议量 3 的需冰饮品"), WithIce > 0);
     const auto& BNT = D->Entries[0];
     TestEqual(TEXT("BNT 仍引用原 DA_Latte"), BNT.Recipe.Get(), LoadObject<UDrinkRecipe>(nullptr,
-        TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
+        TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
     TestEqual(TEXT("RecipeId 仍为 Latte"), BNT.Recipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("菜单显示冰拿铁"), BNT.DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("权威配方显示冰拿铁"), BNT.Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("冰拿铁保留旧建议量 3，不作为精确验收要求"), BNT.Recipe->ExpectedIceCount, 3);
     TestEqual(TEXT("冰拿铁固定 Highball BP"), BNT.Recipe->AcceptedCupClass->GetPathName(),
-        FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
     TestEqual(TEXT("未知索引不兜底"), D->FindPinyinIndex(TEXT("NONE")), INDEX_NONE);
     auto* Duplicate = NewObject<UDrinkMenuData>();
     Duplicate->Entries = D->Entries;
@@ -160,7 +160,7 @@ bool FMenuOrderUnchanged::RunTest(const FString&)
 {
     RecipeMenuTest::World F;
     if (!TestNotNull(TEXT("保存屏幕"), F.Screen)) return false;
-    auto* R = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+    auto* R = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("原拿铁配方"), R)) return false;
     auto* Spot = F.W->SpawnActor<AServingSpotActor>();
     Spot->SetActiveRecipe(R);
@@ -194,7 +194,7 @@ bool FMenuTouch::RunTest(const FString&)
     RecipeMenuTest::World F;
     if (!TestNotNull(TEXT("保存屏幕"), F.Screen)) return false;
     auto* S = F.Screen;
-    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("当前订单配方"), Recipe) || !TestNotNull(TEXT("保存菜单"), S->RecipeMenu.Get())) return false;
     auto* Spot = F.W->SpawnActor<AServingSpotActor>();
     Spot->SetActiveRecipe(Recipe);
@@ -875,12 +875,12 @@ bool FMenuAcceptedOrder::RunTest(const FString&)
 {
     RecipeMenuTest::World F;
     if (!TestNotNull(TEXT("保存屏幕"), F.Screen)) return false;
-    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+    auto* Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("原保存 DA_Latte"), Recipe) || !TestNotNull(TEXT("固定保存杯类"), Recipe->AcceptedCupClass.Get())) return false;
     TestEqual(TEXT("原 RecipeId 仍为 Latte"), Recipe->RecipeId, FName(TEXT("Latte")));
     TestEqual(TEXT("原显示名改为冰拿铁"), Recipe->DisplayName.ToString(), FString(TEXT("冰拿铁")));
     TestEqual(TEXT("固定 Highball BP"), Recipe->AcceptedCupClass->GetPathName(),
-        FString(TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
+        FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C")));
     TestEqual(TEXT("保存配方保留旧建议量 3，不作为精确验收要求"), Recipe->ExpectedIceCount, 3);
     auto* Spot = F.W->SpawnActor<AServingSpotActor>();
     Spot->SetActiveRecipe(Recipe);

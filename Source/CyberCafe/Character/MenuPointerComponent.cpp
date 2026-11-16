@@ -67,7 +67,7 @@ UMenuPointerComponent::UMenuPointerComponent()
     EndpointMesh = Sphere.Object;
     FallbackMaterial = BasicMaterial.Object;
     RayMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(
-        TEXT("/Game/VRTemplate/MenuPointerExperiment/M_MenuPointer.M_MenuPointer")));
+        TEXT("/Game/CyberCafe/Player/Pointer/M_MenuPointer.M_MenuPointer")));
 }
 
 bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuPointerInputSample& Sample) const
@@ -183,7 +183,7 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
         bObserverMappingsValid = Observer != Sample.Action && Observer->ValueType == EInputActionValueType::Axis1D
             && !Observer->bConsumeInput && Observer->Triggers.IsEmpty() && Observer->Modifiers.IsEmpty()
             && Observer->AccumulationBehavior == EInputActionAccumulationBehavior::TakeHighestAbsoluteValue
-            && Observer->GetPathName().StartsWith(TEXT("/Game/VRTemplate/Input/Actions/"));
+            && Observer->GetPathName().StartsWith(TEXT("/Game/CyberCafe/Player/Input/Actions/"));
         TArray<FKey> ObserverKeys;
         for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
         {

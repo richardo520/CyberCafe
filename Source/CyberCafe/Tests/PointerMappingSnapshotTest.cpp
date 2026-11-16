@@ -11,7 +11,7 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPointerExportBeforeMapping, "CyberCafe.Authoring.ExportBeforePointerMappings", EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FPointerExportBeforeMapping::RunTest(const FString&)
 {
-    auto* C=LoadObject<UInputMappingContext>(nullptr,TEXT("/Game/VRTemplate/Input/IMC_Default.IMC_Default"));
+    auto* C=LoadObject<UInputMappingContext>(nullptr,TEXT("/Game/CyberCafe/Player/Input/IMC_Default.IMC_Default"));
     FString Path; if(!TestNotNull(TEXT("Original context"),C)||!TestTrue(TEXT("Output path"),FParse::Value(FCommandLine::Get(),TEXT("PointerSnapshot="),Path)))return false;
     if(!TestEqual(TEXT("Original mappings before append"),C->GetMappings().Num(),37))return false;
     auto J=MakeShared<FJsonObject>();J->SetStringField(TEXT("original_sha256"),TEXT("b580c3d047cc5f9578ebbf7205a42071afc773be628aea3fd6869a746af054a7"));TArray<TSharedPtr<FJsonValue>> Rows;

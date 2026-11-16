@@ -41,7 +41,7 @@ inline bool FindAndReturn(AOrderHologramActor* Screen,FName Code){return FindRec
 inline bool AddIce(ACupActor* Cup,int32 Count)
 {
     if(!IsValid(Cup))return false;auto* IceComponent=Cup->FindComponentByClass<UCupIceComponent>();if(!IceComponent)return false;
-    UClass* IceClass=LoadClass<AIceCubeActor>(nullptr,TEXT("/Game/VRTemplate/Ice/Blueprints/BP_IceCube.BP_IceCube_C"));if(!IceClass)return false;
+    UClass* IceClass=LoadClass<AIceCubeActor>(nullptr,TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Blueprints/BP_IceCube.BP_IceCube_C"));if(!IceClass)return false;
     const FTransform Entry=Cup->PourEntryPoint->GetComponentTransform();
     for(int32 I=0;I<Count;++I)
     {

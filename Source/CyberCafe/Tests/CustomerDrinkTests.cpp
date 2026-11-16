@@ -42,9 +42,9 @@ namespace
 constexpr double DrinkTolerance = 1.e-6;
 const FName DrinkCoffee(TEXT("Coffee"));
 const FName DrinkMilk(TEXT("Milk"));
-const TCHAR* DrinkMotionPath = TEXT("/Game/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion");
-const TCHAR* DrinkAnimationPath = TEXT("/Game/Characters/BarGirl/FirstCustomer/A_BarGirl_FirstCustomerDrink.A_BarGirl_FirstCustomerDrink");
-const TCHAR* DrinkCupPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup01.BP_Cup01_C");
+const TCHAR* DrinkMotionPath = TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion");
+const TCHAR* DrinkAnimationPath = TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/A_BarGirl_FirstCustomerDrink.A_BarGirl_FirstCustomerDrink");
+const TCHAR* DrinkCupPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup01.BP_Cup01_C");
 TArray<FString> DrinkMeasurements;
 
 void CheckDrinkNumber(FAutomationTestBase& Test, const FString& Label, double Actual, double Expected)
@@ -105,8 +105,8 @@ struct FCustomerDrinkWorld
             !Test.TestNotNull(TEXT("真实 GI 事件总线"), Events) ||
             !Test.TestNotNull(TEXT("真实液体世界账本"), Transfers())) return false;
         Motion = LoadObject<UCustomerDrinkMotion>(nullptr, DrinkMotionPath);
-        BarGirl = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/BarGirl/SK_BarGirl.SK_BarGirl"));
-        Idle = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/Characters/BarGirl/A_BarGirl_Idle.A_BarGirl_Idle"));
+        BarGirl = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/CyberCafe/Characters/BarGirl/SK_BarGirl.SK_BarGirl"));
+        Idle = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/CyberCafe/Characters/BarGirl/A_BarGirl_Idle.A_BarGirl_Idle"));
         UClass* CupClass = LoadClass<ACupActor>(nullptr, DrinkCupPath);
         // Native Cup01 motion tests exercise consumption/cancellation, not the saved
         // Highball iced-latte configuration. Keep their recipe explicit and local;
@@ -137,7 +137,7 @@ struct FCustomerDrinkWorld
         Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
         if (bSavedNPC)
         {
-            auto* Map = LoadObject<UWorld>(nullptr,TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+            auto* Map = LoadObject<UWorld>(nullptr,TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
             ATutorialNPC* SourceNPC=nullptr;
             if(Map&&Map->PersistentLevel)for(const auto& A:Map->PersistentLevel->Actors)
                 if(auto* Director=Cast<ATutorialDirector>(A.Get()))if(Director->NPCRef)SourceNPC=Director->NPCRef.Get();

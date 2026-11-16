@@ -742,7 +742,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHologramSavedBlueprintWidgetAndServingFlowTest
 bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
 {
     if (!TestNotNull(TEXT("测试需要 Engine WorldContext"), GEngine)) return false;
-    UWorld* SavedWorld = LoadObject<UWorld>(nullptr, TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe"));
+    UWorld* SavedWorld = LoadObject<UWorld>(nullptr, TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe"));
     if (!TestNotNull(TEXT("加载已保存 L_Cafe"), SavedWorld) ||
         !TestNotNull(TEXT("已保存地图有 PersistentLevel"), SavedWorld->PersistentLevel.Get())) return false;
     ATutorialDirector* SavedDirector = nullptr;
@@ -764,9 +764,9 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
     if (!TestNotNull(TEXT("Step[6] 已保存 OrderHologram 引用"), SavedDisplay)) return false;
     TestTrue(TEXT("保存的全息引用属于 L_Cafe PersistentLevel"), SavedDisplay->GetLevel() == SavedWorld->PersistentLevel);
     UClass* SavedActorClass = LoadClass<AOrderHologramActor>(nullptr,
-        TEXT("/Game/VRTemplate/Blueprints/Serving/BP_OrderHologram.BP_OrderHologram_C"));
+        TEXT("/Game/CyberCafe/Gameplay/Serving/Blueprints/BP_OrderHologram.BP_OrderHologram_C"));
     UClass* SavedWidgetClass = LoadClass<UOrderHologramWidget>(nullptr,
-        TEXT("/Game/VRTemplate/Blueprints/Serving/UI/WBP_OrderHologram.WBP_OrderHologram_C"));
+        TEXT("/Game/CyberCafe/Gameplay/Serving/Blueprints/UI/WBP_OrderHologram.WBP_OrderHologram_C"));
     if (!TestNotNull(TEXT("加载已保存 BP_OrderHologram 生成类"), SavedActorClass) ||
         !TestNotNull(TEXT("加载已保存 WBP_OrderHologram 生成类"), SavedWidgetClass)) return false;
     TestTrue(TEXT("地图引用真实 BP_OrderHologram 类而非 native Actor"), SavedDisplay->GetClass() == SavedActorClass);
@@ -814,7 +814,7 @@ bool FHologramSavedBlueprintWidgetAndServingFlowTest::RunTest(const FString&)
         FVector(-150, 60, 0), FRotator(0, 40, 0), Params);
     if (!TestNotNull(TEXT("用保存实例的真实 BP 类生成全息 Actor"), T.Hologram)) return false;
     UDrinkRecipe* Recipe = LoadObject<UDrinkRecipe>(nullptr,
-        TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte"));
+        TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
     if (!TestNotNull(TEXT("加载已保存真实 DA_Latte 配方"), Recipe)) return false;
     UClass* CupClass = Recipe->AcceptedCupClass.Get();
     if (!TestNotNull(TEXT("保存 DA_Latte 指定真实杯类"), CupClass) ||

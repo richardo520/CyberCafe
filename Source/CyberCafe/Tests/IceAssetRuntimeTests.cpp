@@ -45,14 +45,14 @@
 namespace IceAssetRuntimeTests
 {
 constexpr float StepSeconds = .01f;
-const TCHAR* MapPath = TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe");
-const TCHAR* CubePath = TEXT("/Game/VRTemplate/Ice/Blueprints/BP_IceCube.BP_IceCube_C");
-const TCHAR* ScoopPath = TEXT("/Game/VRTemplate/Ice/Blueprints/BP_IceScoop.BP_IceScoop_C");
-const TCHAR* BucketPath = TEXT("/Game/VRTemplate/Ice/Blueprints/BP_IceBucket.BP_IceBucket_C");
-const TCHAR* CupPath = TEXT("/Game/VRTemplate/Blueprints/Interaction/Cup/BP_Cup03.BP_Cup03_C");
-const TCHAR* PrimaryCupClassPath = TEXT("/Game/VRTemplate/MenuIngredients/Cups/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
-const TCHAR* PrimaryCupMeshPath = TEXT("/Game/VRTemplate/MenuIngredients/Meshes/SM_Highball_Cup.SM_Highball_Cup");
-const TCHAR* PrimaryCupProfilePath = TEXT("/Game/VRTemplate/MenuIngredients/Breakage/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
+const TCHAR* MapPath = TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe");
+const TCHAR* CubePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Blueprints/BP_IceCube.BP_IceCube_C");
+const TCHAR* ScoopPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Blueprints/BP_IceScoop.BP_IceScoop_C");
+const TCHAR* BucketPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Blueprints/BP_IceBucket.BP_IceBucket_C");
+const TCHAR* CupPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/BP_Cup03.BP_Cup03_C");
+const TCHAR* PrimaryCupClassPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball_C");
+const TCHAR* PrimaryCupMeshPath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Meshes/Menu/SM_Highball_Cup.SM_Highball_Cup");
+const TCHAR* PrimaryCupProfilePath = TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/Menu/cup_Highball/DA_cup_Highball_Break.DA_cup_Highball_Break");
 const FName MilkId(TEXT("Milk"));
 
 FString Quote(FString Value)
@@ -172,9 +172,9 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
     const AIceScoopActor* Scoop = Assets.Scoop->GetDefaultObject<AIceScoopActor>();
     const AIceBucketActor* Bucket = Assets.Bucket->GetDefaultObject<AIceBucketActor>();
     TArray<FString> Rows;
-    if (!CheckMesh(*this, Cube->Mesh.Get(), TEXT("/Game/VRTemplate/Ice/Meshes/SM_IceCube.SM_IceCube"), 1, FVector(2.4), Rows)
-        || !CheckMesh(*this, Scoop->Mesh.Get(), TEXT("/Game/VRTemplate/Ice/Meshes/SM_IceScoop.SM_IceScoop"), 8, FVector(28, 8, 0), Rows)
-        || !CheckMesh(*this, Bucket->Mesh.Get(), TEXT("/Game/VRTemplate/Ice/Meshes/SM_IceBucket.SM_IceBucket"), 17, FVector(24, 24, 18), Rows)) return false;
+    if (!CheckMesh(*this, Cube->Mesh.Get(), TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Meshes/SM_IceCube.SM_IceCube"), 1, FVector(2.4), Rows)
+        || !CheckMesh(*this, Scoop->Mesh.Get(), TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Meshes/SM_IceScoop.SM_IceScoop"), 8, FVector(28, 8, 0), Rows)
+        || !CheckMesh(*this, Bucket->Mesh.Get(), TEXT("/Game/CyberCafe/Gameplay/Drinks/Ice/Meshes/SM_IceBucket.SM_IceBucket"), 17, FVector(24, 24, 18), Rows)) return false;
     TestTrue(TEXT("冰铲 CDO 实际生成保存冰 BP"), Scoop->IceClass.Get() == Assets.Cube);
     TestTrue(TEXT("桶展示冰引用同一个真实 2.4cm 网格"), Bucket->IceMesh.Get() == Cube->Mesh->GetStaticMesh());
     const FBox ScoopBox = Scoop->Mesh->GetStaticMesh()->GetBoundingBox();
@@ -251,9 +251,9 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
     TestEqual(TEXT("第一杯自身 profile 精确匹配 Highball"), GetPathNameSafe(PrimaryCup->GlassBreakProfile.Get()), FString(PrimaryCupProfilePath));
     TestEqual(TEXT("恢复器仍严格六个目标"), Recovery->RestoreTargets.Num(), 6);
     TestTrue(TEXT("六目标包含新首杯和原奶瓶"), Recovery->RestoreTargets.Contains(PrimaryCup) && Recovery->RestoreTargets.Contains(OriginalMilk));
-    TestEqual(TEXT("原奶瓶类保留"), OriginalMilk->GetClass()->GetPathName(), FString(TEXT("/Game/VRTemplate/Blueprints/Interaction/Bottle/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C")));
+    TestEqual(TEXT("原奶瓶类保留"), OriginalMilk->GetClass()->GetPathName(), FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Bottles/Bottle04/BP_Bottle04_Milk.BP_Bottle04_Milk_C")));
     TestEqual(TEXT("经理首杯 profile 精确匹配 Highball"), GetPathNameSafe(Recovery->CupProfile.Get()), FString(PrimaryCupProfilePath));
-    TestEqual(TEXT("恢复器瓶 profile 保留"), GetPathNameSafe(Recovery->BottleProfile.Get()), FString(TEXT("/Game/VRTemplate/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak")));
+    TestEqual(TEXT("恢复器瓶 profile 保留"), GetPathNameSafe(Recovery->BottleProfile.Get()), FString(TEXT("/Game/CyberCafe/Gameplay/Drinks/Containers/Breakage/DA_MilkBottleBreak.DA_MilkBottleBreak")));
     TestEqual(TEXT("菜单插入后教学恰好八步"), Director->Steps.Num(), 8);
     const TCHAR* Names[] = {TEXT("TutorialStep_ShowMessage_0"), TEXT("TutorialStep_ShowMessage_1"), TEXT("TutorialStep_ShowMessage_2"),
         TEXT("TutorialStep_ShowMessage_3"), TEXT("TutorialStep_WaitForServe_0"), TEXT("TutorialStep_ConsumeServedDrink_0")};
@@ -298,8 +298,8 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
     UTutorialStep_WaitForServe* Wait = Director->Steps.IsValidIndex(6) ? Cast<UTutorialStep_WaitForServe>(Director->Steps[6].Get()) : nullptr;
     if (!TestNotNull(TEXT("保留原 Step[6] 上菜步骤"), Wait)) return false;
     TestTrue(TEXT("旧上菜步骤仍引用原全息"), Wait->OrderHologram.Get() == Hologram);
-    TestEqual(TEXT("旧拿铁配方保留"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/VRTemplate/Data/Recipes/DA_Latte.DA_Latte")));
-    TestEqual(TEXT("旧上菜点保留"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
+    TestEqual(TEXT("旧拿铁配方保留"), GetPathNameSafe(Wait->RequiredRecipe.Get()), FString(TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte")));
+    TestEqual(TEXT("旧上菜点保留"), GetPathNameSafe(Wait->RequiredSpot.Get()), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_ServingSpot_C_1")));
     if (!TestNotNull(TEXT("原拿铁配方有效"), Wait->RequiredRecipe.Get()) || !TestNotNull(TEXT("原服务位存在"), Wait->RequiredSpot.Get())
         || !TestNotNull(TEXT("原 NPC 引用存在"), Director->NPCRef.Get())) return false;
     TestEqual(TEXT("原 RecipeId Latte 保留"), Wait->RequiredRecipe->RecipeId, FName(TEXT("Latte")));
@@ -307,7 +307,7 @@ bool FIceSavedStationAndAssetProfilesTest::RunTest(const FString&)
     TestEqual(TEXT("旧加冰建议值保留"), Wait->RequiredRecipe->ExpectedIceCount, 3);
     TestEqual(TEXT("冰拿铁目标仍为 200mL"), Wait->RequiredRecipe->TargetVolumeML, 200.0);
     TestTrue(TEXT("原服务位仅 Z 更新为批准高度"), Wait->RequiredSpot->GetActorLocation().Equals(FVector(-21, 71, 114.68106781), .0001));
-    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/VRTemplate/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
+    TestEqual(TEXT("原 NPC 实例引用不变"), Director->NPCRef->GetPathName(), FString(TEXT("/Game/CyberCafe/Maps/L_Cafe.L_Cafe:PersistentLevel.BP_TutorialNPC_Manny_C_1")));
     TestTrue(TEXT("原 NPC 位置不变"), Director->NPCRef->GetActorLocation().Equals(FVector(-9, 48, 82), .001));
     TestEqual(TEXT("读取过程中没有在原地图调用 BeginPlay"), Map->HasBegunPlay(), bMapBegunBefore);
     FRow Row; Row.Text(TEXT("stage"), TEXT("savedStationReferences")); Row.Text(TEXT("map"), Map->GetPathName());

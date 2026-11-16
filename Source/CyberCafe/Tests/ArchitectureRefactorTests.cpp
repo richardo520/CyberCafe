@@ -35,7 +35,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FConfigurableCustomerMotionTest,
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FConfigurableCustomerMotionTest::RunTest(const FString&)
 {
-    auto* Source=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion"));
+    auto* Source=LoadObject<UCustomerDrinkMotion>(nullptr,TEXT("/Game/CyberCafe/Characters/BarGirl/FirstCustomer/DA_BarGirlDrinkMotion.DA_BarGirlDrinkMotion"));
     if(!TestNotNull(TEXT("Saved original motion"),Source))return false;
     auto* Motion=DuplicateObject<UCustomerDrinkMotion>(Source,GetTransientPackage());
     Motion->BlinkCues={FCustomerBlinkCue(1.f,.2f)};
