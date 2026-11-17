@@ -22,11 +22,11 @@ public class CyberCafe : ModuleRules
 			"UMG", "Niagara", "NavigationSystem", "PhysicsCore", "MediaAssets", "AudioMixer"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "RenderCore", "RHI" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "RenderCore", "RHI", "AnimGraphRuntime" });
 		// Editor-only UMG identity repair. These modules are never linked into game targets.
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "UMGEditor", "UnrealEd", "SlateRHIRenderer", "SignalProcessing", "Json", "AssetRegistry", "MediaUtils" });
+			PrivateDependencyModuleNames.AddRange(new string[] { "UMGEditor", "UnrealEd", "SlateRHIRenderer", "SignalProcessing", "Json", "AssetRegistry", "MediaUtils", "AnimGraph", "BlueprintGraph", "KismetCompiler" });
 		}
 
 		// 显式将模块根目录及所有子目录加入头文件搜索路径，

@@ -6,3 +6,4 @@ Type:Static
 /Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu
 /Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball
 /Game/CyberCafe/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion
+/Game/CyberCafe/Characters/BarGirl/RegularCustomer/ABP_RegularCustomerAttention.ABP_RegularCustomerAttention

@@ -48,11 +48,11 @@ TSharedRef<SWidget> URegularCustomerWidget::RebuildWidget()
     return Result;
 }
 
-void URegularCustomerWidget::Show(const FText& Speaker, const FText& Line, const FText& Status, const TArray<FText>& Choices)
+void URegularCustomerWidget::Show(const FText& Speaker, const FText& DialogueLine, const FText& Status, const TArray<FText>& Choices)
 {
-    CachedSpeaker = Speaker; CachedLine = Line; CachedStatus = Status; CachedChoices = Choices;
+    CachedSpeaker = Speaker; CachedLine = DialogueLine; CachedStatus = Status; CachedChoices = Choices;
     if (!BodyText) return;
-    SpeakerText->SetText(Speaker); BodyText->SetText(Line); StatusText->SetText(Status);
+    SpeakerText->SetText(Speaker); BodyText->SetText(DialogueLine); StatusText->SetText(Status);
     for (int32 I = 0; I < ChoiceTexts.Num(); ++I)
     {
         const bool bVisible = Choices.IsValidIndex(I);

@@ -3,6 +3,7 @@
 #include "GameFramework/Actor.h"
 #include "UI/MenuPointerTarget.h"
 #include "Serving/DrinkRecipe.h"
+#include "Customers/RegularCustomerMemory.h"
 #include "RegularCustomerEncounter.generated.h"
 
 class ATutorialNPC;
@@ -12,6 +13,9 @@ class URegularCustomerMemorySubsystem;
 class URegularCustomerWidget;
 class UCyberCafeEventSubsystem;
 class ALiquidContainerActor;
+class URegularCustomerReactions;
+class URegularCustomerAttention;
+class UAnimInstance;
 
 UENUM(BlueprintType)
 enum class ERegularCustomerStage : uint8 { Greeting, TopicChoice, Preparing, Tasting, Completed, Interrupted, Unavailable };
@@ -33,6 +37,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Regular Customer") FName CustomerId = TEXT("Regular_NightShift_01");
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Regular Customer") FText CustomerName;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Regular Customer") bool bAutoStart = true;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Regular Customer|Attention") TSubclassOf<UAnimInstance> AttentionLayer;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Regular Customer") TObjectPtr<URegularCustomerReactions> Reactions;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Regular Customer|Panel") bool bFacePlayer = true;
     bool UpdatePanelFacing(const FVector& ViewLocation);
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Regular Customer") TObjectPtr<UWidgetComponent> Panel;
@@ -54,7 +60,9 @@ private:
     void Unbind();
     UFUNCTION() void HandleValidation(AServingSpotActor* Spot, ALiquidContainerActor* Cup, const FDrinkValidationResult& Result);
     UFUNCTION() void HandleFinished(ALiquidContainerActor* Cup, bool bCompleted, double ConsumedML);
-    UFUNCTION() void HandlePour(AActor* From, AActor* To, float AcceptedML);
+    void HandleReaction(const FString& Text, AActor* Focus);
+    UPROPERTY(Transient) TObjectPtr<URegularCustomerAttention> Attention;
+    FRegularCustomerMemory PreviousVisit;
     UPROPERTY(Transient) TObjectPtr<URegularCustomerMemorySubsystem> Memory;
     UPROPERTY(Transient) TObjectPtr<UCyberCafeEventSubsystem> Events;
     UPROPERTY(Transient) TWeakObjectPtr<ALiquidContainerActor> AcceptedCup;
@@ -65,8 +73,6 @@ private:
     FName Topic;
     FGuid Visit;
     uint64 LastClickFrame = MAX_uint64;
-    double NextCommentTime = 0;
-    bool bCommentedPour = false;
     bool bEnding = false;
     uint32 OwnedOrderSerial = 0;
 };

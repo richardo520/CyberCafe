@@ -11,7 +11,7 @@ class CYBERCAFE_API URegularCustomerWidget : public UUserWidget
 {
     GENERATED_BODY()
 public:
-    void Show(const FText& Speaker, const FText& Line, const FText& Status, const TArray<FText>& Choices);
+    void Show(const FText& Speaker, const FText& DialogueLine, const FText& Status, const TArray<FText>& Choices);
     static FIntRect ChoiceRect(int32 Index);
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
