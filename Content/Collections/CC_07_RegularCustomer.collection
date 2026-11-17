@@ -1,0 +1,8 @@
+FileVersion:1
+Type:Static
+
+/Game/CyberCafe/Maps/L_RegularCustomer.L_RegularCustomer
+/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte
+/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu
+/Game/CyberCafe/Gameplay/Drinks/Containers/Cups/Menu/BP_MenuCup_Highball.BP_MenuCup_Highball
+/Game/CyberCafe/Characters/BarGirl/FirstCustomer/Highball/DA_BarGirlHighballDrinkMotion.DA_BarGirlHighballDrinkMotion

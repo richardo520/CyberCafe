@@ -2,6 +2,7 @@
 
 #include "VRPawn.h"
 #include "Serving/OrderHologramActor.h"
+#include "UI/MenuPointerTarget.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
@@ -9,8 +10,11 @@
 #include "EngineUtils.h"
 #include "EnhancedActionKeyMapping.h"
 #include "EnhancedPlayerInput.h"
+#include "EnhancedInputSubsystems.h"
+#include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
+#include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "InputTriggers.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -25,6 +29,7 @@ struct FMenuPointerSample
 {
     UMotionControllerComponent* Origin = nullptr;
     TWeakObjectPtr<AOrderHologramActor> Screen;
+    TWeakObjectPtr<AActor> NativeTarget;
     FMenuPointerHit ScreenHit;
     FHitResult SurfaceHit;
     FVector Start = FVector::ZeroVector;
@@ -167,6 +172,24 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
             || Key == EKeys::ValveIndex_Right_Trigger_Axis || Key == EKeys::MixedReality_Right_Trigger_Axis) return 1;
         return INDEX_NONE;
     };
+    // OpenXR's enhanced-input backend injects Actions directly and may omit XR
+    // physical keys from EnhancedActionMappings. Validate the active authored
+    // context in that case, and require actual per-hand Action instances below.
+    // Never invent a hand from the shared Boolean or from the hovered panel.
+    bool bInjectedLayout = false;
+    TArray<FEnhancedActionKeyMapping> InjectedMappings;
+    bool bHasCompiledXRMapping = false;
+    for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
+        bHasCompiledXRMapping |= Mapping.Action == Sample.Action && !Mapping.bShouldBeIgnored && NativeHand(Mapping.Key) != INDEX_NONE;
+    const ULocalPlayer* LocalPlayer = PC ? PC->GetLocalPlayer() : nullptr;
+    const auto* Subsystem = LocalPlayer ? LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+    if (!bHasCompiledXRMapping && Subsystem && IsValid(Pawn->DefaultMappingContext) &&
+        Subsystem->HasMappingContext(Pawn->DefaultMappingContext))
+    {
+        InjectedMappings = Pawn->DefaultMappingContext->GetMappings();
+        RuntimeMappings = &InjectedMappings;
+        bInjectedLayout = true;
+    }
     TArray<FKey> OriginalKeys[2];
     for (const FEnhancedActionKeyMapping& Mapping : *RuntimeMappings)
     {
@@ -260,11 +283,13 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
         Sample.Reason = Sample.bNativePair
             ? TEXT("under threshold: original Boolean active but observer axes below original gate")
             : TEXT("critical original Action active but observer unavailable and PhysicalKey axes zero/below gate");
+    if (bInjectedLayout && !Sample.bNativePair)
+        Sample.Reason = TEXT("OpenXR context active but per-hand observer instances unavailable");
     const FString LeftAxis = Sample.bObserverInstanceValid[0] ? FString::Printf(TEXT("%.4f"), Sample.NativeAxes[0]) : TEXT("None");
     const FString RightAxis = Sample.bObserverInstanceValid[1] ? FString::Printf(TEXT("%.4f"), Sample.NativeAxes[1]) : TEXT("None");
     // 读取真实 GetValue/GetTriggerEvent；不伪造 Started 的共享 Boolean 值或 XR 阈值。
     Sample.Diagnostics = FString::Printf(
-        TEXT("source=%s runtimeSource=%s event=%d actionMagnitude=%.4f OriginalActionValueNative=%.4f ValueSource=%s ObserverPairValid=%d LObserver=%s RObserver=%s LInstanceValid=%d RInstanceValid=%d HandAxes=[L=%s R=%s] observerReason=%s LMax=%.4f RMax=%.4f LThreshold=%.4f RThreshold=%.4f LNorm=%.4f RNorm=%.4f LDown=%d RDown=%d keys=[%s]"),
+        TEXT("source=%s runtimeSource=%s event=%d actionMagnitude=%.4f OriginalActionValueNative=%.4f ValueSource=%s ObserverPairValid=%d LObserver=%s RObserver=%s LInstanceValid=%d RInstanceValid=%d HandAxes=[L=%s R=%s] observerReason=%s LMax=%.4f RMax=%.4f LThreshold=%.4f RThreshold=%.4f LNorm=%.4f RNorm=%.4f LDown=%d RDown=%d keys=[%s] MappingSource=%s"),
         *Sample.Action->GetPathName(), Instance ? *GetNameSafe(Instance->GetSourceAction().Get()) : TEXT("none"),
         Instance ? static_cast<int32>(Instance->GetTriggerEvent()) : 0,
         Instance ? Instance->GetValue().GetMagnitude() : 0.f, Instance ? Instance->GetValue().GetMagnitude() : 0.f,
@@ -274,8 +299,9 @@ bool UMenuPointerComponent::ReadOriginalTriggerInput(const AVRPawn* Pawn, FMenuP
         *LeftAxis, *RightAxis, *Sample.ObserverReason,
         Sample.RawMax[0], Sample.RawMax[1], Sample.Threshold[0], Sample.Threshold[1],
         Sample.NormalizedMax[0], Sample.NormalizedMax[1], Sample.bDown[0], Sample.bDown[1],
-        Keys.IsEmpty() ? TEXT("none threshold=none") : *Keys);
-    return MappingCount > 0 && bOriginalPair;
+        Keys.IsEmpty() ? TEXT("none threshold=none") : *Keys,
+        bInjectedLayout ? TEXT("OpenXRActiveContext") : TEXT("CompiledPhysicalKeys"));
+    return MappingCount > 0 && bOriginalPair && (!bInjectedLayout || Sample.bNativePair);
 }
 
 void UMenuPointerComponent::RememberOriginalTriggerInput(const FMenuPointerInputSample& Sample)
@@ -398,7 +424,22 @@ bool UMenuPointerComponent::SamplePointer(const AVRPawn* Pawn, bool bRightHand, 
         Sample.End = Hit.Point;
         Sample.bHasTarget = true;
     }
-    if (Sample.Screen.IsValid())
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* Target = *It;
+        IMenuPointerTarget* Interface = IsValid(Target) && !Target->IsActorBeingDestroyed() ? Cast<IMenuPointerTarget>(Target) : nullptr;
+        if (!Interface || Target->IsHidden()) continue;
+        FMenuPointerHit Hit;
+        if (!Interface->TracePointer(Sample.Start, Direction, Limit, Hit) || Hit.Point.ContainsNaN() ||
+            !FMath::IsFinite(Hit.Distance) || Hit.Distance <= 0 || Hit.Distance > Closest + .001) continue;
+        Closest = Hit.Distance;
+        Sample.NativeTarget = Target;
+        Sample.Screen.Reset();
+        Sample.ScreenHit = Hit;
+        Sample.End = Hit.Point;
+        Sample.bHasTarget = true;
+    }
+    if (Sample.Screen.IsValid() || Sample.NativeTarget.IsValid())
         Sample.Reason = Sample.ScreenHit.bPower ? TEXT("UIpower")
             : (Sample.ScreenHit.Action != INDEX_NONE
                 ? FString::Printf(TEXT("UIaction%d"), Sample.ScreenHit.Action) : FString(TEXT("UIblank")));
@@ -424,6 +465,16 @@ bool UMenuPointerComponent::TraceSurfaceForHand(bool bRightHand, FHitResult& Out
         OutHit.TraceStart = Sample.Start;
         OutHit.TraceEnd = Sample.Start + Sample.Origin->GetForwardVector().GetSafeNormal() * FMath::Min(RayMaxDistance, 250.f);
         return true; // 空白屏幕也阻挡，不能抓到可见菜单背后的物体。
+    }
+    if (AActor* Target = Sample.NativeTarget.Get())
+    {
+        OutHit = FHitResult(Target, nullptr, Sample.ScreenHit.Point, Target->GetActorForwardVector());
+        OutHit.bBlockingHit = true;
+        OutHit.Distance = Sample.ScreenHit.Distance;
+        OutHit.Location = OutHit.ImpactPoint = Sample.ScreenHit.Point;
+        OutHit.TraceStart = Sample.Start;
+        OutHit.TraceEnd = Sample.Start + Sample.Origin->GetForwardVector().GetSafeNormal() * FMath::Min(RayMaxDistance, 250.f);
+        return true;
     }
     if (!Sample.SurfaceHit.bBlockingHit) return false;
     OutHit = Sample.SurfaceHit;
@@ -475,7 +526,8 @@ bool UMenuPointerComponent::TryClickFromOriginalTrigger()
             OriginalTriggerAttemptCount, AcceptedClickCount, *InputSample.Diagnostics,
             HandIndex == INDEX_NONE ? TEXT("none") : (HandIndex == 1 ? TEXT("R") : TEXT("L")), *Selection,
             *GetNameSafe(Sample.Origin), IsValid(Sample.Origin) ? *Sample.Origin->MotionSource.ToString() : TEXT("none"),
-            IsValid(Sample.Origin) && Sample.Origin->IsTracked(), *GetNameSafe(Sample.Screen.Get()),
+            IsValid(Sample.Origin) && Sample.Origin->IsTracked(),
+            *GetNameSafe(Sample.NativeTarget.IsValid() ? Sample.NativeTarget.Get() : Sample.Screen.Get()),
             Sample.ScreenHit.Action, Sample.ScreenHit.bPower, *Sample.ScreenHit.Point.ToString(),
             Sample.Screen.IsValid() && Sample.Screen->IsPanelOpen(), *Sample.Reason,
             *StatusStrings[0], *StatusStrings[1], LastOriginalMappingKeys.IsEmpty() ? TEXT("none") : *LastOriginalMappingKeys);
@@ -514,9 +566,9 @@ bool UMenuPointerComponent::TryClickFromOriginalTrigger()
         HidePointer(HandIndex);
         return Reject(Sample.Reason);
     }
-    if (!Sample.Screen.IsValid()) return Reject(Sample.Reason);
+    if (!Sample.Screen.IsValid() && !Sample.NativeTarget.IsValid()) return Reject(Sample.Reason);
     if (!Sample.ScreenHit.bPower && Sample.ScreenHit.Action == INDEX_NONE) return Reject(TEXT("UIblank"));
-    if (!Sample.ScreenHit.bPower
+    if (Sample.Screen.IsValid() && !Sample.ScreenHit.bPower
         && Sample.Screen->GetPointerActionAtWorldPoint(Sample.ScreenHit.Point) != Sample.ScreenHit.Action)
         return Reject(TEXT("current UI action mismatch"));
 
@@ -526,8 +578,9 @@ bool UMenuPointerComponent::TryClickFromOriginalTrigger()
     LastClickStatus = Details + TEXT(" result=calling UI reason=") + Selection;
     UE_LOG(LogTemp, Log, TEXT("[MenuPointer] %s"), *LastClickStatus);
     bClickInProgress = true;
-    const bool bAccepted = Sample.Screen->TryActivateMenuPointer(
-        bRightHand ? EControllerHand::Right : EControllerHand::Left, Sample.ScreenHit);
+    IMenuPointerTarget* Native = Cast<IMenuPointerTarget>(Sample.NativeTarget.Get());
+    const bool bAccepted = Native ? Native->ActivatePointer(bRightHand ? EControllerHand::Right : EControllerHand::Left, Sample.ScreenHit)
+        : Sample.Screen->TryActivateMenuPointer(bRightHand ? EControllerHand::Right : EControllerHand::Left, Sample.ScreenHit);
     const FString ResultStatus = Details + (bAccepted ? TEXT(" result=accepted reason=UI accepted")
         : TEXT(" result=OriginalSkip reason=UI rejected"));
     UE_LOG(LogTemp, Log, TEXT("[MenuPointer] %s"), *ResultStatus);
@@ -597,7 +650,7 @@ void UMenuPointerComponent::DrawPointer(int32 HandIndex, const FMenuPointerSampl
     if (!IsValid(Beam) || !IsValid(Dot) || !Sample.Origin) return;
 
     FLinearColor Color(.02f, .85f, 1.f);
-    if (Sample.Screen.IsValid())
+    if (Sample.Screen.IsValid() || Sample.NativeTarget.IsValid())
         Color = Sample.ScreenHit.bPower || Sample.ScreenHit.Action != INDEX_NONE
             ? FLinearColor(1.f, .38f, .02f) : FLinearColor(.35f, .35f, .35f);
     if (AcceptedFlashRemaining[HandIndex] > 0.f && Sample.Screen.IsValid()

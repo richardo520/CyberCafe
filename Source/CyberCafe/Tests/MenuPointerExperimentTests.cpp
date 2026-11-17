@@ -3,6 +3,7 @@
 // 保留真实 InputKey 及原 Pressed 阈值 .5；.02 的 Boolean getter 为 true，但底层幅值仍为 .02、未 actuated，不产生 Started/UI 点击。
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Misc/AutomationTest.h"
+#include <limits>
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -14,6 +15,13 @@
 #include "Serialization/JsonSerializer.h"
 #include "CoreGlobals.h"
 #include "Character/MenuPointerComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Customers/RegularCustomerEncounter.h"
+#include "Customers/CustomerDrinkComponent.h"
+#include "Tutorial/TutorialNPC.h"
+#include "UI/RegularCustomerWidget.h"
+#include "Serving/ServingSpotActor.h"
+#include "Serving/DrinkRecipe.h"
 #include "Character/VRPawn.h"
 #include "GrabComponent.h"
 #include "Serving/OrderHologramActor.h"
@@ -169,6 +177,15 @@ const TArray<FEnhancedActionKeyMapping>* RuntimeMappings(const UEnhancedPlayerIn
     const FStructProperty* Inner = Property ? CastField<FStructProperty>(Property->Inner) : nullptr;
     return Input && Inner && Inner->Struct == FEnhancedActionKeyMapping::StaticStruct()
         ? Property->ContainerPtrToValuePtr<TArray<FEnhancedActionKeyMapping>>(Input) : nullptr;
+}
+
+void SimulateOpenXRMappingLayout(UEnhancedPlayerInput* Input)
+{
+    // Test-only: remove compiled physical mappings while keeping the real active
+    // IMC and delegates. Action values still come solely from engine injection.
+    const FArrayProperty* Property = FindFProperty<FArrayProperty>(UEnhancedPlayerInput::StaticClass(), TEXT("EnhancedActionMappings"));
+    if (Property && Input)
+        Property->ContainerPtrToValuePtr<TArray<FEnhancedActionKeyMapping>>(Input)->Reset();
 }
 
 int32 BindingCount(const UEnhancedInputComponent* Input, const UInputAction* Action, ETriggerEvent Event)
@@ -645,10 +662,16 @@ public:
     }
 };
 
-bool NativeSingleUI(FAutomationTestBase& Test, EControllerHand Hand)
+bool NativeSingleUI(FAutomationTestBase& Test, EControllerHand Hand, bool bOpenXRLayout = false)
 {
     auto F = MakeShared<FFixture>(true);
     if (!F->Begin(Test) || !F->Open(Test) || !F->AimAction(Test, Hand)) return false;
+    if (bOpenXRLayout)
+    {
+        SimulateOpenXRMappingLayout(F->PlayerInput);
+        Test.TestTrue(TEXT("OpenXR simulation has no compiled physical mappings"), RuntimeMappings(F->PlayerInput)->IsEmpty());
+        Test.TestTrue(TEXT("Real authored context stays applied"), F->Subsystem->HasMappingContext(F->Pawn->DefaultMappingContext));
+    }
     const auto Other = Hand == EControllerHand::Left ? EControllerHand::Right : EControllerHand::Left;
     F->Pose(Other, RayPose(FVector(0, 0, 1400), FVector::UpVector));
     F->Pointer->UpdatePointer(Dt);
@@ -657,7 +680,7 @@ bool NativeSingleUI(FAutomationTestBase& Test, EControllerHand Hand)
     const FNativeSample Press(Hand == EControllerHand::Left ? .8f : 0.f, Hand == EControllerHand::Right ? .8f : 0.f);
     TArray<FNativeSample> Samples = {{0, 0}, Press, Press, {0, 0}, {0, 0}, {0, 0}, Press, Press, {0, 0}};
     FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FNativeEngineFrames>(Test, F, MoveTemp(Samples),
-        [&Test, Hand](FFixture& State, int32 Index)
+        [&Test, Hand, bOpenXRLayout](FFixture& State, int32 Index)
         {
             const int32 Expected = Index == 0 ? 0 : (Index < 6 ? 1 : 2);
             State.Counts(Test, Expected, Expected, Expected, 0);
@@ -668,6 +691,8 @@ bool NativeSingleUI(FAutomationTestBase& Test, EControllerHand Hand)
                     && Status.Contains(TEXT("result=accepted reason=UI accepted")) && Status.Contains(TEXT("ObserverPairValid=1")));
                 Test.TestTrue(TEXT("选手仅来自实际越阈观察轴"), Status.Contains(Hand == EControllerHand::Left ? TEXT("triggerHand=L") : TEXT("triggerHand=R")));
                 Test.TestTrue(TEXT("记录原回调真实 Boolean 幅值，不伪造为零"), Status.Contains(TEXT("OriginalActionValueNative=1.0000")));
+                if (bOpenXRLayout)
+                    Test.TestTrue(TEXT("Uses actual injected axes with validated active context"), Status.Contains(TEXT("MappingSource=OpenXRActiveContext")));
             }
             State.Pointer->UpdatePointer(Dt); State.NoOrderMutation(Test);
         }));
@@ -1628,6 +1653,150 @@ bool FMenuPointerRemoteHandRangeAndNullPointer::RunTest(const FString&)
         TestFalse(TEXT("空 controller 安全失败"), F.Pawn->TraceAim(nullptr, Hit));
         TestNull(TEXT("最终失败结果无旧命中"), Hit.GetActor());
         F.Counts(*this, 0, 0, 0, 0); F.NoOrderMutation(*this);
+    }
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularCustomerPointerInput,
+    "CyberCafe.RegularCustomer.OriginalTriggerChoicesAndOcclusion", CyberCafeMenuPointerExperimentTests::Flags)
+bool FRegularCustomerPointerInput::RunTest(const FString&)
+{
+    using namespace CyberCafeMenuPointerExperimentTests;
+    for (EControllerHand Hand : {EControllerHand::Left, EControllerHand::Right})
+    {
+        FFixture F; if (!F.Begin(*this)) return false;
+        F.Screen->SetActorHiddenInGame(true);
+        auto* Customer = F.World->SpawnActor<ATutorialNPC>();
+        Customer->CustomerDrink->bEnabled = true;
+        auto* E = F.World->SpawnActorDeferred<ARegularCustomerEncounter>(ARegularCustomerEncounter::StaticClass(), FTransform::Identity);
+        E->bAutoStart = false; E->Customer = Customer;
+        E->ServingSpot = F.World->SpawnActor<AServingSpotActor>();
+        E->Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
+        E->FinishSpawning(FTransform::Identity);
+        E->Panel->SetWorldLocation(FVector(2000, 2000, 1500));
+        E->Panel->SetWorldRotation(FRotator::ZeroRotator);
+        E->bFacePlayer = false; // Fixed geometry fixture; live camera facing is tested separately below.
+        if (!TestTrue(TEXT("Actual greeting choices available"), E->StartEncounter())) return false;
+        const FIntRect Rect = URegularCustomerWidget::ChoiceRect(0);
+        const FVector Point = E->Panel->GetComponentTransform().TransformPosition(
+            FVector(0, 480 - (Rect.Min.X + Rect.Max.X) * .5, 280 - (Rect.Min.Y + Rect.Max.Y) * .5));
+        const FTransform Pose = RayPose(Point + FVector(80, 0, 0), FVector(-1, 0, 0));
+        F.Pose(Hand, Pose);
+        auto* Wall = F.Cube(FTransform(FQuat::Identity, Point + FVector(40, 0, 0), FVector(.1)));
+        if (!TestNotNull(TEXT("Actual visibility blocker"), Wall)) return false;
+        const float L = Hand == EControllerHand::Left ? .9f : 0.f;
+        const float R = Hand == EControllerHand::Right ? .9f : 0.f;
+        F.Step(*this, 0, 0); ++GFrameCounter; F.Step(*this, L, R);
+        TestTrue(TEXT("Occluded choice does not advance"), E->GetStage() == ERegularCustomerStage::Greeting);
+        TestEqual(TEXT("Rejected choice preserves original skip once"), F.SkipNotifications, 1);
+        Wall->GetOwner()->Destroy();
+        F.Step(*this, 0, 0); ++GFrameCounter; F.Step(*this, L, R);
+        TestTrue(TEXT("Original trigger chooses talk branch"), E->GetStage() == ERegularCustomerStage::TopicChoice);
+        TestEqual(TEXT("Accepted choice does not also skip"), F.SkipNotifications, 1);
+        F.Step(*this, L, R);
+        TestTrue(TEXT("Held trigger cannot select new page"), E->GetStage() == ERegularCustomerStage::TopicChoice);
+        F.Step(*this, 0, 0); ++GFrameCounter; F.Step(*this, L, R);
+        TestTrue(TEXT("Release and repress chooses topic"), E->GetStage() == ERegularCustomerStage::Preparing);
+        TestEqual(TEXT("Exactly two accepted clicks"), F.Pointer->GetAcceptedClickCount(), 2);
+        TestEqual(TEXT("No skip leakage on topic choice"), F.SkipNotifications, 1);
+        E->CancelEncounter();
+    }
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuPointerOpenXRLeft,
+    "CyberCafe.MenuPointerExperiment.OpenXR.NoPhysicalMappingsLeft", CyberCafeMenuPointerExperimentTests::Flags)
+bool FMenuPointerOpenXRLeft::RunTest(const FString&)
+{
+    return CyberCafeMenuPointerExperimentTests::NativeSingleUI(*this, EControllerHand::Left, true);
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMenuPointerOpenXRRight,
+    "CyberCafe.MenuPointerExperiment.OpenXR.NoPhysicalMappingsRight", CyberCafeMenuPointerExperimentTests::Flags)
+bool FMenuPointerOpenXRRight::RunTest(const FString&)
+{
+    return CyberCafeMenuPointerExperimentTests::NativeSingleUI(*this, EControllerHand::Right, true);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenXRRejectInvalidSources,
+    "CyberCafe.MenuPointerExperiment.OpenXR.RejectInvalidOrAmbiguousSources", CyberCafeMenuPointerExperimentTests::Flags)
+bool FOpenXRRejectInvalidSources::RunTest(const FString&)
+{
+    using namespace CyberCafeMenuPointerExperimentTests;
+    for (const TCHAR* Case : {TEXT("inactive context"), TEXT("missing observer"), TEXT("two hands"), TEXT("zero axes"), TEXT("below threshold")})
+    {
+        FFixture F(true); if (!F.Begin(*this) || !F.Open(*this) || !F.AimAction(*this, EControllerHand::Left)) return false;
+        SimulateOpenXRMappingLayout(F.PlayerInput);
+        const FString Reason(Case);
+        if (Reason == TEXT("inactive context")) F.Subsystem->RemoveMappingContext(F.Pawn->DefaultMappingContext);
+        if (Reason == TEXT("missing observer")) F.Pointer->RightTriggerObserver = nullptr;
+        F.StepNative(*this, 0, 0);
+        ++GFrameCounter;
+        const float Left = Reason == TEXT("zero axes") ? 0.f : (Reason == TEXT("below threshold") ? .2f : .8f);
+        const float Right = Reason == TEXT("two hands") ? .8f : 0.f;
+        F.StepNative(*this, Left, Right, true);
+        AddInfo(Reason);
+        F.Counts(*this, 1, 0, 0, 1);
+        TestTrue(TEXT("Invalid or ambiguous XR input never guesses hovered hand"),
+            F.Pointer->GetLastClickStatus().Contains(TEXT("result=OriginalSkip")));
+    }
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularOpenXRChoicesAndFacing,
+    "CyberCafe.RegularCustomer.OpenXRChoicesAndLiveHeadFacing", CyberCafeMenuPointerExperimentTests::Flags)
+bool FRegularOpenXRChoicesAndFacing::RunTest(const FString&)
+{
+    using namespace CyberCafeMenuPointerExperimentTests;
+    for (EControllerHand Hand : {EControllerHand::Left, EControllerHand::Right})
+    {
+        FFixture F(true); if (!F.Begin(*this)) return false;
+        F.Screen->SetActorHiddenInGame(true);
+        SimulateOpenXRMappingLayout(F.PlayerInput);
+        TestTrue(TEXT("No compiled physical mappings, matching reported OpenXR session"), RuntimeMappings(F.PlayerInput)->IsEmpty());
+        auto* Customer = F.World->SpawnActor<ATutorialNPC>();
+        Customer->CustomerDrink->bEnabled = true;
+        auto* E = F.World->SpawnActorDeferred<ARegularCustomerEncounter>(ARegularCustomerEncounter::StaticClass(), FTransform::Identity);
+        E->bAutoStart = false; E->Customer = Customer;
+        E->ServingSpot = F.World->SpawnActor<AServingSpotActor>();
+        E->Recipe = LoadObject<UDrinkRecipe>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Recipes/DA_Latte.DA_Latte"));
+        E->FinishSpawning(FTransform::Identity);
+        E->Panel->SetWorldLocation(FVector(2000, 2000, 1500));
+        F.Pawn->Camera->SetWorldLocation(FVector(2080, 2040, 1560));
+        if (!TestTrue(TEXT("Greeting starts and faces actual pawn camera"), E->StartEncounter())) return false;
+        const FVector Anchor = E->Panel->GetComponentLocation();
+        TestTrue(TEXT("Panel normal faces actual eye, including vertical offset"),
+            E->Panel->GetForwardVector().Equals((F.Pawn->Camera->GetComponentLocation() - Anchor).GetSafeNormal(), .00001));
+        F.Pawn->Camera->AddWorldOffset(FVector(-25, 30, 15));
+        E->Tick(Dt);
+        TestTrue(TEXT("Moving head updates yaw and pitch without moving panel"),
+            E->Panel->GetComponentLocation().Equals(Anchor, .00001) && E->Panel->GetForwardVector().Equals(
+                (F.Pawn->Camera->GetComponentLocation() - Anchor).GetSafeNormal(), .00001));
+        TestTrue(TEXT("Panel has no sideways roll"), FMath::Abs(E->Panel->GetComponentRotation().Roll) < .001);
+        const FIntRect Rect = URegularCustomerWidget::ChoiceRect(0);
+        const FVector Point = E->Panel->GetComponentTransform().TransformPosition(
+            FVector(0, 480 - (Rect.Min.X + Rect.Max.X) * .5, 280 - (Rect.Min.Y + Rect.Max.Y) * .5));
+        const FVector Normal = E->Panel->GetForwardVector();
+        F.Pose(Hand, RayPose(Point + Normal * 80, -Normal));
+        auto* Wall = F.Cube(FTransform(FQuat::Identity, Point + Normal * 40, FVector(.1)));
+        const float L = Hand == EControllerHand::Left ? .8f : 0.f;
+        const float R = Hand == EControllerHand::Right ? .8f : 0.f;
+        F.StepNative(*this, 0, 0); ++GFrameCounter; F.StepNative(*this, L, R);
+        TestTrue(TEXT("OpenXR injection still respects physical occlusion"), E->GetStage() == ERegularCustomerStage::Greeting);
+        TestEqual(TEXT("Blocked input preserves original skip"), F.SkipNotifications, 1);
+        Wall->GetOwner()->Destroy();
+        F.StepNative(*this, 0, 0); ++GFrameCounter; F.StepNative(*this, L, R);
+        TestTrue(TEXT("Injected trigger chooses actual conversation option"), E->GetStage() == ERegularCustomerStage::TopicChoice);
+        TestTrue(TEXT("Uses validated OpenXR context and real observer axes"),
+            F.Pointer->GetLastClickStatus().Contains(TEXT("MappingSource=OpenXRActiveContext")) &&
+            F.Pointer->GetLastClickStatus().Contains(TEXT("ObserverPairValid=1")));
+        F.StepNative(*this, L, R);
+        TestTrue(TEXT("Holding trigger does not click new page"), E->GetStage() == ERegularCustomerStage::TopicChoice);
+        F.StepNative(*this, 0, 0); ++GFrameCounter; F.StepNative(*this, L, R);
+        TestTrue(TEXT("Release and repress starts real order"), E->GetStage() == ERegularCustomerStage::Preparing);
+        TestEqual(TEXT("No duplicate skip when selecting"), F.SkipNotifications, 1);
+        TestEqual(TEXT("Two choices accepted"), F.Pointer->GetAcceptedClickCount(), 2);
+        FVector InvalidView = FVector::ZeroVector;
+        InvalidView.X = std::numeric_limits<double>::quiet_NaN();
+        TestFalse(TEXT("Nonfinite camera pose cannot corrupt panel transform"), E->UpdatePanelFacing(InvalidView));
+        E->CancelEncounter();
     }
     return !HasAnyErrors();
 }
