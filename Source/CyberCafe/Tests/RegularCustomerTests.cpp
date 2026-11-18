@@ -17,14 +17,21 @@
 #include "UObject/UnrealType.h"
 #include "EngineUtils.h"
 #include "Serving/ServingSpotActor.h"
+#include "Serving/DrinkMenuData.h"
 #include "Tutorial/TutorialNPC.h"
 #include "Tutorial/TutorialDirector.h"
 #include "Liquid/GlassRecoveryActor.h"
 #include "Liquid/CupActor.h"
 #include "Tests/TutorialMenuTestHelpers.h"
+#include "Tests/RegularDialogueTestHelpers.h"
 #include "Components/AudioComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/WidgetComponent.h"
+#include "UI/RegularCustomerWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/TextBlock.h"
+#include "Sound/SoundBase.h"
+#include "TimerManager.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
@@ -122,11 +129,23 @@ struct FEncounterWorld
         return Test.TestTrue(TEXT("Saved encounter automatically greets"), Encounter->GetStage() == ERegularCustomerStage::Greeting);
     }
     void Tick() { ++GFrameCounter; World->Tick(LEVELTICK_All, .02f); }
-    bool Serve(FAutomationTestBase& Test)
+    bool Serve(FAutomationTestBase& Test, UDrinkRecipe* ActiveRecipe = nullptr)
     {
+        if (ActiveRecipe)
+        {
+            auto* Menu = LoadObject<UDrinkMenuData>(nullptr, TEXT("/Game/CyberCafe/Gameplay/Serving/Menu/DA_RecipeMenu.DA_RecipeMenu"));
+            const FDrinkMenuEntry* Entry = Menu ? Menu->Entries.FindByPredicate([ActiveRecipe](const FDrinkMenuEntry& E) { return E.Recipe == ActiveRecipe; }) : nullptr;
+            if (!Test.TestNotNull(TEXT("Followup order exists in actual recipe menu"), Entry)) return false;
+            for (const auto& Ingredient : Entry->Ingredients)
+                if (!Test.TestEqual(TEXT("Actual recipe ingredient added"), Cup->AddIngredientLiquid(Ingredient.VolumeML, Ingredient.IngredientId, FLinearColor::White), float(Ingredient.VolumeML))) return false;
+            if (ActiveRecipe->ExpectedIceCount > 0 && !Test.TestTrue(TEXT("Real ice for followup"), TutorialMenuTestHelpers::AddIce(Cup, 1))) return false;
+        }
+        else
+        {
         if (!Test.TestEqual(TEXT("Real coffee added"), Cup->AddIngredientLiquid(100, TEXT("Coffee"), FLinearColor::Red), 100.f) ||
             !Test.TestEqual(TEXT("Real milk added"), Cup->AddIngredientLiquid(100, TEXT("Milk"), FLinearColor::White), 100.f) ||
             !Test.TestTrue(TEXT("Actual ice crosses cup opening"), TutorialMenuTestHelpers::AddIce(Cup, 1))) return false;
+        }
         const FTransform From = Cup->GetActorTransform();
         FTransform To = Encounter->ServingSpot->GetActorTransform(); To.SetScale3D(From.GetScale3D());
         for (int32 I = 1; I <= 16; ++I)
@@ -429,6 +448,295 @@ bool FRegularTwoSavedVisits::RunTest(const FString&)
     const FRegularCustomerMemory Record = Second.Memory()->Recall(Second.Encounter->CustomerId);
     TestEqual(TEXT("Two real completions counted"), Record.CompletedVisits, 2);
     TestEqual(TEXT("Two finished conversations counted"), Record.GetTopicVisits(TEXT("NightShift")), 2);
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularCloudPresentationOwnership, "CyberCafe.RegularCustomer.CloudPresentationOwnership", RegularTests::Flags)
+bool FRegularCloudPresentationOwnership::RunTest(const FString&)
+{
+    RegularTests::FEncounterWorld F;
+    if (!F.Setup(*this)) return false;
+    auto Wire = MakeShared<RegularDialogueTests::FTransport>();
+    double Time = 0;
+    F.Encounter->DialogueClient->UseTestTransport(Wire, [&Time] { return Time; });
+    F.Encounter->Choose(0);
+    TestTrue(TEXT("Topic line awaiting async response"), F.Encounter->DialogueClient->IsPending());
+    const FString OldLine = RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[0]);
+    F.Encounter->Choose(1);
+    const FString NewLine = RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[1]);
+    Wire->Reply(0, 200, RegularDialogueTests::Response(OldLine));
+    TestTrue(TEXT("Earlier page cannot overwrite selected order story"), F.Encounter->GetLine().ToString() != OldLine);
+    Wire->Reply(1, 200, RegularDialogueTests::Response(NewLine));
+    TestEqual(TEXT("Current response accepted"), F.Encounter->GetLine().ToString(), NewLine);
+    TestTrue(TEXT("Cloud text cannot change order lifecycle"), F.Encounter->GetStage() == ERegularCustomerStage::Preparing && F.Encounter->Customer->CustomerOrder->IsOrderActive());
+    TestEqual(TEXT("Cloud response does not write memories"), F.Memory()->Recall(F.Encounter->CustomerId).CompletedVisits, 0);
+    for (int32 I = 0; I < 800; ++I) F.Tick();
+    F.GI->GetSubsystem<UCyberCafeEventSubsystem>()->OnAnyObjectGrabbed.Broadcast(F.Cup, EControllerHand::Left);
+    F.Tick();
+    if (!TestEqual(TEXT("One ambient request"), Wire->Bodies.Num(), 3)) return false;
+    const FString AmbientLine = RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[2]);
+    F.Encounter->OrderDisplay->OnMenuInteractionNative.Broadcast(F.Encounter->OrderDisplay);
+    Wire->Reply(2, 200, RegularDialogueTests::Response(AmbientLine));
+    F.Encounter->Tick(.02f);
+    TestEqual(TEXT("Reply arriving during menu reading waits"), F.Encounter->GetLine().ToString(), NewLine);
+    for (int32 I = 0; I < 300; ++I) F.Tick();
+    TestEqual(TEXT("Reply resumes after reading finishes"), F.Encounter->GetLine().ToString(), AmbientLine);
+    for (int32 I = 0; I < 800; ++I) F.Tick();
+    F.GI->GetSubsystem<UCyberCafeEventSubsystem>()->OnLiquidPoured.Broadcast(nullptr, F.Cup, 1);
+    F.Tick();
+    if (!TestEqual(TEXT("Another real cue requested"), Wire->Bodies.Num(), 4)) return false;
+    const FString Stale = RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[3]);
+    F.Encounter->CancelEncounter();
+    const FString Cancelled = F.Encounter->GetLine().ToString();
+    Wire->Reply(3, 200, RegularDialogueTests::Response(Stale));
+    TestEqual(TEXT("Cancelled encounter cannot receive stale AI line"), F.Encounter->GetLine().ToString(), Cancelled);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularPresentationFeedback, "CyberCafe.RegularCustomer.PanelAspectAndDialogueNotice", RegularTests::Flags)
+bool FRegularPresentationFeedback::RunTest(const FString&)
+{
+    RegularTests::FEncounterWorld F; if (!F.Setup(*this)) return false;
+    auto* E = F.Encounter;
+    E->SetActorScale3D(FVector(1.25, 1.6875, .897436));
+    const FTransform AuthoredPose = E->GetActorTransform();
+    const FVector PanelAnchor = E->Panel->GetComponentLocation();
+    F.Tick();
+    const double ExpectedScale = double(E->PanelScale) * 1.6875;
+    TestTrue(TEXT("Nonuniform actor scaling preserves readable uniform panel pixels"),
+        E->Panel->GetComponentScale().Equals(FVector(ExpectedScale), .00001));
+    TestTrue(TEXT("User actor placement and scale preserved"), E->GetActorTransform().Equals(AuthoredPose, .00001));
+    TestTrue(TEXT("Panel remains at authored anchor"), E->Panel->GetComponentLocation().Equals(PanelAnchor, .00001));
+    E->UpdatePanelFacing(PanelAnchor + FVector(80, 40, 30));
+    const FIntRect Rect = URegularCustomerWidget::ChoiceRect(0);
+    const FVector ChoicePoint = E->Panel->GetComponentTransform().TransformPosition(FVector(0,
+        480 - (Rect.Min.X + Rect.Max.X) * .5, 280 - (Rect.Min.Y + Rect.Max.Y) * .5));
+    const FVector Normal = E->Panel->GetForwardVector();
+    FMenuPointerHit Hit;
+    TestTrue(TEXT("Ray still hits visible scaled choice after billboard rotation"),
+        E->TracePointer(ChoicePoint + Normal * 80, -Normal, 250, Hit) && Hit.Action == 0);
+    const auto* Defaults = GetDefault<ARegularCustomerEncounter>();
+    if (TestNotNull(TEXT("Notice has a real sound asset"), Defaults->DialogueNoticeAudio->Sound.Get()))
+        TestTrue(TEXT("Notice grain is short and bounded"), Defaults->DialogueNoticeAudio->Sound->GetDuration() < .12f);
+    TestNotNull(TEXT("Notice has spatial attenuation"), Defaults->DialogueNoticeAudio->AttenuationSettings.Get());
+    TestTrue(TEXT("Notice comes from customer mesh, not floating panel"), E->DialogueNoticeAudio->GetAttachParent() == E->Customer->GetMesh());
+    auto Wire = MakeShared<RegularDialogueTests::FTransport>();
+    E->DialogueClient->UseTestTransport(Wire, [] { return 0.; });
+    auto* Widget = Cast<URegularCustomerWidget>(E->Panel->GetUserWidgetObject());
+    if (!TestNotNull(TEXT("Actual regular customer typewriter widget"), Widget)) return false;
+    if (!TestTrue(TEXT("Choice starts a new pending cloud line"), E->Choose(0))) return false;
+    TestFalse(TEXT("API waiting ellipsis is not typed or voiced"), Widget->IsTyping());
+    const FString Reply = RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[0]);
+    Wire->Reply(0, 200, RegularDialogueTests::Response(Reply));
+    TestTrue(TEXT("Committed line starts empty and types with voice enabled"), Widget->IsTyping() && Widget->GetVisibleText().IsEmpty() && Widget->bEnableVoice);
+    for (int32 I = 0; I < 25; ++I) F.Tick();
+    TestTrue(TEXT("Only part of the line is revealed after half a second"), Widget->GetVisibleText().Len() > 0 && Widget->GetVisibleText().Len() < Reply.Len());
+    const TSharedRef<SWidget> Slate = Widget->TakeWidget(); // Keep the UI alive like the real widget component does.
+    const FString Visible = Widget->GetVisibleText();
+    TArray<UWidget*> DrawnWidgets; Widget->WidgetTree->GetAllWidgets(DrawnWidgets);
+    TestTrue(TEXT("Real UMG body shows the revealed prefix, not the full line"), DrawnWidgets.ContainsByPredicate([&Visible](UWidget* W)
+        { auto* T = Cast<UTextBlock>(W); return T && T->GetText().ToString() == Visible; }));
+    E->RefreshPanel();
+    TestTrue(TEXT("Refreshing options or status does not restart or complete typing"), Widget->IsTyping() && Widget->GetVisibleText() == Visible);
+    for (int32 I = 0; I < 600; ++I) F.Tick();
+    TestTrue(TEXT("Typewriter finishes naturally without looping"), !Widget->IsTyping() && Widget->GetVisibleText() == Reply);
+    TestTrue(TEXT("Next page requests another line"), E->Choose(0));
+    E->bEnableDialogueNotice = false;
+    Wire->Reply(1, 200, RegularDialogueTests::Response(RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[1])));
+    TestTrue(TEXT("Voice can be disabled while text still types"), Widget->IsTyping() && !Widget->bEnableVoice);
+    E->EndPlay(EEndPlayReason::Quit);
+    Wire->Reply(0, 200, RegularDialogueTests::Response(Reply));
+    TestFalse(TEXT("Ended encounter cannot restart typewriter or voice"), Widget->IsTyping());
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularContinuousConversation, "CyberCafe.RegularCustomer.ContinuousChatAndThreeDrinks", RegularTests::Flags)
+bool FRegularContinuousConversation::RunTest(const FString&)
+{
+    RegularTests::FEncounterWorld F; if (!F.Setup(*this)) return false;
+    auto* E = F.Encounter;
+    const FGuid SessionVisit = E->Visit;
+    UWorld* OriginalWorld = F.World;
+    auto* OriginalCustomer = E->Customer.Get();
+    E->Choose(0); E->Choose(0);
+    if (!F.Serve(*this)) return false;
+    for (int32 I = 0; I < 1200 && E->GetStage() == ERegularCustomerStage::Tasting; ++I) F.Tick();
+    if (!TestTrue(TEXT("First real drink finishes"), E->GetStage() == ERegularCustomerStage::Completed)) return false;
+    TestEqual(TEXT("First drink persisted"), F.Memory()->Recall(E->CustomerId).CompletedDrinks, 1);
+    const auto ChatUntilOffer = [this, E]()
+    {
+        for (int32 I = 0; I < 6 && E->GetStage() != ERegularCustomerStage::ReorderOffer; ++I)
+            if (!TestTrue(TEXT("Keep chatting without level reload"), E->Choose(0))) return false;
+        return TestTrue(TEXT("Customer proposes a drink after several exchanges"), E->GetStage() == ERegularCustomerStage::ReorderOffer);
+    };
+    if (!ChatUntilOffer()) return false;
+    const uint32 CompletedSerial = E->ServingSpot->GetOrderSerial();
+    TestTrue(TEXT("Proposal alone does not change served slot or start an order"), E->ServingSpot->GetServedCup() == F.Cup && !E->Customer->CustomerOrder->IsOrderActive());
+    TestTrue(TEXT("Can decline a new drink and keep chatting"), E->Choose(1) && E->GetStage() == ERegularCustomerStage::Chatting);
+    TestEqual(TEXT("Declining preserves old cup and order serial"), E->ServingSpot->GetOrderSerial(), CompletedSerial);
+    if (!ChatUntilOffer()) return false;
+    for (int32 Drink = 2; Drink <= 3; ++Drink)
+    {
+        UDrinkRecipe* Proposed = E->NextRecipe;
+        auto* OldCup = F.Cup;
+        const FVector SupportedScale = OldCup->GetActorScale3D();
+        const FGuid OldOrder = E->DrinkOrderId;
+        if (!TestTrue(TEXT("Player accepts proposed drink"), E->Choose(0) && E->GetStage() == ERegularCustomerStage::Preparing)) return false;
+        E->HandleFinished(nullptr, true, 20);
+        TestTrue(TEXT("A stale null-cup completion cannot cancel the next unserved order"), E->GetStage() == ERegularCustomerStage::Preparing && E->Customer->CustomerOrder->IsOrderActive());
+        TestTrue(TEXT("Accepted recipe matches proposal and actual serving authority"), E->Recipe == Proposed && E->ServingSpot->ActiveRecipe == Proposed);
+        TestTrue(TEXT("Same visit, new order identity"), E->Visit == SessionVisit && E->DrinkOrderId != OldOrder);
+        TestTrue(TEXT("Old cup retired only after acceptance"), OldCup->IsActorBeingDestroyed());
+        ACupActor* Fresh = nullptr;
+        for (TActorIterator<AGlassRecoveryActor> It(F.World); It && !Fresh; ++It) Fresh = Cast<ACupActor>(It->GetCurrent(0));
+        if (!TestTrue(TEXT("Station supplies a distinct clean usable cup"), Fresh && Fresh != OldCup && !Fresh->IsLiquidFrozen() && Fresh->GetPreciseVolumeML() == 0)) return false;
+        TestTrue(TEXT("Fresh cup preserves the calibrated animation scale"), Fresh->GetActorScale3D().Equals(SupportedScale, .00001));
+        for (TActorIterator<AGlassRecoveryActor> It(F.World); It; ++It)
+            TestTrue(TEXT("Supply references no longer point to retired cup"), It->PrototypeCup != OldCup);
+        for (TActorIterator<AIceStationActor> It(F.World); It; ++It)
+            TestTrue(TEXT("Physical ice station no longer targets retired cup"), It->Cup != OldCup);
+        F.Cup = Fresh; F.Headless();
+        F.Cup->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        if (!F.Serve(*this, Proposed)) return false;
+        for (int32 I = 0; I < 1200 && E->GetStage() == ERegularCustomerStage::Tasting; ++I) F.Tick();
+        if (!TestTrue(TEXT("Followup actually animates and consumes drink"), E->GetStage() == ERegularCustomerStage::Completed && F.Cup->GetPreciseVolumeML() < Proposed->TargetVolumeML)) return false;
+        const auto M = F.Memory()->Recall(E->CustomerId);
+        TestEqual(TEXT("Several drinks still count as one visit"), M.CompletedVisits, 1);
+        TestEqual(TEXT("Each completed drink counts exactly once"), M.CompletedDrinks, Drink);
+        TestEqual(TEXT("Latest real recipe remembered"), M.LastRecipeId, Proposed->RecipeId);
+        TestTrue(TEXT("No milk-ratio claim for a multi-ingredient recipe"), !E->GetLine().ToString().Contains(TEXT("牛奶的比例稍微多一点")));
+        TestTrue(TEXT("World and NPC were never replaced"), E->GetWorld() == OriginalWorld && E->Customer == OriginalCustomer);
+        if (!ChatUntilOffer()) return false;
+    }
+    const int32 Completed = F.Memory()->Recall(E->CustomerId).CompletedDrinks;
+    TestTrue(TEXT("Another order may begin"), E->Choose(0));
+    E->CancelEncounter();
+    TestEqual(TEXT("Cancelling next order does not count another drink"), F.Memory()->Recall(E->CustomerId).CompletedDrinks, Completed);
+    TestTrue(TEXT("Memory reloads from disk"), F.Memory()->LoadProfile(F.Slot));
+    TestEqual(TEXT("All completed drinks persisted"), F.Memory()->Recall(E->CustomerId).CompletedDrinks, 3);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularLegacyMultipleDrinks, "CyberCafe.RegularCustomer.LegacySaveAndMultipleOrders", RegularTests::Flags)
+bool FRegularLegacyMultipleDrinks::RunTest(const FString&)
+{
+    const FString Slot = RegularTests::NewSlot();
+    ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
+    auto* Old = NewObject<URegularCustomerSaveGame>();
+    auto& Before = Old->Customers.Add(TEXT("Regular"));
+    Before.CompletedVisits = 2; Before.LastVisitId = FGuid::NewGuid(); Before.LastTopic = TEXT("City");
+    TestTrue(TEXT("Legacy-shaped save written"), UGameplayStatics::SaveGameToSlot(Old, Slot, 0));
+    TStrongObjectPtr<UGameInstance> GI(NewObject<UGameInstance>(GEngine));
+    auto* M = NewObject<URegularCustomerMemorySubsystem>(GI.Get());
+    if (!TestTrue(TEXT("Existing v1 save remains readable"), M->LoadProfile(Slot))) return false;
+    const FGuid Visit = FGuid::NewGuid(), First = FGuid::NewGuid(), Second = FGuid::NewGuid();
+    M->RememberCompleted(TEXT("Regular"), Visit, TEXT("Latte"), TEXT("冰拿铁"), NAME_None, .5, 1, false, First);
+    M->RememberCompleted(TEXT("Regular"), Visit, TEXT("OrangeCoffee"), TEXT("橙暮黑咖"), NAME_None, .3, 1, false, Second);
+    M->RememberCompleted(TEXT("Regular"), Visit, TEXT("OrangeCoffee"), TEXT("橙暮黑咖"), NAME_None, .3, 1, false, Second);
+    TestEqual(TEXT("Legacy drinks plus two new drinks"), M->Recall(TEXT("Regular")).CompletedDrinks, 4);
+    TestEqual(TEXT("Only one additional visit"), M->Recall(TEXT("Regular")).CompletedVisits, 3);
+    TestEqual(TEXT("Quiet followup does not erase previous topic"), M->Recall(TEXT("Regular")).LastTopic, FName(TEXT("City")));
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularLinkProvenance, "CyberCafe.RegularCustomer.LinkProvenanceAndDetailsPointer", RegularTests::Flags)
+bool FRegularLinkProvenance::RunTest(const FString&)
+{
+    RegularTests::FEncounterWorld F; if (!F.Setup(*this)) return false;
+    auto* E = F.Encounter;
+    auto* W = Cast<URegularCustomerWidget>(E->Panel->GetUserWidgetObject());
+    if (!TestNotNull(TEXT("Actual status widget"), W)) return false;
+    const TSharedRef<SWidget> Slate = W->TakeWidget();
+    TestTrue(TEXT("Offline authored greeting is gray local mode"), E->GetLinkView().Source == ERegularDialogueSource::Local && !E->GetLinkView().bWaiting);
+    auto Wire = MakeShared<RegularDialogueTests::FTransport>();
+    double Time = 0;
+    E->DialogueClient->UseTestTransport(Wire, [&Time] { return Time; });
+    E->Choose(0);
+    TestTrue(TEXT("Pending topic is waiting, not AI text"), E->GetLinkView().bWaiting && E->GetLinkView().bPlaceholder && E->GetLinkView().Source != ERegularDialogueSource::AI);
+    TestTrue(TEXT("Blue pending badge"), W->GetLinkLabel().Contains(TEXT("正在生成")) && URegularCustomerWidget::LinkColor(E->GetLinkView()).B > .9f);
+    Time = .75;
+    Wire->Reply(0, 200, RegularDialogueTests::Response(RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[0])));
+    TestTrue(TEXT("Applied validated reply is cyan AI text"), E->GetLinkView().Source == ERegularDialogueSource::AI && !E->GetLinkView().bWaiting && W->GetLinkLabel().Contains(TEXT("AI 台词")));
+    E->Choose(0); Time = 1.25;
+    Wire->Reply(1, 429, TEXT("provider private body"));
+    TestTrue(TEXT("API failure marks the actual fallback line orange"), E->GetLinkView().Source == ERegularDialogueSource::Fallback && E->GetLinkView().CurrentReason == TEXT("http_429") && W->GetLinkLabel().Contains(TEXT("已回退")));
+    E->Present(TEXT("谢谢，先让我尝一口。"));
+    TestTrue(TEXT("A deterministic line is local despite a previous API error"), E->GetLinkView().Source == ERegularDialogueSource::Local && E->GetLinkView().CurrentReason == TEXT("authored_line"));
+    const FString LocalLine = E->GetLine().ToString();
+    Time = 63;
+    E->Present(TEXT("看着杯子慢慢调好，也让我放松下来。"), TEXT("Cup"));
+    E->OrderDisplay->OnMenuInteractionNative.Broadcast(E->OrderDisplay);
+    Wire->Reply(2, 200, RegularDialogueTests::Response(RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[2])));
+    TestTrue(TEXT("Queued success does not relabel the still-visible local line"), E->GetLine().ToString() == LocalLine && E->GetLinkView().Source == ERegularDialogueSource::Local && E->GetLinkView().bReadyForReading);
+    TestTrue(TEXT("Queued label states reply ready, not still generating"), W->GetLinkLabel().Contains(TEXT("回复就绪")));
+    Time += 9; E->Tick(.02f);
+    TestTrue(TEXT("Expired queued reply leaves current provenance intact"), E->GetLine().ToString() == LocalLine && E->GetLinkView().Source == ERegularDialogueSource::Local && !E->GetLinkView().bWaiting);
+    E->Present(TEXT("夜班结束了，我想再坐一会儿。"), TEXT("Conversation"));
+    E->Present(TEXT("我们慢慢聊，不用着急。"));
+    Wire->Reply(3, 200, RegularDialogueTests::Response(RegularDialogueTests::AuthoredFromRequest(Wire->Bodies[3])));
+    TestTrue(TEXT("Late reply cannot switch a replacement local line to AI"), E->GetLinkView().Source == ERegularDialogueSource::Local && E->GetLine().ToString() == TEXT("我们慢慢聊，不用着急。"));
+    const FString Visible = W->GetVisibleText();
+    const auto Stage = E->GetStage();
+    const FTransform Placement = E->GetActorTransform();
+    E->UpdatePanelFacing(E->Panel->GetComponentLocation() + FVector(80, 40, 30));
+    const FVector TopLeft = E->Panel->GetComponentTransform().TransformPosition(FVector(0, 480, 280));
+    const FIntRect Button = URegularCustomerWidget::LinkToggleRect();
+    const FVector ButtonPoint = E->Panel->GetComponentTransform().TransformPosition(FVector(0,
+        480 - (Button.Min.X + Button.Max.X) * .5, 280 - (Button.Min.Y + Button.Max.Y) * .5));
+    const FVector Normal = E->Panel->GetForwardVector();
+    FMenuPointerHit Hit;
+    TestTrue(TEXT("Real VR ray finds the details toggle"), E->TracePointer(ButtonPoint + Normal * 80, -Normal, 250, Hit) && Hit.Action == URegularCustomerWidget::LinkToggleAction);
+    ++GFrameCounter;
+    TestTrue(TEXT("Trigger expands diagnostic drawer"), E->ActivatePointer(EControllerHand::Left, Hit) && E->AreLinkDetailsExpanded());
+    TestTrue(TEXT("Toggle preserves dialogue state, typing and placement"), E->GetStage() == Stage && W->IsTyping() && W->GetVisibleText() == Visible && E->GetActorTransform().Equals(Placement, .00001));
+    TestTrue(TEXT("Expanded drawer keeps the main dialogue anchored"), E->Panel->GetDrawSize().Y == 800 && E->Panel->GetComponentTransform().TransformPosition(FVector(0, 480, 280)).Equals(TopLeft, .00001));
+    const FVector DrawerPoint = E->Panel->GetComponentTransform().TransformPosition(FVector(0, 380, -420));
+    FMenuPointerHit DrawerHit;
+    TestTrue(TEXT("Expanded panel ray bounds include the drawer"), E->TracePointer(DrawerPoint + Normal * 80, -Normal, 250, DrawerHit) && DrawerHit.bPanel);
+    const FString Details = W->GetLinkDetails();
+    TestTrue(TEXT("Details contain configured model and live counters"), Details.Contains(TEXT("模型：")) && Details.Contains(TEXT("最近60秒")) && Details.Contains(TEXT("会话请求")));
+    TestFalse(TEXT("Details never contain credential or raw response text"), Details.Contains(TEXT("unit-test-key")) || Details.Contains(TEXT("provider private body")));
+    ++GFrameCounter;
+    TestTrue(TEXT("Other hand can collapse the same drawer"), E->ActivatePointer(EControllerHand::Right, Hit) && !E->AreLinkDetailsExpanded() && E->Panel->GetDrawSize().Y == 560);
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegularAlternateCupReorder, "CyberCafe.RegularCustomer.ReorderFromAlternateCounterCup", RegularTests::Flags)
+bool FRegularAlternateCupReorder::RunTest(const FString&)
+{
+    RegularTests::FEncounterWorld F; if (!F.Setup(*this)) return false;
+    auto* Backup = F.Cup;
+    const FTransform BackupPose = Backup->GetActorTransform();
+    const double BackupML = Backup->GetPreciseVolumeML();
+    ACupActor* Alternate = nullptr;
+    for (TActorIterator<ACupActor> It(F.World); It; ++It)
+        if (It->GetName() == TEXT("BP_MenuCup_Highball_C_0") && *It != Backup) Alternate = *It;
+    if (!TestNotNull(TEXT("Player's alternate counter highball from the saved map"), Alternate)) return false;
+    const FTransform ReturnPose = Alternate->GetActorTransform();
+    F.Cup = Alternate;
+    F.Cup->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    F.Encounter->Choose(1);
+    if (!F.Serve(*this)) return false;
+    for (int32 I = 0; I < 1200 && F.Encounter->GetStage() == ERegularCustomerStage::Tasting; ++I) F.Tick();
+    if (!TestTrue(TEXT("Alternate cup actually tasted successfully"), F.Encounter->GetStage() == ERegularCustomerStage::Completed)) return false;
+    for (int32 Drink = 2; Drink <= 3; ++Drink)
+    {
+        for (int32 I = 0; I < 5 && F.Encounter->GetStage() != ERegularCustomerStage::ReorderOffer; ++I) F.Encounter->Choose(0);
+        TSet<ACupActor*> Before;
+        for (TActorIterator<ACupActor> It(F.World); It; ++It) Before.Add(*It);
+        const auto* Old = F.Cup;
+        F.Encounter->Choose(0);
+        if (!TestTrue(TEXT("Approving next drink from an alternate cup starts preparing, not an endless cup wait"),
+            F.Encounter->GetStage() == ERegularCustomerStage::Preparing))
+        { AddInfo(F.Encounter->GetLine().ToString()); return false; }
+        ACupActor* Fresh = nullptr;
+        for (TActorIterator<ACupActor> It(F.World); It; ++It) if (!Before.Contains(*It) && It->GetClass() == Backup->GetClass()) Fresh = *It;
+        if (!TestNotNull(TEXT("A new clean copy of the actual supplied cup exists"), Fresh)) return false;
+        TestTrue(TEXT("Refill returns to that cup's original counter position and scale"), Fresh->GetActorTransform().Equals(ReturnPose, .01));
+        TestTrue(TEXT("Only the completed cup retired; unused prototype preserved"), Old->IsActorBeingDestroyed() && IsValid(Backup) && Backup->GetActorTransform().Equals(BackupPose, .01) && Backup->GetPreciseVolumeML() == BackupML);
+        F.Cup = Fresh; F.Headless(); F.Cup->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        if (!F.Serve(*this, F.Encounter->Recipe)) return false;
+        for (int32 I = 0; I < 1200 && F.Encounter->GetStage() == ERegularCustomerStage::Tasting; ++I) F.Tick();
+        if (!TestTrue(TEXT("Alternate supply chain supports real followup tasting"), F.Encounter->GetStage() == ERegularCustomerStage::Completed)) return false;
+        TestEqual(TEXT("Correct total after alternate-cup refill"), F.Memory()->Recall(F.Encounter->CustomerId).CompletedDrinks, Drink);
+        TestEqual(TEXT("Still the same visit"), F.Memory()->Recall(F.Encounter->CustomerId).CompletedVisits, 1);
+    }
     return !HasAnyErrors();
 }
 #endif

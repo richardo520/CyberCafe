@@ -103,7 +103,7 @@ void URegularCustomerReactions::TickComponent(float Dt, ELevelTick TickType, FAc
     PendingLine.Empty(); PendingFocus.Reset();
     NextSpeech = Now + 12; ++SpokenCount;
     if (PendingPriority < 70) ++AmbientCount;
-    OnReady.Broadcast(Text, Focus.Get());
+    OnReady.Broadcast(PendingId, Text, Focus.Get());
 }
 
 void URegularCustomerReactions::HandleGrab(AActor* Object, EControllerHand Hand)

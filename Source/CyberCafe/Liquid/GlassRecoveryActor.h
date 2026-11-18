@@ -77,9 +77,13 @@ public:
  UFUNCTION(BlueprintCallable,Category="Glass Recovery") bool Recover(int32 SlotIndex);
  UFUNCTION(BlueprintPure,Category="Glass Recovery") ALiquidContainerActor* GetCurrent(int32 SlotIndex) const;
  UFUNCTION(BlueprintPure,Category="Glass Recovery") bool CanRecover(int32 SlotIndex) const;
+    /** Replace a completed cup using its captured original supply pose. Other vessels are untouched. */
+    ALiquidContainerActor* ReplenishServedCup(ALiquidContainerActor* CompletedCup);
  void BindPrototype(ALiquidContainerActor* Cup,ALiquidContainerActor* Bottle,UGlassBreakProfile* CupData,UGlassBreakProfile* BottleData);
 private:
  UPROPERTY() TArray<FGlassRecoverySlot> Slots;
+ // Serving-only snapshots do not extend the explicit workbench restore target list.
+ UPROPERTY() TArray<FGlassRecoverySlot> AdditionalServingCups;
  UPROPERTY() TArray<FWorkbenchToolSlot> ToolSlots;
  bool bToolCaptureComplete=false,bToolCaptureValid=true;
  UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Keys;
@@ -99,6 +103,7 @@ private:
  bool IsOwnedToolChild(const AActor* Actor) const;
  void StopToolPourAudio(ALiquidContainerActor* Container);
  void CaptureSlot(int32 Index,ALiquidContainerActor* Container,UGlassBreakProfile* Profile);
+ void CaptureSupply(FGlassRecoverySlot& Snapshot,ALiquidContainerActor* Container,UGlassBreakProfile* Profile);
  bool PreflightRestore(TArray<ALiquidContainerActor*>& OldToRestore,TArray<ABottleCapActor*>& CapsToRestore);
  void Install(ALiquidContainerActor* Container,UGlassBreakProfile* Profile);
 };

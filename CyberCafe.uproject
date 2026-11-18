@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{5FD25EB5-4F07-F2A5-6D11-1094C2569064}",
+	"EngineAssociation": "{7BEF5E9D-40AE-E829-D0A6-CDB7E373960D}",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -12,13 +12,12 @@
 	],
 	"Plugins": [
 		{
-			"Name": "OpenXR",
-			"Enabled": true,
+			"Name": "OculusXR",
+			"Enabled": false,
+			"MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/8313d8d7e7cf4e03a33e79eb757bccba",
 			"SupportedTargetPlatforms": [
 				"Win64",
-				"Linux",
-				"Android",
-				"VisionOS"
+				"Android"
 			]
 		},
 		{
@@ -36,8 +35,7 @@
 			"SupportedTargetPlatforms": [
 				"Win64",
 				"Linux",
-				"Android",
-				"VisionOS"
+				"Android"
 			]
 		}
 	],

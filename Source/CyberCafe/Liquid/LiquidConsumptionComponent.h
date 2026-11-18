@@ -14,6 +14,7 @@ public:
     double Consume(UObject* Requester, double RequestedML);
     void Release(UObject* Requester);
     bool IsClaimed() const { return bClaimed; }
+    bool HasActiveConsumer() const { return Consumer.IsValid(); }
     bool IsOwnedBy(const UObject* Requester) const { return Requester && Consumer.Get() == Requester; }
 private:
     UPROPERTY(Transient) TWeakObjectPtr<UObject> Consumer;

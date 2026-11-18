@@ -7,3 +7,9 @@ DerivedDataCache/
 *.sln
 *.suo
 *.VC.db
+
+# 本机 IDE / 编辑器个人设置
+.idea/
+*.DotSettings.user
+Automation_CyberCafe.slnx
+Config/DefaultEditorPerProjectUserSettings.ini

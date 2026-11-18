@@ -1,6 +1,7 @@
 #include "Editor/RegularCustomerPreviewLibrary.h"
 #if WITH_EDITOR
 #include "UI/RegularCustomerWidget.h"
+#include "Dialogue/RegularDialogueSettings.h"
 #include "Editor.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Framework/Application/SlateApplication.h"
@@ -39,6 +40,30 @@ bool URegularCustomerPreviewLibrary::RenderChoicePreview()
     if (!FImageUtils::ExportRenderTarget2DAsPNG(Target.Get(), PNG)) { UE_LOG(LogTemp, Warning, TEXT("[RegularPreview] PNG export failed.")); return false; }
     const FString Directory = FPaths::ProjectSavedDir() / TEXT("RegularCustomer");
     IFileManager::Get().MakeDirectory(*Directory, true);
-    return FFileHelper::SaveArrayToFile(PNG, *(Directory / TEXT("choice-preview.png")));
+    if (!FFileHelper::SaveArrayToFile(PNG, *(Directory / TEXT("choice-preview.png")))) return false;
+    // Synthetic diagnostic values for visual review only. Never invokes an API.
+    const auto ExportLink = [&](const TCHAR* Filename, const FRegularDialogueLinkView& View)
+    {
+        Widget->ShowLink(View, true);
+        Slate->SlatePrepass(1);
+        TStrongObjectPtr<UTextureRenderTarget2D> LinkTarget(Renderer.DrawWidget(Slate, URegularCustomerWidget::PanelSize(true)));
+        FlushRenderingCommands();
+        FBufferArchive Bytes;
+        return LinkTarget.IsValid() && FImageUtils::ExportRenderTarget2DAsPNG(LinkTarget.Get(), Bytes) &&
+            FFileHelper::SaveArrayToFile(Bytes, *(Directory / Filename));
+    };
+    FRegularDialogueLinkView View;
+    View.Source = ERegularDialogueSource::AI; View.CurrentReason = TEXT("validated");
+    View.Diagnostics.Model = GetDefault<URegularDialogueSettings>()->Model;
+    View.Diagnostics.TotalRequests = 12; View.Diagnostics.RecentRequests = 3;
+    View.Diagnostics.LastRequestResult = TEXT("validated"); View.Diagnostics.LastRequestSeconds = .74;
+    if (!ExportLink(TEXT("ai-link-preview.png"), View)) return false;
+    View.Source = ERegularDialogueSource::Fallback; View.CurrentReason = TEXT("timeout");
+    View.Diagnostics.LastRequestResult = TEXT("timeout"); View.Diagnostics.LastRequestSeconds = 6;
+    if (!ExportLink(TEXT("ai-link-fallback-preview.png"), View)) return false;
+    View.bWaiting = true; View.bPlaceholder = true; View.Diagnostics.bPending = true; View.Diagnostics.PendingSeconds = 1.4;
+    Widget->Show(FText::FromString(TEXT("夜班常客")), FText::FromString(TEXT("……")), FText::FromString(TEXT("空手指向选项，轻扣扳机回应。")),
+        {FText::FromString(TEXT("今天想聊聊？")), FText::FromString(TEXT("先给你做一杯。"))});
+    return ExportLink(TEXT("ai-link-pending-preview.png"), View);
 }
 #endif

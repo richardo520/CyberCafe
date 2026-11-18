@@ -1,6 +1,7 @@
 #include "Liquid/GlassRecoveryActor.h"
 #include "Liquid/GlassBreakableComponent.h"
 #include "Liquid/LiquidContainerActor.h"
+#include "Liquid/LiquidConsumptionComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -69,8 +70,12 @@ void AGlassRecoveryActor::Install(ALiquidContainerActor* A,UGlassBreakProfile* D
 // @trace RS-01 保存初始供给，不以恢复时的余液、变形或运行时 MID 作为模板。
 void AGlassRecoveryActor::CaptureSlot(int32 I,ALiquidContainerActor* A,UGlassBreakProfile* P)
 {
+ CaptureSupply(Slots[I],A,P);
+ if(Slots[I].bInitialized)Install(A,Slots[I].Profile);
+}
+void AGlassRecoveryActor::CaptureSupply(FGlassRecoverySlot& S,ALiquidContainerActor* A,UGlassBreakProfile* P)
+{
  if(!IsValid(A)||A->IsActorBeingDestroyed()||A->GetWorld()!=GetWorld()||!IsValid(A->ContainerMesh.Get()))return;
- auto& S=Slots[I];
  if(auto* Existing=A->FindComponentByClass<UGlassBreakableComponent>())if(IsValid(Existing->Profile.Get()))P=Existing->Profile.Get();
  S.Current=A;S.Profile=P;S.ContainerClass=A->GetClass();S.SpawnTransform=A->GetActorTransform();
  S.InitialFill=A->FillAmount;S.Capacity=A->MaxVolumeML;S.Ingredient=A->InitialIngredientId;S.Color=A->LiquidColor;
@@ -89,7 +94,7 @@ void AGlassRecoveryActor::CaptureSlot(int32 I,ALiquidContainerActor* A,UGlassBre
  if(auto* B=Cast<ABottleActor>(A)){S.CapClass=B->CapClass;S.CapSocket=B->CapSocketName;S.bStartCapped=B->bStartCapped;S.CapturedCap=B->CapActor;}
  if(auto* Ice=A->FindComponentByClass<UCupIceComponent>()){S.bHasCupIce=true;S.IceRadiusCM=Ice->InteriorRadiusCM;S.IceDepthCM=Ice->InteriorDepthCM;S.MaxCupIce=Ice->MaxCupIce;S.ClinkSound=Ice->ClinkSound;}
  else for(TActorIterator<AIceStationActor> It(GetWorld());It;++It)if(It->Cup.Get()==A){S.bHasCupIce=true;S.IceRadiusCM=It->CupInteriorRadiusCM;S.IceDepthCM=It->CupInteriorDepthCM;S.ClinkSound=It->ClinkSound;break;}
- S.bInitialized=true;Install(A,P);
+ S.bInitialized=true;
 }
 void AGlassRecoveryActor::BeginPlay()
 {
@@ -104,6 +109,14 @@ void AGlassRecoveryActor::BeginPlay()
  Super::BeginPlay();Slots.SetNum(2);
  CaptureSlot(0,PrototypeCup.Get(),CupProfile.Get());CaptureSlot(1,PrototypeBottle.Get(),BottleProfile.Get());
  for(const auto& Target:RestoreTargets){bool Duplicate=false;for(const auto& S:Slots)if(S.bInitialized&&S.Current==Target){Duplicate=true;break;}if(!Duplicate&&IsValid(Target.Get())){const int32 I=Slots.AddDefaulted();CaptureSlot(I,Target.Get(),nullptr);}}
+ // Players may use any matching cup on the counter, not only PrototypeCup.
+ // Capture its original pose before serving freezes and moves it to the NPC.
+ AdditionalServingCups.Reset();
+ for(TActorIterator<ACupActor> It(GetWorld());It;++It)
+ {
+  if(Slots.ContainsByPredicate([&It](const FGlassRecoverySlot& S){return S.bInitialized&&S.Current.Get()==*It;}))continue;
+  auto& S=AdditionalServingCups.AddDefaulted_GetRef();CaptureSupply(S,*It,nullptr);
+ }
  if(IsValid(RestoreScoop.Get())&&RestoreScoop->GetWorld()==GetWorld()){CapturedScoop=RestoreScoop;ScoopSpawnTransform=RestoreScoop->GetActorTransform();}
  RestoreStatus=FText::FromString(TEXT("WAIT"));
  ApplyButtonMode();
@@ -429,6 +442,41 @@ bool AGlassRecoveryActor::RestoreWorkbench()
  for(auto* A:OldToRestore){if(IsToolLiquid(A)||!IsValid(A)||A->IsActorBeingDestroyed()||A->IsLiquidFrozen())continue;A->SetActorEnableCollision(false);if(!Alive())return false;if(!IsValid(A)||A->IsActorBeingDestroyed())continue;A->SetActorHiddenInGame(true);A->SetActorTickEnabled(false);if(IsValid(A->ContainerMesh.Get())){A->ContainerMesh->SetSimulatePhysics(false);A->ContainerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);}if(!Alive())return false;if(IsValid(A)&&!A->IsActorBeingDestroyed())A->Destroy();if(!Alive())return false;}
  ++RestoreGeneration;RestoreStatus=FText::FromString(bHasProtected?TEXT("RESTORED - PROTECTED"):TEXT("RESTORED"));return true;
 }
+ALiquidContainerActor* AGlassRecoveryActor::ReplenishServedCup(ALiquidContainerActor* CompletedCup)
+{
+ if(bRestoreInProgress||!IsValid(CompletedCup)||!CompletedCup->IsLiquidFrozen()||CompletedCup->IsHeld()||
+    !Cast<ACupActor>(CompletedCup)||!CompletedCup->Consumption->IsClaimed()||CompletedCup->Consumption->HasActiveConsumer())return nullptr;
+ const auto Matches=[CompletedCup](const FGlassRecoverySlot& S){return S.bInitialized&&S.Current==CompletedCup;};
+ FGlassRecoverySlot* Supply=Slots.FindByPredicate(Matches);
+ if(!Supply)Supply=AdditionalServingCups.FindByPredicate(Matches);
+ if(!Supply)return nullptr;
+ TGuardValue<bool> Replenishing(bRestoreInProgress,true);
+ {
+  auto& S=*Supply;
+  auto* A=GetWorld()->SpawnActorDeferred<ALiquidContainerActor>(S.ContainerClass,S.SpawnTransform,nullptr,nullptr,ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn,ESpawnActorScaleMethod::OverrideRootScale);
+  if(!A)return nullptr;
+  A->FillAmount=0;A->MaxVolumeML=S.Capacity;A->InitialIngredientId=S.Ingredient;A->LiquidColor=S.Color;
+  A->bCanPour=S.bCanPour;A->bAcceptLiquidFromOthers=S.bAcceptLiquid;A->PourEntryRadius=S.PourEntryRadius;
+  if(A->PourEntryPoint){A->PourEntryPoint->SetAbsolute(S.bEntryAbsoluteLocation,S.bEntryAbsoluteRotation,S.bEntryAbsoluteScale);A->PourEntryPoint->SetRelativeTransform(S.PourEntryRelativeTransform);}
+  A->bInitialVolumeIsReplacement=true;A->ContainerMesh->SetStaticMesh(S.Mesh);
+  if(A->ContainerMesh->GetAttachParent())A->ContainerMesh->SetRelativeTransform(S.MeshRelativeTransform);
+  for(int32 M=0;M<S.Materials.Num();++M)A->ContainerMesh->SetMaterial(M,S.Materials[M]);
+  A->FinishSpawning(S.SpawnTransform);A->SetActorTransform(S.SpawnTransform,false,nullptr,ETeleportType::TeleportPhysics);
+  if(!IsValid(A)||A->IsActorBeingDestroyed())return nullptr;
+  A->InitializeLiquidState();A->ContainerMesh->SetVisibility(true,true);
+  if(S.bHasCupIce){auto* Ice=A->FindComponentByClass<UCupIceComponent>();if(!Ice){Ice=NewObject<UCupIceComponent>(A);A->AddInstanceComponent(Ice);}Ice->InteriorRadiusCM=S.IceRadiusCM;Ice->InteriorDepthCM=S.IceDepthCM;Ice->MaxCupIce=S.MaxCupIce;Ice->ClinkSound=S.ClinkSound;if(!Ice->IsRegistered())Ice->RegisterComponent();}
+  if(A->GrabComp)A->GrabComp->Activate();
+  S.Current=A;Install(A,S.Profile);
+  if(PrototypeCup.Get()==CompletedCup)PrototypeCup=A;
+  for(auto& Target:RestoreTargets)if(Target.Get()==CompletedCup)Target=A;
+  for(TActorIterator<AIceStationActor> It(GetWorld());It;++It)if(It->Cup.Get()==CompletedCup)It->Cup=Cast<ACupActor>(A);
+  for(TActorIterator<ATutorialDirector> D(GetWorld());D;++D)for(const auto& Step:D->Steps)
+   if(auto* G=Cast<UTutorialStep_Grab>(Step.Get()))if(G->RequiredActor==CompletedCup)G->RequiredActor=A;
+  return A;
+ }
+ return nullptr;
+}
+
 bool AGlassRecoveryActor::Recover(int32 I)
 {
  if(bRestoreInProgress||!CanRecover(I))return false;auto& S=Slots[I];

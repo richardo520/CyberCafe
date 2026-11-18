@@ -27,7 +27,7 @@ bool URegularCustomerMemorySubsystem::LoadProfile(const FString& Slot)
         for (const auto& Pair : Data->Customers)
         {
             const FRegularCustomerMemory& M = Pair.Value;
-            if (Pair.Key.IsNone() || M.CompletedVisits < 0 || M.LastIceCount < 0 ||
+            if (Pair.Key.IsNone() || M.CompletedVisits < 0 || M.CompletedDrinks < 0 || M.LastIceCount < 0 ||
                 !FMath::IsFinite(M.LastCoffeeFraction) || M.LastCoffeeFraction < 0 || M.LastCoffeeFraction > 1)
             {
                 Data = NewObject<URegularCustomerSaveGame>(this);
@@ -48,16 +48,20 @@ FRegularCustomerMemory URegularCustomerMemorySubsystem::Recall(FName CustomerId)
 }
 
 bool URegularCustomerMemorySubsystem::RememberCompleted(FName CustomerId, const FGuid& Visit, FName RecipeId,
-    const FString& DrinkName, FName Topic, double CoffeeFraction, int32 IceCount, bool bObservedGrinding)
+    const FString& DrinkName, FName Topic, double CoffeeFraction, int32 IceCount, bool bObservedGrinding, FGuid OrderId)
 {
     if (!Data || CustomerId.IsNone() || RecipeId.IsNone() || !Visit.IsValid() || !FMath::IsFinite(CoffeeFraction) ||
         CoffeeFraction < 0 || CoffeeFraction > 1 || IceCount < 0) return false;
     FRegularCustomerMemory& M = Data->Customers.FindOrAdd(CustomerId);
-    if (M.LastVisitId == Visit) return bPersisted; // A repeated terminal callback cannot count twice.
+    if (!OrderId.IsValid()) OrderId = Visit; // Compatibility with callers and v1 saves from one-drink visits.
+    if (M.LastOrderId == OrderId || (!M.LastOrderId.IsValid() && M.LastVisitId == Visit)) return bPersisted;
     if (M.TopicVisits.IsEmpty() && M.CompletedVisits > 0 && !M.LastTopic.IsNone())
         M.TopicVisits.Add(M.LastTopic, 1); // Existing v1 saves retain their last completed conversation.
-    M.CompletedVisits = M.CompletedVisits < MAX_int32 ? M.CompletedVisits + 1 : MAX_int32;
+    M.CompletedDrinks = FMath::Max(M.CompletedDrinks, M.CompletedVisits);
+    M.CompletedDrinks = FMath::Min(M.CompletedDrinks, MAX_int32 - 1) + 1;
+    if (M.LastVisitId != Visit) M.CompletedVisits = FMath::Min(M.CompletedVisits, MAX_int32 - 1) + 1;
     M.LastVisitId = Visit;
+    M.LastOrderId = OrderId;
     M.LastRecipeId = RecipeId;
     M.LastDrinkName = DrinkName.Left(100);
     if (!Topic.IsNone())

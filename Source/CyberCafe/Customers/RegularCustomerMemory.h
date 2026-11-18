@@ -10,6 +10,7 @@ struct CYBERCAFE_API FRegularCustomerMemory
 {
     GENERATED_BODY()
     UPROPERTY(SaveGame, BlueprintReadOnly) int32 CompletedVisits = 0;
+    UPROPERTY(SaveGame, BlueprintReadOnly) int32 CompletedDrinks = 0;
     UPROPERTY(SaveGame, BlueprintReadOnly) FName LastRecipeId;
     UPROPERTY(SaveGame, BlueprintReadOnly) FString LastDrinkName;
     UPROPERTY(SaveGame, BlueprintReadOnly) FName LastTopic;
@@ -23,6 +24,7 @@ struct CYBERCAFE_API FRegularCustomerMemory
     UPROPERTY(SaveGame, BlueprintReadOnly) double LastCoffeeFraction = 0;
     UPROPERTY(SaveGame, BlueprintReadOnly) int32 LastIceCount = 0;
     UPROPERTY(SaveGame) FGuid LastVisitId;
+    UPROPERTY(SaveGame) FGuid LastOrderId;
 };
 
 UCLASS()
@@ -45,7 +47,7 @@ public:
     bool LoadProfile(const FString& Slot);
     UFUNCTION(BlueprintPure, Category="Customer|Memory") FRegularCustomerMemory Recall(FName CustomerId) const;
     bool RememberCompleted(FName CustomerId, const FGuid& Visit, FName RecipeId, const FString& DrinkName,
-        FName Topic, double CoffeeFraction, int32 IceCount, bool bObservedGrinding = false);
+        FName Topic, double CoffeeFraction, int32 IceCount, bool bObservedGrinding = false, FGuid OrderId = FGuid());
     bool Flush();
     bool IsWritable() const { return bWritable; }
     bool IsPersisted() const { return bPersisted; }

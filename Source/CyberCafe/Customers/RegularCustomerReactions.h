@@ -9,7 +9,7 @@ class AOrderHologramActor;
 class ACoffeeGrinderActor;
 class UCyberCafeEventSubsystem;
 
-DECLARE_MULTICAST_DELEGATE_TwoParams(FRegularReactionReady, const FString&, AActor*);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FRegularReactionReady, FName, const FString&, AActor*);
 DECLARE_MULTICAST_DELEGATE_OneParam(FRegularActivityObserved, AActor*);
 
 /** Bounded, per-visit reactions. One pending line, cooldown, expiry and explicit reading gates. */
@@ -25,6 +25,7 @@ public:
     void QueueRejection(FName Reason, const FString& Text);
     bool DidObserveGrinding() const { return bObservedGrinding; }
     int32 GetSpokenCount() const { return SpokenCount; }
+    bool IsPlayerReadingMenu() const { return IsReadingMenu(); }
     FRegularReactionReady OnReady;
     FRegularActivityObserved OnActivity;
 protected:
